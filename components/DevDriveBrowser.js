@@ -9,16 +9,12 @@ const SUPPORTED_MIME_TYPES = [
   'text/plain',
 ];
 
-export const DevDriveBrowser = ({ onFileSelect, onClose }) => {
+export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey, folderId }) => {
   const [status, setStatus] = useState('Connecting...');
   const [error, setError] = useState(null);
   const [files, setFiles] = useState([]);
   const [downloading, setDownloading] = useState(null);
   const oauthToken = useRef(null);
-
-  const clientId = import.meta.env?.VITE_TEST_CLIENT_ID;
-  const apiKey = import.meta.env?.VITE_TEST_API_KEY;
-  const folderId = import.meta.env?.VITE_TEST_DRIVE_FOLDER_ID;
 
   const listFiles = useCallback(async (token) => {
     setStatus('Loading files...');
@@ -36,7 +32,7 @@ export const DevDriveBrowser = ({ onFileSelect, onClose }) => {
       const data = await res.json();
       const supported = (data.files || []).filter(f => SUPPORTED_MIME_TYPES.includes(f.mimeType));
       setFiles(supported);
-      setStatus(supported.length ? '' : 'No supported files found in test folder.');
+      setStatus(supported.length ? '' : 'No supported files found in folder.');
     } catch (err) {
       setError(err.message);
     }
@@ -44,7 +40,7 @@ export const DevDriveBrowser = ({ onFileSelect, onClose }) => {
 
   useEffect(() => {
     if (!clientId || !apiKey || !folderId) {
-      setError('Missing env vars. Fill VITE_TEST_CLIENT_ID, VITE_TEST_API_KEY, and VITE_TEST_DRIVE_FOLDER_ID in .env');
+      setError('Missing credentials. Fill in Client ID, API Key, and Folder ID.');
       return;
     }
 
@@ -102,6 +98,8 @@ export const DevDriveBrowser = ({ onFileSelect, onClose }) => {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const isDev = import.meta.env.DEV;
+
   return React.createElement(
     'div',
     { className: 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm' },
@@ -115,8 +113,8 @@ export const DevDriveBrowser = ({ onFileSelect, onClose }) => {
         React.createElement(
           'div',
           null,
-          React.createElement('h2', { className: 'text-lg font-bold text-white' }, 'Test Drive Folder'),
-          React.createElement('p', { className: 'text-xs text-yellow-400 font-mono mt-0.5' }, 'DEV MODE')
+          React.createElement('h2', { className: 'text-lg font-bold text-white' }, 'Drive Folder'),
+          isDev && React.createElement('p', { className: 'text-xs text-yellow-400 font-mono mt-0.5' }, 'DEV MODE')
         ),
         React.createElement(
           'button',

@@ -115,7 +115,7 @@ Standalone page, no React. Opens in a new browser tab.
 ---
 
 ### `Library.js`
-**Role:** Book grid, file import, dev Drive browser.
+**Role:** Book grid, file import, Drive browser trigger (dev + prod).
 
 **Props:**
 | Prop | Type | Purpose |
@@ -130,6 +130,9 @@ Standalone page, no React. Opens in a new browser tab.
 | State | Purpose |
 |-------|---------|
 | `isDevBrowserOpen` | Toggles `DevDriveBrowser` modal |
+| `isSettingsOpen` | Toggles `DriveSettingsModal` (production only) |
+| `credentials` | `{clientId, apiKey, folderId}` — sourced from `getDriveCredentials()` |
+| `driveFolderName` | Display name fetched from Drive API when credentials are valid |
 
 **File upload flow:**
 ```
@@ -141,9 +144,16 @@ Standalone page, no React. Opens in a new browser tab.
   → input value reset (allows re-selecting same file)
 ```
 
-**Empty state:** When `books.length === 0`, shows a centred placeholder with an "Add Your First Book" button.
+**Drive button behaviour:**
+```
+Dev:   yellow "DEV: Test Folder" → opens DevDriveBrowser (credentials from .env)
+Prod:  teal "Drive Folder"
+         no credentials saved → opens DriveSettingsModal first
+         credentials saved    → opens DevDriveBrowser directly
+                                 gear icon beside button opens DriveSettingsModal to edit
+```
 
-**Dev mode:** `import.meta.env.DEV` renders the yellow "DEV: Test Folder" button. Stripped in production.
+**Empty state:** When `books.length === 0`, shows a centred placeholder with an "Add Your First Book" button.
 
 ---
 
@@ -224,18 +234,50 @@ Displays text in a `<pre>` tag with `whitespace-pre-wrap` to preserve formatting
 
 ---
 
-### `DevDriveBrowser.js` *(dev only)*
-**Role:** Modal overlay — OAuth login + file list from Google Drive folder.
+### `DevDriveBrowser.js`
+**Role:** Modal overlay — OAuth login + file list from Google Drive folder. Used in both dev and production.
 
 **Props:**
 | Prop | Type | Purpose |
 |------|------|---------|
 | `onFileSelect` | `function` | Called with `(name, mimeType, blob)` on import |
 | `onClose` | `function` | Closes the modal |
+| `clientId` | `string` | OAuth 2.0 Client ID |
+| `apiKey` | `string` | Google API key |
+| `folderId` | `string` | Drive folder ID |
 
-**Credentials:** Read from `import.meta.env.VITE_TEST_*` — never from user input or `localStorage`.
+**Credentials:** Received as props from `Library.js`, which sources them from `utils/driveCredentials.js` (`.env` in dev, `localStorage` in prod).
 
 **Flow:** See [google-drive-integration.md](google-drive-integration.md).
+
+---
+
+### `DriveSettingsModal.js` *(production only)*
+**Role:** Modal form for entering and saving Google Drive credentials in production.
+
+**Props:**
+| Prop | Type | Purpose |
+|------|------|---------|
+| `onSave` | `function` | Called with `{clientId, apiKey, folderId}` after saving |
+| `onClose` | `function` | Closes the modal without saving |
+
+**Behaviour:**
+- Pre-fills fields from `localStorage` (via `getDriveCredentials()`) if credentials were previously saved.
+- On submit: calls `saveDriveCredentials()` → saves to `localStorage` → calls `onSave(creds)`.
+- "Clear credentials" button calls `clearDriveCredentials()` and empties the fields.
+
+---
+
+### `utils/driveCredentials.js`
+**Role:** Single source of truth for Drive credentials.
+
+| Export | Description |
+|--------|-------------|
+| `getDriveCredentials()` | Returns `{clientId, apiKey, folderId}` — from `import.meta.env` in dev, `localStorage` in prod |
+| `saveDriveCredentials(creds)` | Persists credentials to `localStorage` (prod only) |
+| `clearDriveCredentials()` | Removes credentials from `localStorage` |
+
+`localStorage` key: `infodepo_drive_credentials`.
 
 ---
 

@@ -4,28 +4,37 @@ import { BookCard } from './BookCard.js';
 import { BookIcon } from './icons/BookIcon.js';
 import { TrashIcon } from './icons/TrashIcon.js';
 import { DevDriveBrowser } from './DevDriveBrowser.js';
+import { DriveSettingsModal } from './DriveSettingsModal.js';
+import { getDriveCredentials, saveDriveCredentials } from '../utils/driveCredentials.js';
 
-const IS_DEV    = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true
-                  || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-const FOLDER_ID = import.meta.env?.VITE_TEST_DRIVE_FOLDER_ID;
-const API_KEY   = import.meta.env?.VITE_TEST_API_KEY;
-const CLIENT_ID = import.meta.env?.VITE_TEST_CLIENT_ID;
+const IS_DEV = import.meta.env.DEV;
 const UPLOAD_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
 export const Library = ({ books, onSelectBook, onAddBook, onDeleteBook, onClearLibrary }) => {
   const fileInputRef   = useRef(null);
-  const uploadTokenRef = useRef(null);   // cached OAuth token for uploads
+  const uploadTokenRef = useRef(null);
   const [isDevBrowserOpen, setIsDevBrowserOpen] = useState(false);
-  const [driveFolderName, setDriveFolderName]   = useState(null);
-  const [uploadStatuses, setUploadStatuses]     = useState({});  // { [bookId]: 'uploading'|'success'|'error' }
+  const [isSettingsOpen,   setIsSettingsOpen]   = useState(false);
+  const [driveFolderName,  setDriveFolderName]  = useState(null);
+  const [uploadStatuses,   setUploadStatuses]   = useState({});
+  const [credentials,      setCredentials]      = useState(() => getDriveCredentials());
 
+  const hasCredentials = !!(credentials.clientId && credentials.apiKey && credentials.folderId);
+
+  // Fetch folder name whenever credentials change
   useEffect(() => {
-    if (!IS_DEV || !FOLDER_ID || !API_KEY || !API_KEY.startsWith('AIza')) return;
-    fetch(`https://www.googleapis.com/drive/v3/files/${FOLDER_ID}?fields=name&key=${API_KEY}`)
+    if (!credentials.folderId || !credentials.apiKey || !credentials.apiKey.startsWith('AIza')) return;
+    setDriveFolderName(null);
+    fetch(`https://www.googleapis.com/drive/v3/files/${credentials.folderId}?fields=name&key=${credentials.apiKey}`)
       .then(r => r.ok ? r.json() : null)
       .then(data => { if (data?.name) setDriveFolderName(data.name); })
       .catch(() => {});
-  }, []);
+  }, [credentials.folderId, credentials.apiKey]);
+
+  // Clear cached upload token if client ID changes
+  useEffect(() => {
+    uploadTokenRef.current = null;
+  }, [credentials.clientId]);
 
   const setStatus = (id, status) =>
     setUploadStatuses(prev => ({ ...prev, [id]: status }));
@@ -37,7 +46,7 @@ export const Library = ({ books, onSelectBook, onAddBook, onDeleteBook, onClearL
         reject(new Error('Google API not loaded')); return;
       }
       const client = google.accounts.oauth2.initTokenClient({
-        client_id: CLIENT_ID,
+        client_id: credentials.clientId,
         scope: UPLOAD_SCOPE,
         callback: (res) => {
           if (res.error) { reject(new Error(res.error_description || res.error)); return; }
@@ -56,7 +65,7 @@ export const Library = ({ books, onSelectBook, onAddBook, onDeleteBook, onClearL
       const metadata = {
         name: book.name,
         mimeType: book.type || 'application/octet-stream',
-        ...(FOLDER_ID ? { parents: [FOLDER_ID] } : {}),
+        ...(credentials.folderId ? { parents: [credentials.folderId] } : {}),
       };
 
       const form = new FormData();
@@ -76,7 +85,7 @@ export const Library = ({ books, onSelectBook, onAddBook, onDeleteBook, onClearL
       setStatus(book.id, 'success');
     } catch (err) {
       console.error('Upload failed:', err.message);
-      uploadTokenRef.current = null;  // clear token so next attempt re-authenticates
+      uploadTokenRef.current = null;
       setStatus(book.id, 'error');
     }
   };
@@ -94,87 +103,145 @@ export const Library = ({ books, onSelectBook, onAddBook, onDeleteBook, onClearL
     }
   };
 
+  const handleDriveButtonClick = () => {
+    if (hasCredentials) {
+      setIsDevBrowserOpen(true);
+    } else {
+      setIsSettingsOpen(true);
+    }
+  };
+
+  const handleSaveCredentials = (newCreds) => {
+    saveDriveCredentials(newCreds);
+    setCredentials(newCreds);
+    setIsSettingsOpen(false);
+    setIsDevBrowserOpen(true);
+  };
+
+  // Folder badge (shown in both modes when folder name is resolved)
+  const folderBadge = driveFolderName && React.createElement(
+    'span',
+    {
+      className: 'flex items-center gap-1 bg-gray-800 border border-gray-600/40 text-gray-300 text-xs font-mono px-2.5 py-1.5 rounded-lg',
+      title: `Linked Drive folder: ${driveFolderName}`
+    },
+    React.createElement(
+      'svg',
+      { xmlns: 'http://www.w3.org/2000/svg', className: 'h-3 w-3 shrink-0', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+      React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M3 7a2 2 0 012-2h3.586a1 1 0 01.707.293L11 7h10a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z' })
+    ),
+    driveFolderName
+  );
+
   return React.createElement(
     React.Fragment,
     null,
+
     // Toolbar
     React.createElement(
-      "div",
-      { className: "flex items-center justify-between mb-6" },
+      'div',
+      { className: 'flex items-center justify-between mb-6' },
       React.createElement(
-        "h2",
-        { className: "text-3xl font-bold text-gray-100" },
-        "My Library"
+        'h2',
+        { className: 'text-3xl font-bold text-gray-100' },
+        'My Library'
       ),
       React.createElement(
-        "div",
-        { className: "flex items-center gap-2" },
+        'div',
+        { className: 'flex items-center gap-2' },
         React.createElement(
-          "span",
-          { className: "text-sm text-gray-500 font-medium bg-gray-800 px-3 py-1 rounded-full border border-gray-700" },
+          'span',
+          { className: 'text-sm text-gray-500 font-medium bg-gray-800 px-3 py-1 rounded-full border border-gray-700' },
           books.length,
-          " ",
+          ' ',
           books.length === 1 ? 'Book' : 'Books'
         ),
+
+        // Dev mode: yellow DEV button
         IS_DEV && React.createElement(
-          "div",
-          { className: "flex items-center gap-1.5" },
+          'div',
+          { className: 'flex items-center gap-1.5' },
           React.createElement(
-            "button",
+            'button',
             {
-              onClick: () => setIsDevBrowserOpen(true),
-              className: "flex items-center gap-2 bg-yellow-500 hover:bg-yellow-400 text-gray-900 font-bold py-2 px-5 rounded-xl transition-all active:scale-95",
-              title: "Load from test Drive folder (dev only)"
+              onClick: handleDriveButtonClick,
+              className: 'flex items-center gap-2 bg-yellow-500 hover:bg-yellow-400 text-gray-900 font-bold py-2 px-5 rounded-xl transition-all active:scale-95',
+              title: 'Load from test Drive folder (dev only)'
             },
-            React.createElement("span", null, "DEV: Test Folder")
+            'DEV: Test Folder'
           ),
-          driveFolderName && React.createElement(
-            "span",
+          folderBadge
+        ),
+
+        // Production mode: Drive Folder button + gear icon
+        !IS_DEV && React.createElement(
+          'div',
+          { className: 'flex items-center gap-1.5' },
+          React.createElement(
+            'button',
             {
-              className: "flex items-center gap-1 bg-gray-800 border border-yellow-500/40 text-yellow-400 text-xs font-mono px-2.5 py-1.5 rounded-lg",
-              title: `Linked Drive folder: ${driveFolderName}`
+              onClick: handleDriveButtonClick,
+              className: 'flex items-center gap-2 bg-teal-700 hover:bg-teal-600 text-white font-bold py-2 px-5 rounded-xl transition-all active:scale-95',
+              title: hasCredentials ? 'Browse Drive folder' : 'Set up Google Drive credentials'
             },
             React.createElement(
-              "svg",
-              { xmlns: "http://www.w3.org/2000/svg", className: "h-3 w-3 shrink-0", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor" },
-              React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: 2, d: "M3 7a2 2 0 012-2h3.586a1 1 0 01.707.293L11 7h10a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" })
+              'svg',
+              { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+              React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M3 7a2 2 0 012-2h3.586a1 1 0 01.707.293L11 7h10a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z' })
             ),
-            driveFolderName
-          )
+            'Drive Folder'
+          ),
+          hasCredentials && React.createElement(
+            'button',
+            {
+              onClick: () => setIsSettingsOpen(true),
+              className: 'text-gray-500 hover:text-gray-300 p-2 rounded-xl hover:bg-gray-700 transition-colors',
+              title: 'Edit Drive credentials'
+            },
+            React.createElement(
+              'svg',
+              { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+              React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z' }),
+              React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M15 12a3 3 0 11-6 0 3 3 0 016 0z' })
+            )
+          ),
+          folderBadge
         ),
+
         React.createElement(
-          "button",
+          'button',
           {
             onClick: () => fileInputRef.current?.click(),
-            className: "flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-5 rounded-xl transition-all shadow-lg shadow-indigo-500/10 active:scale-95"
+            className: 'flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-5 rounded-xl transition-all shadow-lg shadow-indigo-500/10 active:scale-95'
           },
-          React.createElement(BookIcon, { className: "h-5 w-5" }),
-          React.createElement("span", null, "Add Book")
+          React.createElement(BookIcon, { className: 'h-5 w-5' }),
+          React.createElement('span', null, 'Add Book')
         ),
         books.length > 0 &&
           React.createElement(
-            "button",
+            'button',
             {
               onClick: handleConfirmClear,
-              className: "bg-red-900/20 hover:bg-red-600 text-red-500 hover:text-white border border-red-900/50 p-2.5 rounded-xl transition-all",
-              title: "Clear Library"
+              className: 'bg-red-900/20 hover:bg-red-600 text-red-500 hover:text-white border border-red-900/50 p-2.5 rounded-xl transition-all',
+              title: 'Clear Library'
             },
-            React.createElement(TrashIcon, { className: "h-5 w-5" })
+            React.createElement(TrashIcon, { className: 'h-5 w-5' })
           ),
-        React.createElement("input", {
+        React.createElement('input', {
           ref: fileInputRef,
-          type: "file",
-          accept: ".epub,.pdf,.txt,application/epub+zip,application/pdf,text/plain",
+          type: 'file',
+          accept: '.epub,.pdf,.txt,application/epub+zip,application/pdf,text/plain',
           onChange: handleFileChange,
-          className: "hidden"
+          className: 'hidden'
         })
       )
     ),
+
     // Book grid or empty state
     books.length > 0
       ? React.createElement(
-          "div",
-          { className: "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6" },
+          'div',
+          { className: 'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6' },
           books.map((book) =>
             React.createElement(BookCard, {
               key: book.id,
@@ -187,36 +254,47 @@ export const Library = ({ books, onSelectBook, onAddBook, onDeleteBook, onClearL
           )
         )
       : React.createElement(
-          "div",
-          { className: "text-center py-20 px-6 border-2 border-dashed border-gray-800 rounded-2xl bg-gray-800/20" },
+          'div',
+          { className: 'text-center py-20 px-6 border-2 border-dashed border-gray-800 rounded-2xl bg-gray-800/20' },
           React.createElement(
-            "div",
-            { className: "bg-gray-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 border border-gray-700" },
-            React.createElement(BookIcon, { className: "h-8 w-8 text-gray-600" })
+            'div',
+            { className: 'bg-gray-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 border border-gray-700' },
+            React.createElement(BookIcon, { className: 'h-8 w-8 text-gray-600' })
           ),
           React.createElement(
-            "h3",
-            { className: "text-xl font-semibold text-gray-400" },
-            "Library is Empty"
+            'h3',
+            { className: 'text-xl font-semibold text-gray-400' },
+            'Library is Empty'
           ),
           React.createElement(
-            "p",
-            { className: "text-gray-500 mt-2 max-w-sm mx-auto" },
-            "Click \"Add Book\" to import an EPUB, PDF, or TXT file from your device."
+            'p',
+            { className: 'text-gray-500 mt-2 max-w-sm mx-auto' },
+            'Click "Add Book" to import an EPUB, PDF, or TXT file from your device.'
           ),
           React.createElement(
-            "button",
+            'button',
             {
               onClick: () => fileInputRef.current?.click(),
-              className: "mt-6 inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-6 rounded-xl transition-all"
+              className: 'mt-6 inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-6 rounded-xl transition-all'
             },
-            React.createElement(BookIcon, { className: "h-5 w-5" }),
-            "Add Your First Book"
+            React.createElement(BookIcon, { className: 'h-5 w-5' }),
+            'Add Your First Book'
           )
         ),
-    IS_DEV && isDevBrowserOpen && React.createElement(DevDriveBrowser, {
+
+    // Drive browser modal
+    isDevBrowserOpen && React.createElement(DevDriveBrowser, {
       onFileSelect: onAddBook,
       onClose: () => setIsDevBrowserOpen(false),
+      clientId: credentials.clientId,
+      apiKey:   credentials.apiKey,
+      folderId: credentials.folderId,
+    }),
+
+    // Settings modal (production only)
+    isSettingsOpen && React.createElement(DriveSettingsModal, {
+      onSave:  handleSaveCredentials,
+      onClose: () => setIsSettingsOpen(false),
     })
   );
 };
