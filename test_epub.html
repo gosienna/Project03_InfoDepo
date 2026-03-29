@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EPUB Viewer Test — Project Hail Mary</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+  <style>
+    #viewer { width: 100%; height: 100%; }
+    .pass { color: #4ade80; }
+    .fail { color: #f87171; }
+    .pending { color: #facc15; }
+  </style>
+</head>
+<body class="bg-gray-900 text-gray-100 flex flex-col h-screen">
+
+  <!-- Header -->
+  <div class="bg-gray-800 px-6 py-3 flex items-center justify-between border-b border-gray-700">
+    <h1 class="text-lg font-semibold">EPUB Viewer Test</h1>
+    <span class="text-sm text-gray-400">test_documents/Project Hail Mary.epub</span>
+    <div id="status" class="text-sm font-mono pending">⏳ Loading...</div>
+  </div>
+
+  <!-- Test Log -->
+  <div id="log" class="bg-gray-950 text-xs font-mono px-6 py-2 border-b border-gray-700 space-y-0.5 max-h-36 overflow-y-auto"></div>
+
+  <!-- EPUB Viewer -->
+  <div class="flex-1 flex flex-col overflow-hidden">
+    <div id="viewer-container" class="flex-1 bg-white overflow-hidden"></div>
+    <div class="flex justify-center items-center h-14 bg-gray-800 gap-4">
+      <button id="btn-prev" onclick="prevPage()"
+        class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors disabled:opacity-40"
+        disabled>Previous</button>
+      <span id="page-info" class="text-sm text-gray-400">—</span>
+      <button id="btn-next" onclick="nextPage()"
+        class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors disabled:opacity-40"
+        disabled>Next</button>
+    </div>
+  </div>
+
+  <script>
+    const TEST_FILE = '/test_documents/Project Hail Mary.epub';
+    let rendition = null;
+    let book = null;
+    let results = [];
+
+    function log(label, passed, detail = '') {
+      results.push({ label, passed });
+      const el = document.getElementById('log');
+      const line = document.createElement('div');
+      const icon = passed ? '✅' : '❌';
+      const text = `${icon}  ${label}${detail ? '  —  ' + detail : ''}`;
+      line.className = passed ? 'pass' : 'fail';
+      line.textContent = text;
+      el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
+      updateStatus();
+      console.log(text);
+    }
+
+    function logInfo(msg) {
+      const el = document.getElementById('log');
+      const line = document.createElement('div');
+      line.className = 'text-gray-500';
+      line.textContent = `ℹ️  ${msg}`;
+      el.appendChild(line);
+      console.info(`ℹ️  ${msg}`);
+    }
+
+    function updateStatus() {
+      const statusEl = document.getElementById('status');
+      const failed = results.filter(r => !r.passed).length;
+      const passed = results.filter(r => r.passed).length;
+      if (failed > 0) {
+        statusEl.className = 'text-sm font-mono fail';
+        statusEl.textContent = `❌ ${failed} failed, ${passed} passed`;
+      } else if (passed > 0) {
+        statusEl.className = 'text-sm font-mono pass';
+        statusEl.textContent = `✅ ${passed} passed`;
+      }
+    }
+
+    function prevPage() {
+      if (rendition) rendition.prev();
+    }
+
+    function nextPage() {
+      if (rendition) rendition.next();
+    }
+
+    async function runTests() {
+      logInfo(`Fetching: ${TEST_FILE}`);
+
+      // Test 1: Fetch the EPUB file
+      let arrayBuffer;
+      try {
+        const response = await fetch(TEST_FILE);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        arrayBuffer = await response.arrayBuffer();
+        log('Fetch EPUB file', true, `${(arrayBuffer.byteLength / 1024).toFixed(1)} KB`);
+      } catch (err) {
+        log('Fetch EPUB file', false, err.message);
+        document.getElementById('status').textContent = '❌ Could not load file';
+        return;
+      }
+
+      // Test 2: ArrayBuffer is valid (non-empty)
+      log('ArrayBuffer non-empty', arrayBuffer.byteLength > 0, `${arrayBuffer.byteLength} bytes`);
+
+      // Test 3: Parse with EPUB.js
+      try {
+        book = ePub(arrayBuffer);
+        log('ePub() constructor', true);
+      } catch (err) {
+        log('ePub() constructor', false, err.message);
+        return;
+      }
+
+      // Test 4: Load book metadata
+      try {
+        await book.ready;
+        const meta = book.package.metadata;
+        log('Book metadata loaded', !!meta.title, `title: "${meta.title}"`);
+        logInfo(`Author: ${meta.creator || 'unknown'}`);
+        logInfo(`Language: ${meta.language || 'unknown'}`);
+      } catch (err) {
+        log('Book metadata loaded', false, err.message);
+      }
+
+      // Test 5: Spine has chapters
+      try {
+        await book.loaded.spine;
+        const spineLength = book.spine.items.length;
+        log('Spine has items', spineLength > 0, `${spineLength} spine items`);
+      } catch (err) {
+        log('Spine has items', false, err.message);
+      }
+
+      // Test 6: Render to viewer
+      try {
+        const container = document.getElementById('viewer-container');
+        rendition = book.renderTo(container, {
+          width: '100%',
+          height: '100%',
+          spread: 'auto',
+          flow: 'paginated',
+        });
+        log('book.renderTo()', true);
+      } catch (err) {
+        log('book.renderTo()', false, err.message);
+        return;
+      }
+
+      // Test 7: Display first page
+      try {
+        await rendition.display();
+        log('rendition.display()', true, 'first page rendered');
+        document.getElementById('btn-prev').disabled = false;
+        document.getElementById('btn-next').disabled = false;
+        document.getElementById('page-info').textContent = 'Page loaded';
+      } catch (err) {
+        log('rendition.display()', false, err.message);
+        return;
+      }
+
+      // Test 8: Navigate to next page
+      try {
+        await rendition.next();
+        log('Navigate next page', true);
+        await rendition.prev();
+        log('Navigate prev page', true);
+      } catch (err) {
+        log('Navigate pages', false, err.message);
+      }
+
+      // Test 9: TOC available
+      try {
+        await book.loaded.navigation;
+        const tocLength = book.navigation.toc.length;
+        log('Table of Contents', tocLength > 0, `${tocLength} TOC entries`);
+      } catch (err) {
+        log('Table of Contents', false, err.message);
+      }
+
+      logInfo('All tests complete.');
+    }
+
+    runTests().catch(err => {
+      log('Unexpected error', false, err.message);
+    });
+  </script>
+</body>
+</html>

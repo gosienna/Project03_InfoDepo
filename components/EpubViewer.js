@@ -20,6 +20,7 @@ export const EpubViewer = ({ data }) => {
           height: '100%',
           spread: 'auto',
           flow: "paginated",
+          allowScriptedContent: true, // required for EPUB.js iframe navigation; sandbox warning is expected
         });
         renditionRef.current = rendition;
         

@@ -6,8 +6,17 @@ import { PdfViewer } from './PdfViewer.js';
 import { TxtViewer } from './TxtViewer.js';
 import { UnsupportedViewer } from './UnsupportedViewer.js';
 
+const MIME_TO_EXT = {
+  'application/epub+zip': 'epub',
+  'application/pdf': 'pdf',
+  'text/plain': 'txt',
+};
+
 export const Reader = ({ book }) => {
-  const fileExtension = useMemo(() => getFileExtension(book.name), [book.name]);
+  const fileExtension = useMemo(() => {
+    const ext = getFileExtension(book.name);
+    return ext || MIME_TO_EXT[book.type] || '';
+  }, [book.name, book.type]);
 
   const renderBook = () => {
     switch (fileExtension) {

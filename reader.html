@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zenith Reader</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+  <style>
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    #viewer { width: 100%; height: 100%; }
+  </style>
+</head>
+<body class="bg-gray-900 text-gray-100 flex flex-col h-screen">
+
+  <!-- Header -->
+  <div class="bg-gray-800 px-6 py-3 flex items-center justify-between border-b border-gray-700 shrink-0">
+    <button onclick="window.close()" class="text-gray-400 hover:text-white text-sm flex items-center gap-2">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+      </svg>
+      Close
+    </button>
+    <h1 id="book-title" class="text-sm font-medium text-gray-300 truncate max-w-md">Loading...</h1>
+    <div id="page-info" class="text-xs text-gray-500 font-mono w-24 text-right"></div>
+  </div>
+
+  <!-- EPUB Viewer -->
+  <div id="viewer" class="flex-1 bg-white overflow-hidden"></div>
+
+  <!-- Nav Bar -->
+  <div class="bg-gray-800 border-t border-gray-700 flex items-center justify-center gap-6 py-3 shrink-0">
+    <button id="btn-prev" onclick="prevPage()"
+      class="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      disabled>← Previous</button>
+    <button id="btn-next" onclick="nextPage()"
+      class="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      disabled>Next →</button>
+  </div>
+
+  <!-- Loading overlay -->
+  <div id="loading" class="absolute inset-0 bg-gray-900 flex flex-col items-center justify-center gap-4 z-50">
+    <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-500"></div>
+    <p id="loading-msg" class="text-gray-400 text-sm">Loading book...</p>
+  </div>
+
+  <script>
+    const DB_NAME = 'EBookReaderDB';
+    const STORE_NAME = 'books';
+    let rendition = null;
+
+    function setLoading(msg) {
+      document.getElementById('loading-msg').textContent = msg;
+    }
+
+    function hideLoading() {
+      document.getElementById('loading').style.display = 'none';
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('loading-msg');
+      el.textContent = msg;
+      el.className = 'text-red-400 text-sm text-center max-w-sm';
+      document.querySelector('#loading .animate-spin')?.remove();
+    }
+
+    function prevPage() { rendition?.prev(); }
+    function nextPage() { rendition?.next(); }
+
+    function enableNav() {
+      document.getElementById('btn-prev').disabled = false;
+      document.getElementById('btn-next').disabled = false;
+    }
+
+    // Read book ID from URL
+    const bookId = parseInt(new URLSearchParams(location.search).get('id'));
+    if (!bookId) {
+      showError('No book ID provided.');
+    } else {
+      loadAndRender(bookId);
+    }
+
+    async function loadAndRender(id) {
+      // Open IndexedDB
+      setLoading('Opening database...');
+      const db = await new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror = e => reject(e.target.error);
+      }).catch(err => { showError(`DB error: ${err.message}`); return null; });
+      if (!db) return;
+
+      // Fetch book by ID
+      setLoading('Loading book data...');
+      const book = await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const req = tx.objectStore(STORE_NAME).get(id);
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror = e => reject(e.target.error);
+      }).catch(err => { showError(`Could not load book: ${err.message}`); return null; });
+
+      if (!book) { showError('Book not found in library.'); return; }
+
+      document.title = book.name;
+      document.getElementById('book-title').textContent = book.name;
+
+      // Render with EPUB.js
+      setLoading('Rendering EPUB...');
+      try {
+        const arrayBuffer = await book.data.arrayBuffer();
+        const epub = ePub(arrayBuffer);
+        const renditionInstance = epub.renderTo(document.getElementById('viewer'), {
+          width: '100%',
+          height: '100%',
+          spread: 'auto',
+          flow: 'paginated',
+        });
+        rendition = renditionInstance;
+
+        rendition.on('relocated', location => {
+          document.getElementById('page-info').textContent =
+            `${location.start.displayed.page} / ${location.start.displayed.total}`;
+        });
+
+        await rendition.display();
+        hideLoading();
+        enableNav();
+      } catch (err) {
+        showError(`Failed to render EPUB: ${err.message}`);
+      }
+    }
+  </script>
+</body>
+</html>

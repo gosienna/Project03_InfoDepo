@@ -6,13 +6,17 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:epub": "vite --open /test_epub.html",
+    "test:epub:headless": "node scripts/test-epub-browser.js",
+    "test:drive": "node scripts/test-drive-connection.js"
   },
   "dependencies": {
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@vitejs/plugin-react": "^5.0.0",
     "vite": "^6.2.0"
   }
