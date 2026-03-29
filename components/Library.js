@@ -5,10 +5,11 @@ import { BookIcon } from './icons/BookIcon.js';
 import { TrashIcon } from './icons/TrashIcon.js';
 import { DevDriveBrowser } from './DevDriveBrowser.js';
 
-const IS_DEV   = import.meta.env.DEV;
-const FOLDER_ID = import.meta.env.VITE_TEST_DRIVE_FOLDER_ID;
-const API_KEY   = import.meta.env.VITE_TEST_API_KEY;
-const CLIENT_ID = import.meta.env.VITE_TEST_CLIENT_ID;
+const IS_DEV    = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true
+                  || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const FOLDER_ID = import.meta.env?.VITE_TEST_DRIVE_FOLDER_ID;
+const API_KEY   = import.meta.env?.VITE_TEST_API_KEY;
+const CLIENT_ID = import.meta.env?.VITE_TEST_CLIENT_ID;
 const UPLOAD_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
 export const Library = ({ books, onSelectBook, onAddBook, onDeleteBook, onClearLibrary }) => {

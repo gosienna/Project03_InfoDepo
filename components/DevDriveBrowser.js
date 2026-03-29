@@ -16,9 +16,9 @@ export const DevDriveBrowser = ({ onFileSelect, onClose }) => {
   const [downloading, setDownloading] = useState(null);
   const oauthToken = useRef(null);
 
-  const clientId = import.meta.env.VITE_TEST_CLIENT_ID;
-  const apiKey = import.meta.env.VITE_TEST_API_KEY;
-  const folderId = import.meta.env.VITE_TEST_DRIVE_FOLDER_ID;
+  const clientId = import.meta.env?.VITE_TEST_CLIENT_ID;
+  const apiKey = import.meta.env?.VITE_TEST_API_KEY;
+  const folderId = import.meta.env?.VITE_TEST_DRIVE_FOLDER_ID;
 
   const listFiles = useCallback(async (token) => {
     setStatus('Loading files...');
