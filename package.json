@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test:epub": "vite --open /test_epub.html",
     "test:epub:headless": "node scripts/test-epub-browser.js",
+    "test:epub:prod": "node scripts/test-epub-prod.js",
     "test:txt": "vite --open /test_txt.html",
     "test:txt:headless": "node scripts/test-txt-browser.js",
     "test:drive": "node scripts/test-drive-connection.js"
