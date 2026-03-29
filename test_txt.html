@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TXT Viewer Test — Sherlock Holmes</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .pass    { color: #4ade80; }
+    .fail    { color: #f87171; }
+    .pending { color: #facc15; }
+  </style>
+</head>
+<body class="bg-gray-900 text-gray-100 flex flex-col h-screen">
+
+  <!-- Header -->
+  <div class="bg-gray-800 px-6 py-3 flex items-center justify-between border-b border-gray-700 shrink-0">
+    <h1 class="text-lg font-semibold">TXT Viewer Test</h1>
+    <span class="text-sm text-gray-400">test_documents/THE ADVENTURES OF SHERLOCK HOLMES.txt</span>
+    <div id="status" class="text-sm font-mono pending">⏳ Running...</div>
+  </div>
+
+  <!-- Test Log -->
+  <div id="log" class="bg-gray-950 text-xs font-mono px-6 py-2 border-b border-gray-700 space-y-0.5 max-h-40 overflow-y-auto shrink-0"></div>
+
+  <!-- TXT Viewer -->
+  <div id="viewer" class="flex-1 bg-gray-800 p-6 overflow-y-auto">
+    <pre id="content" class="whitespace-pre-wrap text-gray-200 font-serif text-base leading-relaxed hidden"></pre>
+    <div id="loading" class="flex items-center justify-center h-full text-gray-500">Loading...</div>
+  </div>
+
+  <script>
+    const TEST_FILE = '/test_documents/THE ADVENTURES OF SHERLOCK HOLMES.txt';
+    let results = [];
+
+    function log(label, passed, detail = '') {
+      results.push({ label, passed });
+      const el = document.getElementById('log');
+      const line = document.createElement('div');
+      const icon = passed ? '✅' : '❌';
+      const text = `${icon}  ${label}${detail ? '  —  ' + detail : ''}`;
+      line.className = passed ? 'pass' : 'fail';
+      line.textContent = text;
+      el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
+      console.log(text);
+      updateStatus();
+    }
+
+    function logInfo(msg) {
+      const el = document.getElementById('log');
+      const line = document.createElement('div');
+      line.className = 'text-gray-500';
+      line.textContent = `ℹ️  ${msg}`;
+      el.appendChild(line);
+      console.info(`ℹ️  ${msg}`);
+    }
+
+    function updateStatus() {
+      const statusEl = document.getElementById('status');
+      const failed = results.filter(r => !r.passed).length;
+      const passed = results.filter(r => r.passed).length;
+      if (failed > 0) {
+        statusEl.className = 'text-sm font-mono fail';
+        statusEl.textContent = `❌ ${failed} failed, ${passed} passed`;
+      } else if (passed > 0) {
+        statusEl.className = 'text-sm font-mono pass';
+        statusEl.textContent = `✅ ${passed} passed`;
+      }
+    }
+
+    async function runTests() {
+      logInfo(`Fetching: ${TEST_FILE}`);
+
+      // Test 1: Fetch the TXT file
+      let response;
+      try {
+        response = await fetch(TEST_FILE);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        log('Fetch TXT file', true, `HTTP ${response.status}`);
+      } catch (err) {
+        log('Fetch TXT file', false, err.message);
+        return;
+      }
+
+      // Test 2: Content-Type is text
+      const contentType = response.headers.get('content-type') || '';
+      log('Content-Type is text', contentType.includes('text'), contentType);
+
+      // Test 3: Read as Blob
+      let blob;
+      try {
+        blob = await response.blob();
+        log('Read as Blob', blob.size > 0, `${(blob.size / 1024).toFixed(1)} KB`);
+      } catch (err) {
+        log('Read as Blob', false, err.message);
+        return;
+      }
+
+      // Test 4: Blob MIME type
+      log('Blob MIME type', blob.type.includes('text'), blob.type || '(empty)');
+
+      // Test 5: FileReader reads text
+      let text;
+      try {
+        text = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = e => resolve(e.target.result);
+          reader.onerror = () => reject(new Error('FileReader error'));
+          reader.readAsText(blob);
+        });
+        log('FileReader.readAsText()', true, `${text.length.toLocaleString()} characters`);
+      } catch (err) {
+        log('FileReader.readAsText()', false, err.message);
+        return;
+      }
+
+      // Test 6: Content is non-empty string
+      log('Content is non-empty', typeof text === 'string' && text.length > 0);
+
+      // Test 7: Contains expected text (title check)
+      const hasTitle = text.includes('SHERLOCK HOLMES') || text.includes('Sherlock Holmes');
+      log('Contains "Sherlock Holmes"', hasTitle);
+
+      // Test 8: Has multiple lines
+      const lineCount = text.split('\n').length;
+      log('Has multiple lines', lineCount > 10, `${lineCount.toLocaleString()} lines`);
+
+      // Test 9: No binary/null characters (valid UTF-8 text)
+      const hasBinary = text.includes('\0');
+      log('No binary characters', !hasBinary);
+
+      // Test 10: Render to DOM (simulate TxtViewer)
+      try {
+        const pre = document.getElementById('content');
+        pre.textContent = text;
+        pre.classList.remove('hidden');
+        document.getElementById('loading').remove();
+        log('Render to DOM', true, 'text displayed in viewer');
+      } catch (err) {
+        log('Render to DOM', false, err.message);
+      }
+
+      // Summary info
+      const words = text.trim().split(/\s+/).length;
+      logInfo(`Word count: ~${words.toLocaleString()} words`);
+      logInfo(`Preview: "${text.trim().slice(0, 80).replace(/\n/g, ' ')}..."`);
+      logInfo('All tests complete.');
+    }
+
+    runTests().catch(err => {
+      log('Unexpected error', false, err.message);
+    });
+  </script>
+</body>
+</html>

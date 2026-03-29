@@ -3,12 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>EPUB Viewer Test — Project Hail Mary</title>
+  <title>EPUB Viewer Test</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
   <style>
-    #viewer { width: 100%; height: 100%; }
     .pass { color: #4ade80; }
     .fail { color: #f87171; }
     .pending { color: #facc15; }
@@ -17,171 +15,277 @@
 <body class="bg-gray-900 text-gray-100 flex flex-col h-screen">
 
   <!-- Header -->
-  <div class="bg-gray-800 px-6 py-3 flex items-center justify-between border-b border-gray-700">
+  <div class="bg-gray-800 px-6 py-3 flex items-center justify-between border-b border-gray-700 shrink-0">
     <h1 class="text-lg font-semibold">EPUB Viewer Test</h1>
-    <span class="text-sm text-gray-400">test_documents/Project Hail Mary.epub</span>
-    <div id="status" class="text-sm font-mono pending">⏳ Loading...</div>
+    <span class="text-sm text-gray-400 truncate max-w-sm">One-Punch Man, Vol. 01</span>
+    <div id="status" class="text-sm font-mono pending shrink-0">⏳ Loading...</div>
   </div>
 
   <!-- Test Log -->
-  <div id="log" class="bg-gray-950 text-xs font-mono px-6 py-2 border-b border-gray-700 space-y-0.5 max-h-36 overflow-y-auto"></div>
+  <div id="log" class="bg-gray-950 text-xs font-mono px-6 py-2 border-b border-gray-700 space-y-0.5 max-h-36 overflow-y-auto shrink-0"></div>
 
-  <!-- EPUB Viewer -->
-  <div class="flex-1 flex flex-col overflow-hidden">
-    <div id="viewer-container" class="flex-1 bg-white overflow-hidden"></div>
-    <div class="flex justify-center items-center h-14 bg-gray-800 gap-4">
-      <button id="btn-prev" onclick="prevPage()"
-        class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors disabled:opacity-40"
-        disabled>Previous</button>
-      <span id="page-info" class="text-sm text-gray-400">—</span>
-      <button id="btn-next" onclick="nextPage()"
-        class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors disabled:opacity-40"
-        disabled>Next</button>
-    </div>
+  <!-- EPUB Viewer — min-h-0 prevents flex child from overflowing past its allotted space -->
+  <div id="viewer" class="flex-1 min-h-0 bg-white overflow-y-auto"></div>
+
+  <!-- Nav -->
+  <div class="bg-gray-800 border-t border-gray-700 flex items-center justify-center gap-6 py-3 shrink-0">
+    <button id="btn-prev" onclick="prevPage()"
+      class="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      disabled>← Previous</button>
+    <span id="page-info" class="text-sm text-gray-400 font-mono w-20 text-center">—</span>
+    <button id="btn-next" onclick="nextPage()"
+      class="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      disabled>Next →</button>
   </div>
 
   <script>
-    const TEST_FILE = '/test_documents/Project Hail Mary.epub';
-    let rendition = null;
-    let book = null;
+    const TEST_FILE = '/test_documents/THE ADVENTURES OF SHERLOCK HOLMES.txt';
+    // Use the One-Punch Man epub
+    const EPUB_FILE = "/test_documents/One-Punch Man, Vol. 01 (One) (z-library.sk, 1lib.sk, z-lib.sk).epub";
+
+    let zip = null;
+    let spine = [];
+    let opfDir = '';
+    let currentIndex = 0;
+    const blobCache = {};
+    let shadowRoot = null;
     let results = [];
 
     function log(label, passed, detail = '') {
       results.push({ label, passed });
       const el = document.getElementById('log');
       const line = document.createElement('div');
-      const icon = passed ? '✅' : '❌';
-      const text = `${icon}  ${label}${detail ? '  —  ' + detail : ''}`;
       line.className = passed ? 'pass' : 'fail';
-      line.textContent = text;
+      line.textContent = `${passed ? '✅' : '❌'}  ${label}${detail ? '  —  ' + detail : ''}`;
       el.appendChild(line);
       el.scrollTop = el.scrollHeight;
       updateStatus();
-      console.log(text);
+      console.log(line.textContent);
     }
 
     function logInfo(msg) {
       const el = document.getElementById('log');
       const line = document.createElement('div');
-      line.className = 'text-gray-500';
+      line.className = 'text-gray-400';
       line.textContent = `ℹ️  ${msg}`;
       el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
       console.info(`ℹ️  ${msg}`);
     }
 
     function updateStatus() {
-      const statusEl = document.getElementById('status');
+      const el = document.getElementById('status');
       const failed = results.filter(r => !r.passed).length;
       const passed = results.filter(r => r.passed).length;
       if (failed > 0) {
-        statusEl.className = 'text-sm font-mono fail';
-        statusEl.textContent = `❌ ${failed} failed, ${passed} passed`;
+        el.className = 'text-sm font-mono fail shrink-0';
+        el.textContent = `❌ ${failed} failed, ${passed} passed`;
       } else if (passed > 0) {
-        statusEl.className = 'text-sm font-mono pass';
-        statusEl.textContent = `✅ ${passed} passed`;
+        el.className = 'text-sm font-mono pass shrink-0';
+        el.textContent = `✅ ${passed} passed`;
       }
+    }
+
+    // ── Shared renderer (mirrors reader.html logic) ──────────────────────────
+
+    function resolveHref(base, href) {
+      if (!href || href.startsWith('data:') || /^https?:\/\//.test(href)) return href;
+      if (href.startsWith('/')) return href.slice(1);
+      const baseDir = base.includes('/') ? base.substring(0, base.lastIndexOf('/') + 1) : '';
+      const stack = (baseDir + href).split('/');
+      const result = [];
+      for (const seg of stack) {
+        if (seg === '..') result.pop();
+        else if (seg !== '.') result.push(seg);
+      }
+      return result.join('/');
+    }
+
+    async function getBlobUrl(path) {
+      if (blobCache[path]) return blobCache[path];
+      const file = zip.file(path);
+      if (!file) return null;
+      const blob = await file.async('blob');
+      const url = URL.createObjectURL(blob);
+      blobCache[path] = url;
+      return url;
+    }
+
+    async function replaceCssUrls(css, cssPath) {
+      const matches = [...css.matchAll(/url\(['"]?([^'")\s]+)['"]?\)/g)];
+      for (const match of matches) {
+        const original = match[1];
+        if (original.startsWith('data:') || /^https?:\/\//.test(original)) continue;
+        const blobUrl = await getBlobUrl(resolveHref(cssPath, original));
+        if (blobUrl) css = css.replace(match[0], `url('${blobUrl}')`);
+      }
+      return css;
+    }
+
+    async function renderChapter(index) {
+      const chapterHref = spine[index];
+      const chapterPath = opfDir ? opfDir + '/' + chapterHref : chapterHref;
+
+      const file = zip.file(chapterPath);
+      if (!file) throw new Error(`Chapter file not found: ${chapterPath}`);
+
+      const html = await file.async('string');
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+
+      for (const el of doc.querySelectorAll('[src]')) {
+        const src = el.getAttribute('src');
+        if (src && !src.startsWith('data:') && !/^https?:\/\//.test(src)) {
+          const url = await getBlobUrl(resolveHref(chapterPath, src));
+          if (url) el.setAttribute('src', url);
+        }
+      }
+
+      const styles = [];
+      for (const el of doc.querySelectorAll('style')) {
+        styles.push(await replaceCssUrls(el.textContent, chapterPath));
+      }
+      for (const el of doc.querySelectorAll('link[rel="stylesheet"][href]')) {
+        const cssPath = resolveHref(chapterPath, el.getAttribute('href'));
+        const cssFile = zip.file(cssPath);
+        if (cssFile) {
+          let css = await cssFile.async('string');
+          styles.push(await replaceCssUrls(css, cssPath));
+        }
+      }
+
+      if (!shadowRoot) {
+        shadowRoot = document.getElementById('viewer').attachShadow({ mode: 'open' });
+      }
+      while (shadowRoot.firstChild) shadowRoot.removeChild(shadowRoot.firstChild);
+
+      const baseStyle = document.createElement('style');
+      baseStyle.textContent = `
+        :host { display: block; }
+        .epub-content {
+          position: relative;
+          overflow: hidden;
+          max-width: 720px; margin: 0 auto; padding: 2rem 2.5rem;
+          font-family: Georgia, 'Times New Roman', serif;
+          font-size: 1.05rem; line-height: 1.8; color: #111;
+        }
+        img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+        a { color: #4f46e5; }
+        p { margin: 0 0 0.8em; }
+        h1, h2, h3, h4, h5, h6 { margin: 1.2em 0 0.4em; line-height: 1.3; }
+        #PV, .PV-P { display: none !important; }
+      `;
+      shadowRoot.appendChild(baseStyle);
+
+      for (const css of styles) {
+        const s = document.createElement('style');
+        s.textContent = css;
+        shadowRoot.appendChild(s);
+      }
+
+      const content = document.createElement('div');
+      content.className = 'epub-content';
+      content.innerHTML = doc.body.innerHTML;
+      shadowRoot.appendChild(content);
+
+      document.getElementById('viewer').scrollTop = 0;
+      document.getElementById('page-info').textContent = `${index + 1} / ${spine.length}`;
+      document.getElementById('btn-prev').disabled = index === 0;
+      document.getElementById('btn-next').disabled = index === spine.length - 1;
     }
 
     function prevPage() {
-      if (rendition) rendition.prev();
+      if (currentIndex > 0) renderChapter(--currentIndex).catch(err => console.error(err));
+    }
+    function nextPage() {
+      if (currentIndex < spine.length - 1) renderChapter(++currentIndex).catch(err => console.error(err));
     }
 
-    function nextPage() {
-      if (rendition) rendition.next();
-    }
+    // ── Tests ────────────────────────────────────────────────────────────────
 
     async function runTests() {
-      logInfo(`Fetching: ${TEST_FILE}`);
+      logInfo(`Fetching: ${EPUB_FILE}`);
 
-      // Test 1: Fetch the EPUB file
+      // T1: Fetch
       let arrayBuffer;
       try {
-        const response = await fetch(TEST_FILE);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        arrayBuffer = await response.arrayBuffer();
+        const res = await fetch(EPUB_FILE);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        arrayBuffer = await res.arrayBuffer();
         log('Fetch EPUB file', true, `${(arrayBuffer.byteLength / 1024).toFixed(1)} KB`);
       } catch (err) {
         log('Fetch EPUB file', false, err.message);
-        document.getElementById('status').textContent = '❌ Could not load file';
         return;
       }
 
-      // Test 2: ArrayBuffer is valid (non-empty)
-      log('ArrayBuffer non-empty', arrayBuffer.byteLength > 0, `${arrayBuffer.byteLength} bytes`);
-
-      // Test 3: Parse with EPUB.js
+      // T2: JSZip parse
       try {
-        book = ePub(arrayBuffer);
-        log('ePub() constructor', true);
+        zip = await JSZip.loadAsync(arrayBuffer);
+        log('JSZip.loadAsync()', true, `${Object.keys(zip.files).length} files in zip`);
       } catch (err) {
-        log('ePub() constructor', false, err.message);
+        log('JSZip.loadAsync()', false, err.message);
         return;
       }
 
-      // Test 4: Load book metadata
+      // T3: container.xml
+      let opfPath;
       try {
-        await book.ready;
-        const meta = book.package.metadata;
-        log('Book metadata loaded', !!meta.title, `title: "${meta.title}"`);
-        logInfo(`Author: ${meta.creator || 'unknown'}`);
-        logInfo(`Language: ${meta.language || 'unknown'}`);
+        const xml = await zip.file('META-INF/container.xml').async('string');
+        opfPath = xml.match(/full-path="([^"]+)"/)?.[1];
+        log('container.xml → OPF path', !!opfPath, opfPath);
       } catch (err) {
-        log('Book metadata loaded', false, err.message);
-      }
-
-      // Test 5: Spine has chapters
-      try {
-        await book.loaded.spine;
-        const spineLength = book.spine.items.length;
-        log('Spine has items', spineLength > 0, `${spineLength} spine items`);
-      } catch (err) {
-        log('Spine has items', false, err.message);
-      }
-
-      // Test 6: Render to viewer
-      try {
-        const container = document.getElementById('viewer-container');
-        rendition = book.renderTo(container, {
-          width: '100%',
-          height: '100%',
-          spread: 'auto',
-          flow: 'paginated',
-        });
-        log('book.renderTo()', true);
-      } catch (err) {
-        log('book.renderTo()', false, err.message);
+        log('container.xml → OPF path', false, err.message);
         return;
       }
 
-      // Test 7: Display first page
+      // T4: Parse OPF
       try {
-        await rendition.display();
-        log('rendition.display()', true, 'first page rendered');
-        document.getElementById('btn-prev').disabled = false;
-        document.getElementById('btn-next').disabled = false;
-        document.getElementById('page-info').textContent = 'Page loaded';
+        opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/')) : '';
+        const opfXml = await zip.file(opfPath).async('string');
+        const opfDoc = new DOMParser().parseFromString(opfXml, 'application/xml');
+
+        const manifestMap = {};
+        for (const item of opfDoc.querySelectorAll('manifest item')) {
+          manifestMap[item.getAttribute('id')] = item.getAttribute('href');
+        }
+        spine = [];
+        for (const itemref of opfDoc.querySelectorAll('spine itemref')) {
+          const href = manifestMap[itemref.getAttribute('idref')];
+          if (href) spine.push(href);
+        }
+
+        const titleEl =
+          opfDoc.querySelector('title') ||
+          opfDoc.getElementsByTagNameNS('http://purl.org/dc/elements/1.1/', 'title')[0];
+        const title = titleEl?.textContent || '(no title)';
+
+        log('OPF parsed — spine', spine.length > 0, `${spine.length} chapters, title: "${title}"`);
       } catch (err) {
-        log('rendition.display()', false, err.message);
+        log('OPF parsed — spine', false, err.message);
         return;
       }
 
-      // Test 8: Navigate to next page
+      // T5: Render first chapter
       try {
-        await rendition.next();
-        log('Navigate next page', true);
-        await rendition.prev();
-        log('Navigate prev page', true);
+        await renderChapter(0);
+        log('Render chapter 1', true, spine[0]);
       } catch (err) {
-        log('Navigate pages', false, err.message);
+        log('Render chapter 1', false, err.message);
+        return;
       }
 
-      // Test 9: TOC available
-      try {
-        await book.loaded.navigation;
-        const tocLength = book.navigation.toc.length;
-        log('Table of Contents', tocLength > 0, `${tocLength} TOC entries`);
-      } catch (err) {
-        log('Table of Contents', false, err.message);
+      // T6: Navigate to chapter 2
+      if (spine.length > 1) {
+        try {
+          await renderChapter(1);
+          log('Navigate to chapter 2', true, spine[1]);
+          // Go back to chapter 1
+          await renderChapter(0);
+          log('Navigate back to chapter 1', true);
+        } catch (err) {
+          log('Navigate chapters', false, err.message);
+        }
+      } else {
+        logInfo('Only 1 spine item — skipping navigation test');
       }
 
       logInfo('All tests complete.');
@@ -189,6 +293,7 @@
 
     runTests().catch(err => {
       log('Unexpected error', false, err.message);
+      console.error(err);
     });
   </script>
 </body>

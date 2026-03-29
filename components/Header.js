@@ -27,7 +27,7 @@ export const Header = ({ onBack }) => {
       React.createElement(
         "h1",
         { className: "text-xl sm:text-2xl font-bold text-white tracking-tight pointer-events-none" },
-        "Zenith Reader"
+        "Personal Information Depository"
       )
     )
   );

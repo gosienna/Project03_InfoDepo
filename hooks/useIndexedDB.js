@@ -1,7 +1,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 
-const DB_NAME = 'EBookReaderDB';
+const DB_NAME = 'InfoDepo';
 const DB_VERSION = 1;
 const STORE_NAME = 'books';
 

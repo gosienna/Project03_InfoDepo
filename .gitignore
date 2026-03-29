@@ -1,3 +1,8 @@
+.env
+
+# Large test documents (keep only small reference files already tracked)
+test_documents/One-Punch*
+test_documents/THE ADVENTURES*
 # Logs
 logs
 *.log
