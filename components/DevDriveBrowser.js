@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Spinner } from './Spinner.js';
+import { getOAuthToken } from '../utils/driveAuth.js';
 
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
 const SUPPORTED_MIME_TYPES = [
@@ -20,7 +21,7 @@ export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey, folde
     setStatus('Loading files...');
     try {
       const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
-      const fields = encodeURIComponent('files(id,name,mimeType,size)');
+      const fields = encodeURIComponent('files(id,name,mimeType,size,modifiedTime)');
       const res = await fetch(
         `https://www.googleapis.com/drive/v3/files?q=${query}&fields=${fields}&key=${apiKey}`,
         { headers: { Authorization: `Bearer ${token}` } }
@@ -44,30 +45,14 @@ export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey, folde
       return;
     }
 
-    const init = () => {
-      if (typeof google === 'undefined' || !google.accounts) {
-        setTimeout(init, 100);
-        return;
-      }
-      try {
-        const tokenClient = google.accounts.oauth2.initTokenClient({
-          client_id: clientId,
-          scope: SCOPES,
-          callback: (res) => {
-            if (res.error) {
-              setError(`Auth failed: ${res.error_description || res.error}`);
-              return;
-            }
-            oauthToken.current = res.access_token;
-            listFiles(res.access_token);
-          },
-        });
-        tokenClient.requestAccessToken({ prompt: '' });
-      } catch (err) {
-        setError(err.message);
-      }
-    };
-    init();
+    getOAuthToken(clientId, SCOPES)
+      .then((token) => {
+        oauthToken.current = token;
+        listFiles(token);
+      })
+      .catch((err) => {
+        setError(`Auth failed: ${err.message}`);
+      });
   }, [clientId, apiKey, folderId, listFiles]);
 
   const handleDownload = async (file) => {

@@ -45,6 +45,7 @@ const UploadButton = ({ status, onClick }) => {
 
 export const BookCard = ({ book, onSelect, onDelete, onUpload, uploadStatus }) => {
   const fileExtension = getFileExtension(book.name);
+  const isCloudOnly = book.isMetadataOnly === true;
 
   const handleDelete = (e) => {
     e.stopPropagation();
@@ -61,23 +62,36 @@ export const BookCard = ({ book, onSelect, onDelete, onUpload, uploadStatus }) =
   return React.createElement(
     "div",
     {
-      className: "bg-gray-800 rounded-lg shadow-lg overflow-hidden cursor-pointer group transition-all duration-300 transform hover:-translate-y-1 hover:shadow-indigo-500/30",
+      className: isCloudOnly
+        ? "bg-gray-800/40 rounded-lg shadow-lg overflow-hidden cursor-pointer group transition-all duration-300 transform hover:-translate-y-1 border-2 border-dashed border-gray-600"
+        : "bg-gray-800 rounded-lg shadow-lg overflow-hidden cursor-pointer group transition-all duration-300 transform hover:-translate-y-1 hover:shadow-indigo-500/30",
       onClick: () => onSelect(book)
     },
     React.createElement(
       "div",
       { className: "relative p-4 bg-gray-700 h-40 flex items-center justify-center" },
-      React.createElement(BookIcon, { className: "h-20 w-20 text-gray-500 group-hover:text-indigo-400 transition-colors duration-300" }),
+      React.createElement(BookIcon, {
+        className: isCloudOnly
+          ? "h-20 w-20 text-gray-600"
+          : "h-20 w-20 text-gray-500 group-hover:text-indigo-400 transition-colors duration-300"
+      }),
+      // File type badge (top-right)
       React.createElement(
         "span",
         { className: "absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded" },
         fileExtension.toUpperCase()
       ),
+      // Cloud-only badge (top-left)
+      isCloudOnly && React.createElement(
+        "span",
+        { className: "absolute top-2 left-2 flex items-center gap-1 bg-blue-900/80 text-blue-200 text-xs font-bold px-2 py-1 rounded border border-blue-700/50" },
+        "☁ Cloud"
+      ),
       // Bottom action row
       React.createElement(
         "div",
         { className: "absolute bottom-2 right-2 flex items-center gap-1.5" },
-        React.createElement(UploadButton, { status: uploadStatus, onClick: handleUpload }),
+        !isCloudOnly && React.createElement(UploadButton, { status: uploadStatus, onClick: handleUpload }),
         React.createElement(
           "button",
           {
@@ -101,6 +115,11 @@ export const BookCard = ({ book, onSelect, onDelete, onUpload, uploadStatus }) =
         "p",
         { className: "text-sm text-gray-400" },
         formatBytes(book.size)
+      ),
+      isCloudOnly && React.createElement(
+        "p",
+        { className: "text-xs text-blue-400 mt-1" },
+        "Click to download & read"
       )
     )
   );

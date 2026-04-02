@@ -4,15 +4,17 @@ import { getFileExtension } from '../utils/fileUtils.js';
 import { EpubViewer } from './EpubViewer.js';
 import { PdfViewer } from './PdfViewer.js';
 import { TxtViewer } from './TxtViewer.js';
+import { MarkdownEditor } from './MarkdownEditor.js';
 import { UnsupportedViewer } from './UnsupportedViewer.js';
 
 const MIME_TO_EXT = {
   'application/epub+zip': 'epub',
   'application/pdf': 'pdf',
   'text/plain': 'txt',
+  'text/markdown': 'md',
 };
 
-export const Reader = ({ book }) => {
+export const Reader = ({ book, onUpdateBook, onAddAsset, onGetAssets }) => {
   const fileExtension = useMemo(() => {
     const ext = getFileExtension(book.name);
     return ext || MIME_TO_EXT[book.type] || '';
@@ -26,6 +28,8 @@ export const Reader = ({ book }) => {
         return React.createElement(PdfViewer, { data: book.data });
       case 'txt':
         return React.createElement(TxtViewer, { data: book.data });
+      case 'md':
+        return React.createElement(MarkdownEditor, { book, onUpdateBook, onAddAsset, onGetAssets });
       default:
         return React.createElement(UnsupportedViewer, { filename: book.name });
     }
