@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
         headers: {
           'Permissions-Policy': 'unload=*',
+          'Cross-Origin-Opener-Policy': 'unsafe-none',
         },
       },
       plugins: [react()],

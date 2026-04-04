@@ -141,7 +141,7 @@ export const VideoCard = ({ video, onSelect, onDelete, onUpload, uploadStatus })
       React.createElement(
         "h3",
         { className: "font-bold text-md text-gray-100 truncate", title: video.name },
-        video.name
+        isYoutube ? video.name.replace(/\.youtube$/i, '') : video.name
       ),
       React.createElement(
         "p",

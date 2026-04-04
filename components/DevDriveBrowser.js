@@ -8,6 +8,7 @@ const SUPPORTED_MIME_TYPES = [
   'application/epub+zip',
   'application/pdf',
   'text/plain',
+  'application/json', // YouTube URL entries backed up from the app
 ];
 
 export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey, folderId }) => {
@@ -66,8 +67,25 @@ export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey, folde
         const err = await res.json();
         throw new Error(err.error?.message || res.statusText);
       }
-      const blob = await res.blob();
-      await onFileSelect(file.name, file.mimeType, blob);
+      let blob = await res.blob();
+      let name = file.name;
+      let mimeType = file.mimeType;
+
+      // Detect YouTube URL JSON files and re-type them before saving
+      if (mimeType === 'application/json') {
+        try {
+          const text = await blob.text();
+          const parsed = JSON.parse(text);
+          if (parsed.url && /youtube\.com|youtu\.be/.test(parsed.url)) {
+            const safeTitle = (parsed.title || 'YouTube Video').replace(/[/\\?%*:|"<>]/g, '-');
+            name = safeTitle + '.youtube';
+            mimeType = 'application/x-youtube';
+            blob = new Blob([text], { type: 'application/x-youtube' });
+          }
+        } catch { /* not a YouTube entry — import as-is */ }
+      }
+
+      await onFileSelect(name, mimeType, blob);
       onClose();
     } catch (err) {
       setError(`Failed to download "${file.name}": ${err.message}`);

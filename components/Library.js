@@ -8,13 +8,12 @@ import { DriveSettingsModal } from './DriveSettingsModal.js';
 import { getDriveCredentials, saveDriveCredentials } from '../utils/driveCredentials.js';
 import { NewNoteModal } from './NewNoteModal.js';
 import { NewYoutubeModal } from './NewYoutubeModal.js';
-import { getOAuthToken } from '../utils/driveAuth.js';
 import { syncDriveToLocal, backupAllToGDrive } from '../utils/driveSync.js';
 import { libraryItemKey } from '../utils/libraryItemKey.js';
 
 const IS_DEV = import.meta.env.DEV;
-const UPLOAD_SCOPE = 'https://www.googleapis.com/auth/drive.file';
-const READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+// Combined scope: drive.file (create/update app files) + drive.readonly (list/download any file)
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
 
 export const Library = ({
   items, onSelectItem, onAddItem, onDeleteItem, onClearLibrary,
@@ -23,7 +22,6 @@ export const Library = ({
 }) => {
   const fileInputRef      = useRef(null);
   const uploadTokenRef    = useRef(null);
-  const readTokenRef      = useRef(null); // { token, expiresAt }
   const [isDevBrowserOpen, setIsDevBrowserOpen] = useState(false);
   const [isSettingsOpen,   setIsSettingsOpen]   = useState(false);
   const [driveFolderName,  setDriveFolderName]  = useState(null);
@@ -49,16 +47,15 @@ export const Library = ({
       .catch(() => {});
   }, [credentials.folderId, credentials.apiKey]);
 
-  // Clear cached tokens if client ID changes
+  // Clear cached token if client ID changes
   useEffect(() => {
     uploadTokenRef.current = null;
-    readTokenRef.current = null;
   }, [credentials.clientId]);
 
   const setStatus = (key, status) =>
     setUploadStatuses(prev => ({ ...prev, [key]: status }));
 
-  const getUploadToken = () =>
+  const getDriveToken = () =>
     new Promise((resolve, reject) => {
       if (uploadTokenRef.current) { resolve(uploadTokenRef.current); return; }
       if (typeof google === 'undefined' || !google.accounts) {
@@ -66,7 +63,7 @@ export const Library = ({
       }
       const client = google.accounts.oauth2.initTokenClient({
         client_id: credentials.clientId,
-        scope: UPLOAD_SCOPE,
+        scope: DRIVE_SCOPE,
         callback: (res) => {
           if (res.error) { reject(new Error(res.error_description || res.error)); return; }
           uploadTokenRef.current = res.access_token;
@@ -80,7 +77,7 @@ export const Library = ({
     const uKey = libraryItemKey(video);
     setStatus(uKey, 'uploading');
     try {
-      const token = await getUploadToken();
+      const token = await getDriveToken();
 
       // YouTube links: upload as .json so Drive can display the content
       const isYoutube = video.type === 'application/x-youtube';
@@ -153,12 +150,14 @@ export const Library = ({
     setSyncProgress('');
     const combined = {};
     try {
+      // Single OAuth prompt covers both upload (drive.file) and download (drive.readonly)
+      const token = await getDriveToken();
+
       // Phase 1: backup local-only items to Drive
       setSyncProgress('Backing up local items...');
-      const uploadToken = await getUploadToken();
       const images = onGetAllImages ? await onGetAllImages() : [];
       const backupResult = await backupAllToGDrive({
-        accessToken: uploadToken,
+        accessToken: token,
         folderId: credentials.folderId,
         items,
         images,
@@ -168,17 +167,10 @@ export const Library = ({
       combined.backed = backupResult.backed;
       combined.backupFailed = backupResult.failed;
 
-      // Phase 2: sync Drive → local
+      // Phase 2: sync Drive → local (reuse same token)
       setSyncProgress('Syncing from Drive...');
-      const cached = readTokenRef.current;
-      const readToken = (cached && Date.now() < cached.expiresAt)
-        ? cached.token
-        : await getOAuthToken(credentials.clientId, READ_SCOPE).then(t => {
-            readTokenRef.current = { token: t, expiresAt: Date.now() + 55 * 60 * 1000 };
-            return t;
-          });
       const syncResult = await syncDriveToLocal({
-        accessToken: readToken,
+        accessToken: token,
         apiKey: credentials.apiKey,
         folderId: credentials.folderId,
         books: items.filter(i => i.type !== 'application/x-youtube'),

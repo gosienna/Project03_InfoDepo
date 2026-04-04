@@ -3,6 +3,7 @@ const SUPPORTED_MIME_TYPES = [
   'application/pdf',
   'text/plain',
   'text/markdown',
+  'application/json', // YouTube URL entries backed up from the app
 ];
 
 /**
@@ -76,8 +77,23 @@ export async function syncDriveToLocal({
       counts.skipped++;
       continue;
     }
-    const blob = await blobRes.blob();
-    const action = await upsertDriveBook(driveFile, blob);
+    let blob = await blobRes.blob();
+    let effectiveFile = driveFile;
+
+    // Detect YouTube URL JSON files and re-type them before storing
+    if (driveFile.mimeType === 'application/json') {
+      try {
+        const text = await blob.text();
+        const parsed = JSON.parse(text);
+        if (parsed.url && /youtube\.com|youtu\.be/.test(parsed.url)) {
+          const safeTitle = (parsed.title || 'YouTube Video').replace(/[/\\?%*:|"<>]/g, '-');
+          effectiveFile = { ...driveFile, name: safeTitle + '.youtube', mimeType: 'application/x-youtube' };
+          blob = new Blob([text], { type: 'application/x-youtube' });
+        }
+      } catch { /* not valid JSON or not a YouTube entry — skip */ }
+    }
+
+    const action = await upsertDriveBook(effectiveFile, blob);
     if (action === 'added') counts.added++;
     else counts.updated++;
   }

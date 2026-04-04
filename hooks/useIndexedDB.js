@@ -292,31 +292,35 @@ export const useIndexedDB = () => {
   const getBookByDriveId = useCallback((driveId) => {
     if (!db || !driveId) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
-      const tx = db.transaction([BOOKS_STORE, NOTES_STORE], 'readonly');
-      let pending = 2;
-      let bHit, nHit;
-      const finish = () => { pending--; if (pending === 0) resolve(bHit || nHit); };
+      const tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE], 'readonly');
+      let pending = 3;
+      let bHit, nHit, vHit;
+      const finish = () => { pending--; if (pending === 0) resolve(bHit || nHit || vHit); };
       const bReq = tx.objectStore(BOOKS_STORE).index('driveId').get(driveId);
       bReq.onsuccess = () => { bHit = bReq.result; finish(); };
       bReq.onerror   = (e) => reject(e.target.error);
       const nReq = tx.objectStore(NOTES_STORE).index('driveId').get(driveId);
       nReq.onsuccess = () => { nHit = nReq.result; finish(); };
       nReq.onerror   = (e) => reject(e.target.error);
+      const vReq = tx.objectStore(VIDEOS_STORE).index('driveId').get(driveId);
+      vReq.onsuccess = () => { vHit = vReq.result; finish(); };
+      vReq.onerror   = (e) => reject(e.target.error);
     });
   }, [db]);
 
   const getBookByName = useCallback((name) => {
     if (!db) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
-      const tx = db.transaction([BOOKS_STORE, NOTES_STORE], 'readonly');
-      let pending = 2;
-      let booksList, notesList;
+      const tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE], 'readonly');
+      let pending = 3;
+      let booksList, notesList, videosList;
       const finish = () => {
         pending--;
         if (pending > 0) return;
         resolve(
           (booksList && booksList.find((b) => b.name === name))
           || (notesList && notesList.find((b) => b.name === name))
+          || (videosList && videosList.find((b) => b.name === name))
         );
       };
       const bReq = tx.objectStore(BOOKS_STORE).getAll();
@@ -325,6 +329,9 @@ export const useIndexedDB = () => {
       const nReq = tx.objectStore(NOTES_STORE).getAll();
       nReq.onsuccess = (e) => { notesList = e.target.result; finish(); };
       nReq.onerror   = (e) => reject(e.target.error);
+      const vReq = tx.objectStore(VIDEOS_STORE).getAll();
+      vReq.onsuccess = (e) => { videosList = e.target.result; finish(); };
+      vReq.onerror   = (e) => reject(e.target.error);
     });
   }, [db]);
 
@@ -336,7 +343,9 @@ export const useIndexedDB = () => {
 
     const targetStore = existing
       ? storeForType(existing.type)
-      : (driveFile.mimeType === 'text/markdown' ? NOTES_STORE : BOOKS_STORE);
+      : driveFile.mimeType === 'text/markdown'        ? NOTES_STORE
+      : driveFile.mimeType === 'application/x-youtube' ? VIDEOS_STORE
+      : BOOKS_STORE;
 
     return new Promise((resolve, reject) => {
       const tx = db.transaction(targetStore, 'readwrite');
