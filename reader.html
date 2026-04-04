@@ -45,7 +45,9 @@
 
   <script>
     const DB_NAME = 'InfoDepo';
-    const STORE_NAME = 'books';
+    // Keep in sync with utils/infodepoDb.js — EPUB blobs live in `books`.
+    const DB_VERSION = 1;
+    const BOOKS_STORE = 'books';
 
     let zip = null;
     let spine = [];       // ordered hrefs from OPF spine
@@ -214,7 +216,7 @@
     async function loadAndRender(id) {
       setLoading('Opening database...');
       const db = await new Promise((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, 1);
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
         req.onsuccess = e => resolve(e.target.result);
         req.onerror = e => reject(e.target.error);
       }).catch(err => { showError(`DB error: ${err.message}`); return null; });
@@ -222,8 +224,8 @@
 
       setLoading('Loading book data...');
       const book = await new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, 'readonly');
-        const req = tx.objectStore(STORE_NAME).get(id);
+        const tx = db.transaction(BOOKS_STORE, 'readonly');
+        const req = tx.objectStore(BOOKS_STORE).get(id);
         req.onsuccess = e => resolve(e.target.result);
         req.onerror = e => reject(e.target.error);
       }).catch(err => { showError(`Could not load book: ${err.message}`); return null; });

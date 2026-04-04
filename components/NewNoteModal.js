@@ -4,19 +4,26 @@ import React, { useState, useRef, useEffect } from 'react';
 export const NewNoteModal = ({ onSave, onClose }) => {
   const [title, setTitle]     = useState('');
   const [content, setContent] = useState('');
+  const [error, setError]     = useState(null);
   const titleRef              = useRef(null);
 
   useEffect(() => {
     titleRef.current?.focus();
   }, []);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const trimmedTitle = title.trim();
     if (!trimmedTitle) return;
+    setError(null);
     const filename = trimmedTitle.endsWith('.md') ? trimmedTitle : trimmedTitle + '.md';
     const blob = new Blob([content], { type: 'text/markdown' });
-    onSave(filename, 'text/markdown', blob);
-    onClose();
+    try {
+      await Promise.resolve(onSave(filename, 'text/markdown', blob));
+      onClose();
+    } catch (err) {
+      console.error('Save note failed:', err);
+      setError(err?.message || 'Could not save note to library.');
+    }
   };
 
   const handleKeyDown = (e) => {
@@ -75,10 +82,11 @@ export const NewNoteModal = ({ onSave, onClose }) => {
             ref: titleRef,
             type: 'text',
             value: title,
-            onChange: (e) => setTitle(e.target.value),
+            onChange: (e) => { setTitle(e.target.value); setError(null); },
             placeholder: 'My Note',
             className: 'bg-gray-700 border border-gray-600 text-gray-100 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 placeholder-gray-500',
-          })
+          }),
+          error && React.createElement('p', { className: 'text-xs text-red-400 mt-1' }, error)
         ),
         React.createElement(
           'div',
@@ -96,7 +104,7 @@ export const NewNoteModal = ({ onSave, onClose }) => {
           React.createElement('textarea', {
             id: 'note-content',
             value: content,
-            onChange: (e) => setContent(e.target.value),
+            onChange: (e) => { setContent(e.target.value); setError(null); },
             placeholder: '# My Note\n\nStart writing here...',
             rows: 14,
             className: 'bg-gray-700 border border-gray-600 text-gray-100 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-indigo-500 placeholder-gray-500 resize-none leading-relaxed',

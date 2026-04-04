@@ -2,24 +2,19 @@ const SUPPORTED_MIME_TYPES = [
   'application/epub+zip',
   'application/pdf',
   'text/plain',
+  'text/markdown',
 ];
 
 /**
- * Syncs the Google Drive folder with local IndexedDB.
- *
- * Priority: most recently modified Drive files download first.
- * Files that exceed the quota become metadata-only stubs.
- *
- * Returns:
- *   { added, updated, metadataOnly, skipped }         — normal completion
- *   { overLimit: true, excess, candidates, books }    — current usage already exceeds maxStorageBytes
+ * Syncs the Google Drive folder to local IndexedDB.
+ * Downloads all supported files from Drive that are new or updated since last sync.
+ * Returns: { added, updated, skipped }
  */
 export async function syncDriveToLocal({
   accessToken,
   apiKey,
   folderId,
-  maxStorageBytes,
-  books,           // current local books array (from useIndexedDB state)
+  books,            // current items array (non-YouTube) for deduplication
   getBookByDriveId,
   getBookByName,
   upsertDriveBook,
@@ -27,7 +22,6 @@ export async function syncDriveToLocal({
 }) {
   const progress = onProgress || (() => {});
 
-  // Step 1: List all supported files from Drive
   progress('Listing Drive files...');
   const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
   const fields = encodeURIComponent('files(id,name,mimeType,size,modifiedTime)');
@@ -47,81 +41,45 @@ export async function syncDriveToLocal({
       name: f.name,
       mimeType: f.mimeType,
       size: parseInt(f.size) || 0,
-      driveModifiedTime: f.modifiedTime,
+      modifiedTime: f.modifiedTime,
     }));
 
-  // Step 2: Sort by modifiedTime descending (most recent first)
-  driveFiles.sort((a, b) => new Date(b.driveModifiedTime) - new Date(a.driveModifiedTime));
+  // Most recently modified first
+  driveFiles.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
 
-  // Step 3: Tally current storage used by Drive-linked fully-downloaded books
-  // Locally-imported books (no driveId) do NOT count against quota
-  const driveSyncedBooks = books.filter(b => b.driveId && !b.isMetadataOnly);
-  let bytesUsed = driveSyncedBooks.reduce((sum, b) => sum + (b.size || 0), 0);
-
-  // Step 4: Over-limit check — if already over quota, return candidates for eviction
-  if (bytesUsed > maxStorageBytes) {
-    // Candidates: Drive-linked fully-downloaded books, oldest/largest first
-    const candidates = [...driveSyncedBooks].sort((a, b) => {
-      const timeDiff = new Date(a.driveModifiedTime || a.added) - new Date(b.driveModifiedTime || b.added);
-      if (timeDiff !== 0) return timeDiff; // oldest first
-      return (b.size || 0) - (a.size || 0); // largest first as tiebreaker
-    });
-    return {
-      overLimit: true,
-      excess: bytesUsed - maxStorageBytes,
-      candidates,
-      books,
-    };
-  }
-
-  // Step 5: Process each Drive file
-  const counts = { added: 0, updated: 0, metadataOnly: 0, skipped: 0 };
+  const counts = { added: 0, updated: 0, skipped: 0 };
 
   for (const driveFile of driveFiles) {
     progress(`Processing ${driveFile.name}...`);
 
-    // Look up existing record
     let existing = await getBookByDriveId(driveFile.driveId);
     if (!existing) existing = await getBookByName(driveFile.name);
 
     const driveIsNewer = existing
-      ? !existing.driveModifiedTime || new Date(driveFile.driveModifiedTime) > new Date(existing.driveModifiedTime)
+      ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
       : true;
 
-    // Already downloaded and up to date → skip
-    if (existing && !existing.isMetadataOnly && !driveIsNewer) {
-      // Still backfill driveId if missing (locally-imported book matched by name)
-      if (!existing.driveId) {
-        await upsertDriveBook(driveFile, null);
-      }
+    // Already up to date
+    if (existing && !driveIsNewer) {
+      if (!existing.driveId) await upsertDriveBook(driveFile, existing.data);
       counts.skipped++;
       continue;
     }
 
-    // Decide whether to download based on quota
-    const fitsQuota = (bytesUsed + driveFile.size) <= maxStorageBytes;
-
-    if (fitsQuota && (driveIsNewer || !existing)) {
-      // Download full blob
-      const blobRes = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
-      if (!blobRes.ok) {
-        console.warn(`Failed to download ${driveFile.name}:`, blobRes.statusText);
-        counts.skipped++;
-        continue;
-      }
-      const blob = await blobRes.blob();
-      const action = await upsertDriveBook(driveFile, blob);
-      bytesUsed += driveFile.size;
-      if (action === 'added') counts.added++;
-      else counts.updated++;
-    } else {
-      // Store metadata stub only
-      await upsertDriveBook(driveFile, null);
-      counts.metadataOnly++;
+    // Download full blob
+    const blobRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!blobRes.ok) {
+      console.warn(`Failed to download ${driveFile.name}:`, blobRes.statusText);
+      counts.skipped++;
+      continue;
     }
+    const blob = await blobRes.blob();
+    const action = await upsertDriveBook(driveFile, blob);
+    if (action === 'added') counts.added++;
+    else counts.updated++;
   }
 
   progress('');
@@ -129,17 +87,82 @@ export async function syncDriveToLocal({
 }
 
 /**
- * Given a list of candidate books and a byte excess,
- * returns the minimum set of book IDs to evict (oldest/largest first)
- * that covers the excess.
+ * Uploads all local items that have no driveId to Google Drive (backup).
+ * After each successful upload, calls onSetDriveId to persist the Drive file ID.
+ *
+ * @param {object} options
+ * @param {string}   options.accessToken  - OAuth2 Bearer token with drive.file scope
+ * @param {string}   options.folderId     - Target Drive folder ID
+ * @param {Array}    options.items        - All library items (books, notes, videos)
+ * @param {Array}    options.images       - All image records from the images store
+ * @param {Function} options.onSetDriveId - (id, storeName, driveId) => Promise
+ * @param {Function} options.onProgress   - (message: string) => void
+ * @returns {Promise<{ backed: number, failed: number }>}
  */
-export function selectEvictionCandidates(candidates, excessBytes) {
-  const selected = [];
-  let freed = 0;
-  for (const book of candidates) {
-    if (freed >= excessBytes) break;
-    selected.push(book.id);
-    freed += book.size || 0;
+export async function backupAllToGDrive({
+  accessToken,
+  folderId,
+  items,
+  images,
+  onSetDriveId,
+  onProgress,
+}) {
+  const progress = onProgress || (() => {});
+  let backed = 0;
+  let failed = 0;
+
+  const uploadBlob = async (blob, name, mimeType) => {
+    const metadata = {
+      name,
+      mimeType: mimeType || 'application/octet-stream',
+      ...(folderId ? { parents: [folderId] } : {}),
+    };
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', blob);
+    const res = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',
+      { method: 'POST', headers: { Authorization: `Bearer ${accessToken}` }, body: form }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || res.statusText);
+    }
+    return res.json(); // { id, name }
+  };
+
+  // Back up main content items (books, notes, videos)
+  const pending = (items || []).filter(item => item.driveId === '' && item.data);
+  for (const item of pending) {
+    progress(`Backing up "${item.name}"...`);
+    try {
+      // YouTube links are stored locally as .youtube blobs; upload to Drive as .json
+      const isYoutube = item.type === 'application/x-youtube';
+      const driveName = isYoutube ? item.name.replace(/\.youtube$/i, '.json') : item.name;
+      const driveMime = isYoutube ? 'application/json' : item.type;
+      const driveFile = await uploadBlob(item.data, driveName, driveMime);
+      await onSetDriveId(item.id, item.idbStore, driveFile.id);
+      backed++;
+    } catch (err) {
+      console.warn(`Backup failed for "${item.name}":`, err.message);
+      failed++;
+    }
   }
-  return selected;
+
+  // Back up image attachments
+  const pendingImages = (images || []).filter(img => img.driveId === '' && img.data);
+  for (const img of pendingImages) {
+    progress(`Backing up image "${img.name}"...`);
+    try {
+      const driveFile = await uploadBlob(img.data, img.name, img.type);
+      await onSetDriveId(img.id, 'images', driveFile.id);
+      backed++;
+    } catch (err) {
+      console.warn(`Backup failed for image "${img.name}":`, err.message);
+      failed++;
+    }
+  }
+
+  progress('');
+  return { backed, failed };
 }

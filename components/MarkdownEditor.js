@@ -1,41 +1,61 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 
+// \x00 is a transient cursor marker inserted at cursorPos before rendering; never saved to disk.
+const CURSOR_SPAN = '<span data-cursor="1" style="display:inline-block;width:2px;height:1.1em;background:#a5b4fc;border-radius:1px;animation:md-blink 1.2s step-end infinite;vertical-align:text-bottom"></span>';
+
 // Inline markdown: bold, italic, code, links, images
 // Image size syntax: ![alt|300](file) → width:300px  |  ![alt|300x200](file) → 300×200px
+// \x00 cursor marker is rendered last so it survives all replacements.
 const inlineMarkdown = (text, assetUrls) =>
   text
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
-      const url = (assetUrls && assetUrls[src]) || src;
-      const sizeMatch = alt.match(/\|(\d+)(?:x(\d+))?$/);
-      const displayAlt = sizeMatch ? alt.slice(0, alt.lastIndexOf('|')) : alt;
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
+      const cleanAlt = alt.replace(/\x00/g, '');
+      const cleanSrc = src.replace(/\x00/g, '');
+      const hasCursor = match.includes('\x00');
+      const url = (assetUrls && assetUrls[cleanSrc]) || cleanSrc;
+      const sizeMatch = cleanAlt.match(/\|(\d+)(?:x(\d+))?$/);
+      const displayAlt = sizeMatch ? cleanAlt.slice(0, cleanAlt.lastIndexOf('|')) : cleanAlt;
       const sizeStyle = sizeMatch
         ? `width:${sizeMatch[1]}px;${sizeMatch[2] ? `height:${sizeMatch[2]}px;object-fit:cover;` : ''}max-width:100%;`
         : 'max-width:100%;';
-      return `<img alt="${escapeHtml(displayAlt)}" src="${url}" style="${sizeStyle}border-radius:6px;margin:4px 0;display:block" />`;
+      const imgHtml = `<img alt="${escapeHtml(displayAlt)}" src="${url}" style="${sizeStyle}border-radius:6px;margin:4px 0;display:block" />`;
+      return hasCursor ? imgHtml + CURSOR_SPAN : imgHtml;
     })
     .replace(/`([^`]+)`/g, '<code style="background:#374151;padding:2px 5px;border-radius:3px;font-size:.9em">$1</code>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g,     '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color:#818cf8;text-decoration:underline">$1</a>');
+    .replace(
+      /\[([^\]]+)\]\((https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?(?:[^)]*&)?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})[^)]*)\)/g,
+      (_, text, url, videoId) =>
+        `<a href="${url}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;background:#1f2937;border:1px solid #374151;border-radius:8px;padding:4px 8px 4px 4px;margin:2px 0">` +
+        `<img src="https://img.youtube.com/vi/${videoId}/mqdefault.jpg" alt="" style="width:80px;height:45px;object-fit:cover;border-radius:4px;flex-shrink:0" />` +
+        `<span style="color:#ef4444;font-size:.8em;font-weight:600">▶ ${escapeHtml(text)}</span>` +
+        `</a>`
+    )
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color:#818cf8;text-decoration:underline">$1</a>')
+    .replace(/\x00/g, CURSOR_SPAN);
 
-// Line-based Markdown → HTML renderer — properly wraps lists in <ol>/<ul>
-// Margins are intentionally minimal so each source line maps to one visual line,
-// keeping the transparent textarea caret aligned with the rendered output.
+// Line-based Markdown → HTML renderer.
+// Accepts \x00 as a transient cursor marker — renders it as a blinking cursor span.
+// Block image lines get the cursor appended after the <img>; all other lines pass \x00
+// through to inlineMarkdown which renders it at the correct inline position.
 const renderMarkdown = (text, assetUrls) => {
   const lines  = text.split('\n');
   const output = [];
   let i = 0;
 
   while (i < lines.length) {
-    const line = lines[i];
+    const line      = lines[i];
+    const cleanLine = line.replace(/\x00/g, ''); // strip cursor for pattern matching
+    const hasCursor = line !== cleanLine;
 
     // Fenced code block
-    if (line.startsWith('```')) {
+    if (cleanLine.startsWith('```')) {
       const codeLines = [];
       i++;
-      while (i < lines.length && !lines[i].startsWith('```')) {
-        codeLines.push(lines[i]);
+      while (i < lines.length && !lines[i].replace(/\x00/g, '').startsWith('```')) {
+        codeLines.push(lines[i].replace(/\x00/g, '')); // cursor not shown inside code
         i++;
       }
       i++; // skip closing ```
@@ -43,49 +63,58 @@ const renderMarkdown = (text, assetUrls) => {
       continue;
     }
 
-    // Unordered list item — render marker as visible gray text so caret aligns with raw source
-    if (/^([-*]) /.test(line)) {
-      const marker = line[0];
-      const content = line.slice(2);
+    // Block image line — cursor goes after the <img> so it appears below it
+    if (/^!\[[^\]]*\]\([^)]+\)$/.test(cleanLine)) {
+      const rendered = inlineMarkdown(cleanLine, assetUrls);
+      output.push(`<div style="margin:0">${rendered}${hasCursor ? CURSOR_SPAN : ''}</div>`);
+      i++;
+      continue;
+    }
+
+    // Unordered list item
+    if (/^([-*]) /.test(cleanLine)) {
+      const marker  = cleanLine[0];
+      const content = line.slice(2); // preserve \x00 in content
       output.push(`<div style="margin:0"><span style="color:#6b7280">${marker} </span>${inlineMarkdown(content, assetUrls)}</div>`);
       i++;
       continue;
     }
 
-    // Ordered list item — same approach, show number prefix in gray
-    if (/^\d+\. /.test(line)) {
-      const numMatch = line.match(/^(\d+\.) /);
-      const prefix = numMatch[1];
-      const content = line.slice(prefix.length + 1);
+    // Ordered list item
+    if (/^\d+\. /.test(cleanLine)) {
+      const numMatch = cleanLine.match(/^(\d+\.) /);
+      const prefix   = numMatch[1];
+      const content  = line.slice(prefix.length + 1); // preserve \x00
       output.push(`<div style="margin:0"><span style="color:#6b7280">${prefix} </span>${inlineMarkdown(content, assetUrls)}</div>`);
       i++;
       continue;
     }
 
-    // Headings — same line-height as body text to avoid vertical drift; bold + underline for visual distinction
-    const hMatch = line.match(/^(#{1,3}) (.+)$/);
+    // Headings
+    const hMatch = cleanLine.match(/^(#{1,3}) (.+)$/);
     if (hMatch) {
-      const lvl    = hMatch[1].length;
-      const styles = [
+      const lvl     = hMatch[1].length;
+      const styles  = [
         'font-weight:800;text-decoration:underline;text-underline-offset:3px;margin:0',
         'font-weight:700;border-bottom:1px solid #4b5563;margin:0',
         'font-weight:700;color:#c7d2fe;margin:0',
       ];
-      output.push(`<div style="${styles[lvl - 1]}">${inlineMarkdown(hMatch[2], assetUrls)}</div>`);
+      const content = line.slice(hMatch[1].length + 1); // preserve \x00
+      output.push(`<div style="${styles[lvl - 1]}">${inlineMarkdown(content, assetUrls)}</div>`);
       i++;
       continue;
     }
 
     // Horizontal rule
-    if (line.trim() === '---') {
+    if (cleanLine.trim() === '---') {
       output.push('<hr style="border-color:#374151;margin:0" />');
       i++;
       continue;
     }
 
-    // Blank line — height matches one textarea line so caret stays in sync
-    if (line.trim() === '') {
-      output.push('<div style="margin:0">&nbsp;</div>');
+    // Blank line (cursor shown as standalone caret on the empty line)
+    if (cleanLine.trim() === '') {
+      output.push(`<div style="margin:0">${hasCursor ? CURSOR_SPAN : ''}&nbsp;</div>`);
       i++;
       continue;
     }
@@ -101,6 +130,67 @@ const renderMarkdown = (text, assetUrls) => {
 const escapeHtml = (str) =>
   str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+// Maps a viewport click (x, y) inside previewEl to a character offset in raw markdown text.
+function clickToMarkdownPos(previewEl, x, y, text) {
+  let domNode = null, domOffset = 0;
+  if (document.caretPositionFromPoint) {
+    const p = document.caretPositionFromPoint(x, y);
+    if (p) { domNode = p.offsetNode; domOffset = p.offset; }
+  } else if (document.caretRangeFromPoint) {
+    const r = document.caretRangeFromPoint(x, y);
+    if (r) { domNode = r.startContainer; domOffset = r.startOffset; }
+  }
+  if (!domNode) return text.length;
+
+  // Walk up to find the direct child of previewEl (= one rendered line)
+  let lineEl = domNode.nodeType === Node.ELEMENT_NODE ? domNode : domNode.parentElement;
+  while (lineEl && lineEl.parentElement !== previewEl) lineEl = lineEl.parentElement;
+  if (!lineEl) return text.length;
+
+  const lineIdx = Array.from(previewEl.children).indexOf(lineEl);
+  if (lineIdx === -1) return text.length;
+
+  // Count text-node chars inside lineEl up to the clicked node
+  let charsBeforeClick = 0;
+  const walk = (node) => {
+    if (node === domNode) { charsBeforeClick += domOffset; return true; }
+    if (node.nodeType === Node.TEXT_NODE) { charsBeforeClick += node.textContent.length; return false; }
+    for (const child of node.childNodes) { if (walk(child)) return true; }
+    return false;
+  };
+  walk(lineEl);
+
+  const mdLines   = text.split('\n');
+  const mdLineStart = mdLines.slice(0, lineIdx).reduce((s, l) => s + l.length + 1, 0);
+  const mdLine    = mdLines[lineIdx] ?? '';
+  const renderedLen = lineEl.textContent.length;
+  const ratio     = renderedLen > 0 ? charsBeforeClick / renderedLen : 0;
+  return mdLineStart + Math.min(Math.round(ratio * mdLine.length), mdLine.length);
+}
+
+// Atomic strings — \x00 cursor marker must not be inserted inside these; snap to nearest boundary.
+// Each entry is a RegExp with the 'g' flag.
+const ATOMIC_PATTERNS = [
+  /\r\n/g,                        // CRLF line ending (2-char sequence, cursor can land between \r and \n)
+  /!\[[^\]]*\]\([^)]*\)/g,        // image markdown: ![alt|size](filename)
+];
+
+// Returns cursorPos snapped to the head or tail of any atomic pattern that contains it.
+function snapCursorPos(text, cursorPos) {
+  for (const re of ATOMIC_PATTERNS) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const start = m.index;
+      const end   = m.index + m[0].length;
+      if (cursorPos > start && cursorPos < end) {
+        return (cursorPos - start <= end - cursorPos) ? start : end;
+      }
+    }
+  }
+  return cursorPos;
+}
+
 // Slash command definitions
 // imageSize: null = full width, number = pixel width for the |size suffix
 const SLASH_COMMANDS = [
@@ -113,48 +203,12 @@ const SLASH_COMMANDS = [
   { id: 'image-sm', label: 'Image — Small',  hint: '300 px',       insert: null,  imageSize: 300   },
   { id: 'image-md', label: 'Image — Medium', hint: '500 px',       insert: null,  imageSize: 500   },
   { id: 'image-lg', label: 'Image — Large',  hint: '800 px',       insert: null,  imageSize: 800   },
+  { id: 'youtube',  label: 'YouTube embed',  hint: 'paste URL',    insert: '[Video Title](https://youtube.com/watch?v=)', imageSize: undefined },
 ];
 
-// Returns viewport-fixed coordinates just below the caret — safe against overflow:hidden ancestors
-function getCaretCoords(textarea, pos) {
-  const tRect = textarea.getBoundingClientRect();
-  const cs    = window.getComputedStyle(textarea);
+// Saves go through onUpdateItem → useIndexedDB.updateItem (routes by `video.type`: `notes` vs `books`).
 
-  // Place mirror exactly over the textarea in the viewport
-  const mirror = document.createElement('div');
-  [
-    'fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing',
-    'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
-    'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
-    'boxSizing', 'whiteSpace', 'wordWrap', 'overflowWrap', 'tabSize',
-  ].forEach(p => { mirror.style[p] = cs[p]; });
-  mirror.style.position      = 'fixed';
-  mirror.style.top           = tRect.top + 'px';
-  mirror.style.left          = tRect.left + 'px';
-  mirror.style.width         = tRect.width + 'px';
-  mirror.style.height        = tRect.height + 'px';
-  mirror.style.overflow      = 'hidden';
-  mirror.style.visibility    = 'hidden';
-  mirror.style.pointerEvents = 'none';
-  document.body.appendChild(mirror);
-  mirror.scrollTop = textarea.scrollTop;
-
-  mirror.appendChild(document.createTextNode(textarea.value.substring(0, pos)));
-  const marker = document.createElement('span');
-  marker.textContent = '\u200b';
-  mirror.appendChild(marker);
-
-  const mRect = marker.getBoundingClientRect();
-  document.body.removeChild(mirror);
-
-  const lineHeight = parseFloat(cs.lineHeight) || 20;
-  return {
-    top:  mRect.top  + lineHeight,
-    left: Math.max(8, Math.min(mRect.left, window.innerWidth - 240)),
-  };
-}
-
-export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) => {
+export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages }) => {
   const [text,      setText]      = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isDirty,   setIsDirty]   = useState(false);
@@ -164,10 +218,15 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
   // slashMenu: null | { slashPos, filter, activeIdx }
   const [slashMenu, setSlashMenu] = useState(null);
   const [showRaw,   setShowRaw]   = useState(false);
+  const [cursorPos, setCursorPos] = useState(0);
+  const [isFocused, setIsFocused] = useState(false);
   const imageInputRef        = useRef(null);
   const textareaRef          = useRef(null);
+  const previewRef           = useRef(null);
   const pendingSlashPos      = useRef(null); // set in keydown, consumed in onChange
   const pendingImageSize     = useRef(undefined); // null = full width, number = px width
+  const historyRef           = useRef([]);   // undo stack: [{ text, cursorPos }, ...]
+  const historyIdxRef        = useRef(-1);   // current position in stack
 
   // Load note text + assets
   useEffect(() => {
@@ -175,31 +234,50 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
     setIsDirty(false);
     setSlashMenu(null);
 
+    historyRef.current    = [];
+    historyIdxRef.current = -1;
+
     const reader = new FileReader();
     reader.onload = (e) => {
-      setText(e.target?.result ?? '');
+      const loaded = e.target?.result ?? '';
+      setText(loaded);
+      historyRef.current    = [{ text: loaded, cursorPos: 0 }];
+      historyIdxRef.current = 0;
       setIsLoading(false);
     };
     reader.onerror = () => {
       setText('');
       setIsLoading(false);
     };
-    reader.readAsText(book.data);
+    reader.readAsText(video.data);
 
-    if (onGetAssets) {
-      onGetAssets(book.id).then(assets => {
+    if (onGetImages) {
+      onGetImages(video.id).then(assets => {
         const urls = {};
-        assets.forEach(a => { urls[a.filename] = URL.createObjectURL(a.data); });
+        assets.forEach(a => { urls[a.name] = URL.createObjectURL(a.data); });
         setAssetUrls(urls);
       }).catch(() => {});
     }
-  }, [book.id]);
+  }, [video.id]);
 
   // Revoke object URLs when the map is replaced or component unmounts
   useEffect(() => {
     const urls = assetUrls;
     return () => { Object.values(urls).forEach(u => URL.revokeObjectURL(u)); };
   }, [assetUrls]);
+
+  // Inject blink keyframe for custom image caret (once)
+  useEffect(() => {
+    if (document.getElementById('md-caret-style')) return;
+    const style = document.createElement('style');
+    style.id = 'md-caret-style';
+    style.textContent = '@keyframes md-blink{0%,100%{opacity:1}50%{opacity:0}}';
+    document.head.appendChild(style);
+  }, []);
+
+  const updateCursor = () => {
+    if (textareaRef.current) setCursorPos(textareaRef.current.selectionStart);
+  };
 
   const filteredCommands = (filter) => {
     if (!filter) return SLASH_COMMANDS;
@@ -223,10 +301,7 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
       setText(newText);
       setIsDirty(true);
       pendingImageSize.current = cmd.imageSize;
-      requestAnimationFrame(() => {
-        ta.selectionStart = ta.selectionEnd = start;
-        ta.focus();
-      });
+      requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start; ta.focus(); pushHistory(newText, start); });
       imageInputRef.current?.click();
       return;
     }
@@ -236,10 +311,15 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
     const newCursor = start + cmd.insert.length;
     setText(newText);
     setIsDirty(true);
-    requestAnimationFrame(() => {
-      ta.selectionStart = ta.selectionEnd = newCursor;
-      ta.focus();
-    });
+    requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newCursor; ta.focus(); pushHistory(newText, newCursor); });
+  };
+
+  const pushHistory = (text, cursorPos) => {
+    // Discard any forward history beyond current index, then append
+    historyRef.current = historyRef.current.slice(0, historyIdxRef.current + 1);
+    historyRef.current.push({ text, cursorPos });
+    if (historyRef.current.length > 200) historyRef.current.shift(); // cap size
+    else historyIdxRef.current++;
   };
 
   const handleChange = (e) => {
@@ -247,6 +327,7 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
     setText(val);
     setIsDirty(true);
     setSaveMsg(null);
+    requestAnimationFrame(() => { updateCursor(); pushHistory(val, textareaRef.current?.selectionStart ?? 0); });
 
     // Consume a pending slash trigger set in onKeyDown
     if (pendingSlashPos.current !== null) {
@@ -271,9 +352,10 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
   };
 
   const handleKeyDown = (e) => {
+    const ta = textareaRef.current;
+
     // Detect '/' at start of line — read selectionStart here before React re-renders
     if (e.key === '/' && slashMenu === null) {
-      const ta = textareaRef.current;
       if (ta) {
         const pos = ta.selectionStart;
         const val = ta.value;
@@ -281,6 +363,51 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
         const beforeCursor = val.slice(lineStart, pos);
         if (beforeCursor.trim() === '') {
           pendingSlashPos.current = pos; // '/' will land at this index
+        }
+      }
+    }
+
+    // Delete entire image line when Backspace is pressed on or just after an image
+    if (e.key === 'Backspace' && ta && ta.selectionStart === ta.selectionEnd) {
+      const pos  = ta.selectionStart;
+      const val  = ta.value;
+      const lineStart = val.lastIndexOf('\n', pos - 1) + 1;
+      const lineEnd   = val.indexOf('\n', pos);
+      const currentLine = val.slice(lineStart, lineEnd === -1 ? val.length : lineEnd);
+
+      // Case 1: cursor is anywhere on a line that is entirely an image markdown
+      if (/^!\[[^\]]*\]\([^)]+\)$/.test(currentLine)) {
+        e.preventDefault();
+        let delStart, delEnd;
+        if (lineStart > 0) {
+          delStart = lineStart - 1; // include preceding \n
+          delEnd   = lineEnd === -1 ? val.length : lineEnd;
+        } else {
+          delStart = 0;
+          delEnd   = lineEnd === -1 ? val.length : lineEnd + 1; // include trailing \n
+        }
+        const newText1 = val.slice(0, delStart) + val.slice(delEnd);
+        setText(newText1);
+        setIsDirty(true);
+        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = delStart; ta.focus(); pushHistory(newText1, delStart); });
+        return;
+      }
+
+      // Case 2: cursor is at the very start of a line and the previous line is an image
+      if (pos === lineStart && lineStart > 0) {
+        const prevLineEnd   = lineStart - 1;
+        const prevLineStart = val.lastIndexOf('\n', prevLineEnd - 1) + 1;
+        const prevLine      = val.slice(prevLineStart, prevLineEnd);
+        if (/^!\[[^\]]*\]\([^)]+\)$/.test(prevLine)) {
+          e.preventDefault();
+          const delStart     = prevLineStart > 0 ? prevLineStart - 1 : 0;
+          const charsDeleted = prevLineEnd - delStart;
+          const newText2     = val.slice(0, delStart) + val.slice(prevLineEnd);
+          const newPos2      = pos - charsDeleted;
+          setText(newText2);
+          setIsDirty(true);
+          requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos2; ta.focus(); pushHistory(newText2, newPos2); });
+          return;
         }
       }
     }
@@ -309,9 +436,30 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
       }
     }
 
+    // Arrow up → end of previous line; arrow down → end of next line
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && slashMenu === null && ta) {
+      e.preventDefault();
+      const pos = ta.selectionStart;
+      const val = ta.value;
+      let newPos;
+      if (e.key === 'ArrowUp') {
+        const lineStart = val.lastIndexOf('\n', pos - 1) + 1;
+        newPos = lineStart > 0 ? lineStart - 1 : 0; // end of previous line (before its \n)
+      } else {
+        const lineEnd = val.indexOf('\n', pos);
+        if (lineEnd === -1) { newPos = val.length; }
+        else {
+          const nextLineEnd = val.indexOf('\n', lineEnd + 1);
+          newPos = nextLineEnd === -1 ? val.length : nextLineEnd; // end of next line
+        }
+      }
+      ta.selectionStart = ta.selectionEnd = newPos;
+      updateCursor();
+      return;
+    }
+
     // List continuation on Enter
     if (e.key === 'Enter' && slashMenu === null) {
-      const ta = textareaRef.current;
       if (ta) {
         const pos = ta.selectionStart;
         const val = ta.value;
@@ -329,24 +477,42 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
             // Empty list item → exit list: remove marker, just insert a newline
             e.preventDefault();
             const newText = val.slice(0, lineStart) + '\n' + val.slice(lineEnd === -1 ? val.length : lineEnd);
+            const newPos  = lineStart + 1;
             setText(newText);
             setIsDirty(true);
-            requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = lineStart + 1; });
+            requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos; pushHistory(newText, newPos); });
           } else {
             // Continue list with next marker
             e.preventDefault();
-            const marker = ulMatch
-              ? `${ulMatch[1]} `
-              : `${parseInt(olMatch[1]) + 1}. `;
-            const insert = '\n' + marker;
+            const marker  = ulMatch ? `${ulMatch[1]} ` : `${parseInt(olMatch[1]) + 1}. `;
+            const insert  = '\n' + marker;
             const newText = val.slice(0, pos) + insert + val.slice(pos);
+            const newPos  = pos + insert.length;
             setText(newText);
             setIsDirty(true);
-            requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = pos + insert.length; });
+            requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos; pushHistory(newText, newPos); });
           }
           return;
         }
       }
+    }
+
+    if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+      e.preventDefault();
+      const isRedo = e.shiftKey;
+      const idx    = historyIdxRef.current;
+      const stack  = historyRef.current;
+      const target = isRedo ? idx + 1 : idx - 1;
+      if (target < 0 || target >= stack.length) return;
+      historyIdxRef.current = target;
+      const { text: t, cursorPos: pos } = stack[target];
+      setText(t);
+      setCursorPos(pos);
+      setIsDirty(true);
+      requestAnimationFrame(() => {
+        if (ta) { ta.selectionStart = ta.selectionEnd = pos; }
+      });
+      return;
     }
 
     if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -360,7 +526,7 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
     setSaveMsg(null);
     try {
       const blob = new Blob([text], { type: 'text/markdown' });
-      await onUpdateBook(book.id, blob);
+      await onUpdateItem(video.id, blob, video.type);
       setIsDirty(false);
       setSaveMsg('saved');
       setTimeout(() => setSaveMsg(null), 2000);
@@ -374,18 +540,18 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
 
   const handleExport = async () => {
     const zip = new JSZip();
-    const assets = await (onGetAssets ? onGetAssets(book.id) : Promise.resolve([]));
+    const assets = await (onGetImages ? onGetImages(video.id) : Promise.resolve([]));
 
     let exportText = text;
     assets.forEach(a => {
-      exportText = exportText.replaceAll(`](${a.filename})`, `](images/${a.filename})`);
+      exportText = exportText.replaceAll(`](${a.name})`, `](images/${a.name})`);
     });
 
-    const noteName = book.name.endsWith('.md') ? book.name : book.name + '.md';
+    const noteName = video.name.endsWith('.md') ? video.name : video.name + '.md';
     zip.file(noteName, exportText);
     if (assets.length > 0) {
       const imgFolder = zip.folder('images');
-      assets.forEach(a => imgFolder.file(a.filename, a.data));
+      assets.forEach(a => imgFolder.file(a.name, a.data));
     }
 
     const blob = await zip.generateAsync({ type: 'blob' });
@@ -398,16 +564,18 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
   };
 
   const insertImage = async (file) => {
-    if (!file || !onAddAsset) return;
+    if (!file || !onAddImage) return;
     try {
-      await onAddAsset(book.id, file.name, file, file.type);
+      await onAddImage(video.id, file.name, file, file.type);
       const url = URL.createObjectURL(file);
       setAssetUrls(prev => ({ ...prev, [file.name]: url }));
       const size = pendingImageSize.current;
       pendingImageSize.current = undefined;
       const altText = size != null ? `${file.name}|${size}` : file.name;
-      setText(prev => prev + `\n![${altText}](${file.name})`);
+      const newText = text + `\n![${altText}](${file.name})`;
+      setText(newText);
       setIsDirty(true);
+      pushHistory(newText, newText.length);
     } catch (err) {
       console.error('Failed to insert image:', err);
     }
@@ -421,11 +589,21 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
     );
   }
 
-  // Slash command dropdown
+  // Slash command dropdown — position from the rendered cursor span in the preview
   const visible = slashMenu ? filteredCommands(slashMenu.filter) : [];
-  const coords  = slashMenu && textareaRef.current
-    ? getCaretCoords(textareaRef.current, slashMenu.slashPos)
-    : { top: 0, left: 0 };
+  const coords  = (() => {
+    if (!slashMenu || !previewRef.current) return { top: 0, left: 0 };
+    const span = previewRef.current.querySelector('[data-cursor]');
+    if (!span) return { top: 0, left: 0 };
+    const r = span.getBoundingClientRect();
+    return { top: r.bottom + 4, left: Math.max(8, Math.min(r.left, window.innerWidth - 240)) };
+  })();
+
+  // Insert cursor marker into text before rendering (only when focused)
+  const snappedCursorPos = snapCursorPos(text, cursorPos);
+  const textWithCursor = isFocused
+    ? text.slice(0, snappedCursorPos) + '\x00' + text.slice(snappedCursorPos)
+    : text;
 
   return React.createElement(
     'div',
@@ -438,8 +616,8 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
 
       React.createElement(
         'span',
-        { className: 'text-sm text-gray-400 font-mono truncate max-w-xs', title: book.name },
-        book.name
+        { className: 'text-sm text-gray-400 font-mono truncate max-w-xs', title: video.name },
+        video.name
       ),
 
       React.createElement(
@@ -517,46 +695,53 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
       'div',
       { className: 'flex flex-grow overflow-hidden' },
 
-    // Left: preview layer + transparent textarea overlay
+    // Left: single rendered preview div (cursor marker embedded in HTML)
     React.createElement(
       'div',
       {
-        className: 'relative',
-        style: { flex: 1, minWidth: 0, overflow: 'visible' },
-        onClick: () => textareaRef.current?.focus(),
-      },
-
-      // Preview layer — always rendered
-      React.createElement('div', {
-        className: 'absolute inset-0 bg-gray-900 text-gray-100 text-sm leading-relaxed p-6 overflow-auto pointer-events-none select-none overflow-clip',
-        dangerouslySetInnerHTML: {
-          __html: text
-            ? renderMarkdown(text, assetUrls)
-            : '<p style="color:#4b5563;font-style:italic">Start typing, or press <kbd style="background:#374151;padding:1px 5px;border-radius:4px;font-style:normal;font-size:.85em">/</kbd> at the start of a line to insert…</p>'
+        ref: previewRef,
+        className: 'bg-gray-900 text-gray-100 text-sm leading-relaxed p-6 overflow-auto',
+        style: { flex: 1, minWidth: 0, cursor: 'text' },
+        onClick: (e) => {
+          const pos = clickToMarkdownPos(previewRef.current, e.clientX, e.clientY, text);
+          // Set textarea selectionStart/End then focus it
+          const ta = textareaRef.current;
+          if (ta) {
+            ta.focus();
+            requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = pos; updateCursor(); });
+          }
         },
-      }),
-
-      // Transparent textarea on top
-      React.createElement('textarea', {
-        ref: textareaRef,
-        value: text,
-        onChange: handleChange,
-        onKeyDown: handleKeyDown,
-        onBlur: () => setTimeout(() => setSlashMenu(null), 150),
         onDragOver: (e) => e.preventDefault(),
         onDrop: (e) => {
           e.preventDefault();
           const f = e.dataTransfer.files[0];
-          if (f?.type.startsWith('image/')) insertImage(f);
+          if (f?.type.startsWith('image/')) { textareaRef.current?.focus(); insertImage(f); }
         },
-        onPaste: (e) => {
-          const item = Array.from(e.clipboardData.items).find(i => i.type.startsWith('image/'));
-          if (item) { e.preventDefault(); insertImage(item.getAsFile()); }
+        dangerouslySetInnerHTML: {
+          __html: textWithCursor
+            ? renderMarkdown(textWithCursor, assetUrls)
+            : '<p style="color:#4b5563;font-style:italic">Start typing, or press <kbd style="background:#374151;padding:1px 5px;border-radius:4px;font-style:normal;font-size:.85em">/</kbd> at the start of a line to insert…</p>'
         },
-        spellCheck: false,
-        className: 'absolute inset-0 w-full h-full bg-transparent resize-none focus:outline-none p-6 text-sm leading-relaxed overflow-auto',
-        style: { color: 'transparent', caretColor: '#a5b4fc' },
-      }),
+      }
+    ),
+
+    // Hidden textarea — sole input capture surface; never visible
+    React.createElement('textarea', {
+      ref: textareaRef,
+      value: text,
+      onChange: handleChange,
+      onKeyDown: handleKeyDown,
+      onSelect: updateCursor,
+      onFocus: () => { setIsFocused(true); updateCursor(); },
+      onBlur: () => { setIsFocused(false); setTimeout(() => setSlashMenu(null), 150); },
+      onPaste: (e) => {
+        const item = Array.from(e.clipboardData.items).find(i => i.type.startsWith('image/'));
+        if (item) { e.preventDefault(); insertImage(item.getAsFile()); }
+      },
+      spellCheck: false,
+      'aria-hidden': true,
+      style: { position: 'fixed', top: '-9999px', left: '-9999px', width: '1px', height: '1px', opacity: 0, overflow: 'hidden' },
+    }),
 
       // Slash command dropdown
       slashMenu && visible.length > 0 && React.createElement(
@@ -592,8 +777,7 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
             )
           )
         )
-      )
-    ),  // end left pane
+      ),
 
     // Right: raw markdown panel (debug)
     showRaw && React.createElement(
@@ -610,9 +794,14 @@ export const MarkdownEditor = ({ book, onUpdateBook, onAddAsset, onGetAssets }) 
         React.createElement('span', { className: 'text-xs font-mono text-gray-400' }, 'raw markdown'),
         React.createElement('span', { className: 'ml-auto text-xs text-gray-600' }, `${text.length} chars`)
       ),
-      React.createElement('pre', {
-        className: 'flex-grow overflow-auto p-4 text-xs font-mono text-gray-300 leading-relaxed whitespace-pre-wrap break-words',
-      }, text || React.createElement('span', { className: 'text-gray-600 italic' }, 'empty'))
+      React.createElement('textarea', {
+        value: text,
+        onChange: (e) => { setText(e.target.value); setIsDirty(true); setSaveMsg(null); },
+        spellCheck: false,
+        placeholder: 'empty',
+        className: 'flex-grow overflow-auto p-4 text-xs font-mono text-gray-300 leading-relaxed resize-none bg-transparent focus:outline-none',
+        style: { caretColor: '#a5b4fc' },
+      })
     )
 
   )  // end outer flex

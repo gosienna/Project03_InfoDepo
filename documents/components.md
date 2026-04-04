@@ -36,9 +36,9 @@ On mount, two things happen in parallel:
 ```
 App mounts
 ├── useIndexedDB() hook initialises
-│     └── indexedDB.open('InfoDepo', 1)
-│           ├── onupgradeneeded → creates 'books' object store (first run only)
-│           └── onsuccess → db instance ready → loadBooks() → setIsInitialized(true)
+│     └── indexedDB.open('InfoDepo', 4)
+│           ├── onupgradeneeded → creates/migrates 'videos' object store
+│           └── onsuccess → db instance ready → loadVideos() → setIsInitialized(true)
 └── React renders loading spinner (isInitialized = false)
 ```
 
@@ -65,7 +65,7 @@ isInitialized = true   →  Library view rendered
       <main>
         <Library />                      ← view = 'library'
         OR
-        <Reader />                       ← view = 'reader' (PDF / TXT)
+        <Reader />                       ← view = 'reader' (PDF / TXT / MD / YouTube)
       </main>
     </App>
   </div>
@@ -73,7 +73,7 @@ isInitialized = true   →  Library view rendered
 
 ### EPUB Reader (`reader.html`)
 
-Standalone page, no React. Opens in a new browser tab.
+Standalone page, no React. Opens in a new browser tab. Reads from the `videos` IndexedDB store.
 
 ```
 <body>
@@ -88,16 +88,17 @@ Standalone page, no React. Opens in a new browser tab.
 ## Component Reference
 
 ### `App.js`
-**Role:** Root component. Owns view state and book selection routing.
+**Role:** Root component. Owns view state and item selection routing.
 
 **State:**
 | State | Type | Purpose |
 |-------|------|---------|
 | `view` | `'library' \| 'reader'` | Which view is shown |
-| `currentBook` | `object \| null` | Book being read (PDF/TXT only) |
+| `currentVideo` | `object \| null` | Item being viewed (non-EPUB) |
+| `downloadPromptVideo` | `object \| null` | Cloud-only item awaiting download confirmation |
 
 **Key logic:**
-- `handleSelectBook(book)` — if EPUB, calls `window.open('/reader.html?id=X', '_blank')` and returns. PDF/TXT sets `currentBook` and switches to reader view.
+- `handleSelectVideo(video)` — if EPUB, calls `window.open('/reader.html?id=X', '_blank')` and returns. All other types set `currentVideo` and switch to reader view. Cloud-only items show a download prompt instead.
 - Delegates all IndexedDB operations to `useIndexedDB` hook.
 
 ---
@@ -110,38 +111,66 @@ Standalone page, no React. Opens in a new browser tab.
 |------|------|---------|
 | `onBack` | `function \| undefined` | If provided, shows back arrow (reader view only) |
 
-**Renders:** App logo + title. Back button appears only when reading PDF/TXT.
+**Renders:** App logo + title. Back button appears only when in reader view.
 
 ---
 
 ### `Library.js`
-**Role:** Book grid, file import, Drive browser trigger (dev + prod).
+**Role:** Item grid, file import, YouTube modal, Drive browser trigger (dev + prod).
 
 **Props:**
 | Prop | Type | Purpose |
 |------|------|---------|
-| `books` | `array` | List of books from IndexedDB |
-| `onSelectBook` | `function` | Called when a book card is clicked |
-| `onAddBook` | `function` | Saves a new book to IndexedDB |
-| `onDeleteBook` | `function` | Deletes a book by ID |
-| `onClearLibrary` | `function` | Clears all books |
+| `videos` | `array` | List of items from IndexedDB |
+| `onSelectVideo` | `function` | Called when an item card is clicked |
+| `onAddVideo` | `function` | Saves a new item to IndexedDB |
+| `onDeleteVideo` | `function` | Deletes an item by ID |
+| `onClearLibrary` | `function` | Clears all items |
+| `getVideoByDriveId` | `function` | Drive sync lookup |
+| `getVideoByName` | `function` | Drive sync lookup |
+| `upsertDriveVideo` | `function` | Drive sync upsert |
+| `evictToMetadata` | `function` | Convert items to cloud-only stubs |
 
 **State:**
 | State | Purpose |
 |-------|---------|
 | `isDevBrowserOpen` | Toggles `DevDriveBrowser` modal |
 | `isSettingsOpen` | Toggles `DriveSettingsModal` (production only) |
+| `isNewNoteOpen` | Toggles `NewNoteModal` |
+| `isYoutubeOpen` | Toggles `NewYoutubeModal` |
 | `credentials` | `{clientId, apiKey, folderId}` — sourced from `getDriveCredentials()` |
 | `driveFolderName` | Display name fetched from Drive API when credentials are valid |
+| `uploadStatuses` | Per-item Drive upload state (`null \| 'uploading' \| 'success' \| 'error'`) |
+
+**Toolbar buttons:**
+```
+DEV: Test Folder   (dev only)  → opens DevDriveBrowser
+Drive Folder       (prod only) → opens DriveSettingsModal or DevDriveBrowser
+Sync                           → syncDriveToLocal()
+New Note                       → opens NewNoteModal
+Add YouTube                    → opens NewYoutubeModal
+Add File                       → hidden <input type="file"> triggered via ref
+🗑 (trash)                     → confirm + onClearLibrary()
+```
 
 **File upload flow:**
 ```
-"Add Book" clicked
+"Add File" clicked
   → hidden <input type="file"> triggered via ref
   → user selects file
   → handleFileChange(e)
-  → onAddBook(file.name, file.type, file)   ← File extends Blob, stored directly
+  → onAddVideo(file.name, file.type, file)   ← File extends Blob, stored directly
   → input value reset (allows re-selecting same file)
+```
+
+**YouTube add flow:**
+```
+"Add YouTube" clicked
+  → NewYoutubeModal opens
+  → user enters URL (+ optional title)
+  → JSON blob created: { url, title }
+  → onAddVideo(filename, 'application/x-youtube', blob)
+  → modal closes
 ```
 
 **Drive button behaviour:**
@@ -153,52 +182,141 @@ Prod:  teal "Drive Folder"
                                  gear icon beside button opens DriveSettingsModal to edit
 ```
 
-**Empty state:** When `books.length === 0`, shows a centred placeholder with an "Add Your First Book" button.
+**Empty state:** When `videos.length === 0`, shows a centred placeholder with an "Add Your First File" button.
 
 ---
 
-### `BookCard.js`
-**Role:** Single book item in the grid.
+### `VideoCard.js`
+**Role:** Single item card in the grid.
 
 **Props:**
 | Prop | Type | Purpose |
 |------|------|---------|
-| `book` | `object` | `{id, name, type, data, size, added}` |
-| `onSelect` | `function` | Opens the book |
-| `onDelete` | `function` | Deletes the book |
+| `video` | `object` | `{id, name, type, data, size, added, isMetadataOnly?}` |
+| `onSelect` | `function` | Opens the item |
+| `onDelete` | `function` | Deletes the item |
+| `onUpload` | `function` | Uploads to Google Drive |
+| `uploadStatus` | `null \| 'uploading' \| 'success' \| 'error'` | Drive upload state |
 
 **Renders:**
 ```
 Card (clickable)
-├── Cover area (gray bg, book icon, format badge top-right)
-│   └── Delete button (bottom-right, visible on hover)
+├── Cover area
+│   ├── YouTube items  → thumbnail from img.youtube.com/vi/{id}/mqdefault.jpg
+│   │                    (red play-button SVG if no video ID, e.g. channel links)
+│   └── Other items    → BookIcon
+│   ├── Type badge (top-right): red "YouTube" for YouTube, indigo extension for others
+│   ├── "☁ Cloud" badge (top-left, cloud-only items only)
+│   └── Action buttons (bottom-right, visible on hover)
+│       ├── Upload button (Drive)
+│       └── Delete button
 └── Info area
-    ├── Book name (truncated)
-    └── File size (formatted: KB / MB)
+    ├── Item name (truncated)
+    ├── File size (formatted: KB / MB)
+    └── "Click to download & read" (cloud-only items only)
 ```
 
-Format badge (`EPUB`, `PDF`, `TXT`) derived from filename extension.
+YouTube thumbnail is extracted asynchronously via `FileReader` reading the JSON blob on mount.
 
 ---
 
 ### `Reader.js`
-**Role:** Format dispatcher for PDF and TXT. EPUB is handled separately via `reader.html`.
+**Role:** Format dispatcher. Routes to the correct viewer based on file extension or MIME type.
 
 **Props:**
 | Prop | Type | Purpose |
 |------|------|---------|
-| `book` | `object` | Full book record from IndexedDB |
+| `video` | `object` | Full item record from IndexedDB |
+| `onUpdateVideo` | `function` | Persists updated Markdown content |
+| `onAddAsset` | `function` | Saves image assets for Markdown notes |
+| `onGetAssets` | `function` | Retrieves image assets for Markdown notes |
 
 **Routing logic:**
 ```js
-ext = getFileExtension(book.name)
-   || MIME_TO_EXT[book.type]   // fallback for Drive files without extension
+ext = getFileExtension(video.name)
+   || MIME_TO_EXT[video.type]   // fallback for Drive files without extension
 
 switch(ext):
-  'pdf'  → PdfViewer
-  'txt'  → TxtViewer
-  else   → UnsupportedViewer
+  'epub'    → EpubViewer       (legacy path, main routing goes to reader.html)
+  'pdf'     → PdfViewer
+  'txt'     → TxtViewer
+  'md'      → MarkdownEditor
+  'youtube' → YoutubeViewer
+  else      → UnsupportedViewer
 ```
+
+**MIME_TO_EXT map:**
+```js
+{
+  'application/epub+zip':  'epub',
+  'application/pdf':       'pdf',
+  'text/plain':            'txt',
+  'text/markdown':         'md',
+  'application/x-youtube': 'youtube',
+}
+```
+
+---
+
+### `YoutubeViewer.js`
+**Role:** Embeds a YouTube video or shows a link for channel/playlist URLs.
+
+**Props:** `video` (full item record)
+
+**State:** `parsed` (object), `isLoading` (bool), `error` (string|null)
+
+**How it works:**
+```js
+FileReader.readAsText(video.data)
+  onload → JSON.parse → { url, title }
+  extractVideoId(url) → 11-char video ID (or null for channels)
+
+videoId present → 16:9 iframe (youtube-nocookie.com/embed/{id}?rel=0)
+                   + "Open in YouTube" link
+videoId absent  → YouTube logo + "Open in YouTube" link (channel/playlist fallback)
+```
+
+---
+
+### `NewYoutubeModal.js`
+**Role:** Modal to save a YouTube video or channel URL.
+
+**Props:**
+| Prop | Type | Purpose |
+|------|------|---------|
+| `onSave` | `function` | Called with `(filename, 'application/x-youtube', blob)` |
+| `onClose` | `function` | Closes the modal |
+
+**Behaviour:**
+- URL input is focused on mount.
+- Validates that the URL contains `youtube.com` or `youtu.be`.
+- Creates a JSON blob: `{ url, title }`.
+- Filename: `{title}.youtube` (filesystem-unsafe chars stripped).
+
+---
+
+### `MarkdownEditor.js`
+**Role:** Full-featured Markdown editor with live preview and image assets.
+
+**Props:**
+| Prop | Type | Purpose |
+|------|------|---------|
+| `video` | `object` | Note record (`id`, `name`, `data`) |
+| `onUpdateVideo` | `function` | Saves updated Markdown blob |
+| `onAddAsset` | `function` | Stores an image asset linked to the note |
+| `onGetAssets` | `function` | Retrieves image assets for the note |
+
+**Features:**
+- Live preview — transparent textarea overlays rendered HTML; caret stays aligned.
+- Slash commands — type `/` at the start of a line for a command menu:
+  - Headings (`# `, `## `, `### `)
+  - Lists (`- `, `1. `)
+  - Images (full / 300px / 500px / 800px)
+  - **YouTube embed** — inserts `[Video Title](https://youtube.com/watch?v=)` placeholder
+- YouTube link rendering — `[text](youtube-url)` renders as an inline thumbnail card in the preview.
+- Image assets — drag-drop, paste, or slash-command insert; stored in `assets` IndexedDB store.
+- Export as ZIP — `.md` file + `images/` folder.
+- Save — Ctrl+S or Save button → `onUpdateVideo(id, blob)`.
 
 ---
 
@@ -212,8 +330,6 @@ switch(ext):
 objectUrl = URL.createObjectURL(data)  // memoized
 <iframe src={objectUrl} />             // browser's built-in PDF renderer
 ```
-
-`useMemo` ensures the object URL is only created once per book, not on every render.
 
 ---
 
@@ -281,28 +397,40 @@ Displays text in a `<pre>` tag with `whitespace-pre-wrap` to preserve formatting
 
 ---
 
-### `EpubViewer.js` *(legacy, not used for routing)*
-**Role:** Inline EPUB renderer. Kept in codebase but EPUB routing now goes to `reader.html`.
-
----
-
 ## `useIndexedDB` Hook
 
 Located at `hooks/useIndexedDB.js`. Encapsulates all database logic.
 
-**Database:** `InfoDepo` (version 1)
-**Object store:** `books`
-**Schema:** `{ id (auto), name, type, data (Blob), size, added (Date) }`
+**Database:** `InfoDepo` (version 4)
+**Object stores:** `videos` (primary), `assets` (image attachments for Markdown notes)
+**Schema (`videos`):** `{ id (auto), name, type, data (Blob|null), size, added (Date), driveId?, driveModifiedTime?, isMetadataOnly? }`
+**Schema (`assets`):** `{ id (auto), noteId, filename, data (Blob), mimeType }`
 **Sort order:** Newest first (`added` timestamp descending)
+
+**Migration history:**
+| Version | Change |
+|---------|--------|
+| 1 | Created `videos` store (originally `books`) |
+| 2 | Added `assets` store with `noteId` index |
+| 3 | Added `driveId` index on `videos`/`books` store |
+| 4 | Renamed `books` → `videos` (copy + delete migration) |
 
 **Returned API:**
 | | Type | Description |
 |--|------|-------------|
-| `books` | `array` | All books, sorted newest-first |
-| `isInitialized` | `bool` | False until DB is open and books are loaded |
-| `addBook(name, type, data)` | `async fn` | Adds a book, reloads list |
-| `deleteBook(id)` | `fn` | Deletes by ID, reloads list |
-| `clearBooks()` | `fn` | Removes all books |
+| `videos` | `array` | All items, sorted newest-first |
+| `isInitialized` | `bool` | False until DB is open and items are loaded |
+| `addVideo(name, type, data)` | `async fn` | Adds an item, reloads list |
+| `updateVideo(id, blob)` | `async fn` | Updates item data (used by MarkdownEditor) |
+| `deleteVideo(id)` | `async fn` | Deletes by ID (also removes linked assets) |
+| `clearVideos()` | `fn` | Removes all items and assets |
+| `addAsset(noteId, filename, data, mimeType)` | `async fn` | Stores an image asset |
+| `getAssetsForNote(noteId)` | `async fn` | Retrieves all assets for a note |
+| `getVideoByDriveId(driveId)` | `async fn` | Drive sync lookup |
+| `getVideoByName(name)` | `async fn` | Drive sync lookup |
+| `upsertDriveVideo(driveFile, blob)` | `async fn` | Create or update Drive-linked record |
+| `evictToMetadata(ids)` | `async fn` | Convert items to metadata-only stubs |
+| `markAsDownloaded(id, blob)` | `async fn` | Upgrade stub to full local copy |
 
 ---
 
@@ -318,21 +446,25 @@ Browser opens app
   index.js → ReactDOM.createRoot → renders App
        │
        ▼
-  App mounts → useIndexedDB initialises IndexedDB
+  App mounts → useIndexedDB initialises IndexedDB (v4, store: 'videos')
        │
   isInitialized = false
-       │  (DB opens, books loaded)
+       │  (DB opens, items loaded)
        ▼
   isInitialized = true → Library rendered
        │
-  ┌────┴──────────────┐
-  │                   │
-User uploads file   User clicks book
-  │                   │
-  ▼                   ├── EPUB → window.open(reader.html?id=X)
-addBook() →         │
-IndexedDB write →   └── PDF/TXT → Reader.js → PdfViewer / TxtViewer
-loadBooks() →
-books state updates →
-BookCard re-renders
+  ┌────┴────────────────────────┐
+  │                             │
+User uploads file/URL        User clicks card
+  │                             │
+  ├── Add File → file picker    ├── EPUB    → window.open(reader.html?id=X)
+  ├── Add YouTube → modal       ├── PDF/TXT → Reader.js → PdfViewer / TxtViewer
+  └── New Note → modal          ├── MD      → Reader.js → MarkdownEditor
+       │                        └── YouTube → Reader.js → YoutubeViewer
+       ▼
+  addVideo() →
+  IndexedDB write →
+  loadVideos() →
+  videos state updates →
+  VideoCard re-renders
 ```

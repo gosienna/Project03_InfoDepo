@@ -1,323 +1,377 @@
 
 import { useState, useEffect, useCallback } from 'react';
+import { INFO_DEPO_DB_NAME as DB_NAME, INFO_DEPO_DB_VERSION as DB_VERSION } from '../utils/infodepoDb.js';
 
-const DB_NAME = 'InfoDepo';
-const DB_VERSION = 3;
-const STORE_NAME = 'books';
-const ASSETS_STORE = 'assets';
+const BOOKS_STORE  = 'books';
+const NOTES_STORE  = 'notes';
+const VIDEOS_STORE = 'videos';
+const IMAGES_STORE = 'images';
+
+const isYoutubeType = (type) =>
+  type != null && String(type).trim() === 'application/x-youtube';
+const isNoteType = (type) =>
+  type != null && String(type).trim() === 'text/markdown';
+
+const storeForType = (type) => {
+  if (isYoutubeType(type)) return VIDEOS_STORE;
+  if (isNoteType(type)) return NOTES_STORE;
+  return BOOKS_STORE;
+};
+
+const blobLikeSize = (data) =>
+  (data != null && typeof data.size === 'number' && !Number.isNaN(data.size)) ? data.size : 0;
+
+const MARKDOWN_FILE_RE = /\.(md|markdown|mdown|mkd)$/i;
+
+const storeForNewItem = (name, type) => {
+  const n = (name || '').toLowerCase();
+  const mime = typeof type === 'string' ? type.trim().toLowerCase() : '';
+  if (n.endsWith('.youtube')) return VIDEOS_STORE;
+  if (isYoutubeType(type)) return VIDEOS_STORE;
+  if (MARKDOWN_FILE_RE.test(n)) return NOTES_STORE;
+  if (isNoteType(type)) return NOTES_STORE;
+  if (mime === 'text/x-markdown' || mime === 'text/md') return NOTES_STORE;
+  return BOOKS_STORE;
+};
+
+const modifiedTimeSortKey = (rec) => {
+  const t = rec?.modifiedTime;
+  if (t instanceof Date && !Number.isNaN(t.getTime())) return t.getTime();
+  if (typeof t === 'string' || typeof t === 'number') {
+    const ms = new Date(t).getTime();
+    return Number.isNaN(ms) ? 0 : ms;
+  }
+  return 0;
+};
+
 
 export const useIndexedDB = () => {
   const [db, setDb] = useState(null);
-  const [books, setBooks] = useState([]);
+  const [items, setItems] = useState([]);
   const [isInitialized, setIsInitialized] = useState(false);
 
   const initDB = useCallback(() => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
+    request.onblocked = () => {
+      console.warn('[InfoDepo] IndexedDB upgrade blocked — close other tabs using this site, then reload.');
+    };
+
     request.onerror = (event) => {
-      console.error('Database error:', event.target.error);
-      setIsInitialized(true); // Still allow app to run
+      const err = event.target.error;
+      console.error('Database error:', err);
+      if (err?.name === 'VersionError') {
+        console.error(
+          '[InfoDepo] IndexedDB was already at a higher version. Clear site data (Application → Storage) for this origin or delete the "InfoDepo" database, then reload.'
+        );
+      }
+      setIsInitialized(true);
     };
 
     request.onsuccess = (event) => {
-      const dbInstance = event.target.result;
-      setDb(dbInstance);
+      setDb(event.target.result);
       setIsInitialized(true);
     };
 
     request.onupgradeneeded = (event) => {
       const dbInstance = event.target.result;
-      const oldVersion = event.oldVersion;
-
-      if (oldVersion < 1) {
-        dbInstance.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
-      }
-      if (oldVersion < 2) {
-        if (!dbInstance.objectStoreNames.contains(ASSETS_STORE)) {
-          const assetStore = dbInstance.createObjectStore(ASSETS_STORE, { keyPath: 'id', autoIncrement: true });
-          assetStore.createIndex('noteId', 'noteId', { unique: false });
-        }
-      }
-      if (oldVersion < 3) {
-        // Add driveId index for O(1) lookup during sync
-        const booksStore = event.target.transaction.objectStore(STORE_NAME);
-        if (!booksStore.indexNames.contains('driveId')) {
-          booksStore.createIndex('driveId', 'driveId', { unique: false });
-        }
+      if (event.oldVersion < 1) {
+        const addStore = (name, indexSpec) => {
+          const s = dbInstance.createObjectStore(name, { keyPath: 'id', autoIncrement: true });
+          indexSpec.forEach(({ key, path, unique }) => s.createIndex(key, path, { unique }));
+        };
+        addStore(BOOKS_STORE,  [{ key: 'driveId', path: 'driveId', unique: false }]);
+        addStore(NOTES_STORE,  [{ key: 'driveId', path: 'driveId', unique: false }]);
+        addStore(VIDEOS_STORE, [{ key: 'driveId', path: 'driveId', unique: false }]);
+        addStore(IMAGES_STORE, [{ key: 'noteId',  path: 'noteId',  unique: false }]);
       }
     };
   }, []);
 
-  useEffect(() => {
-    initDB();
-  }, [initDB]);
+  useEffect(() => { initDB(); }, [initDB]);
 
-  const loadBooks = useCallback(() => {
+  const loadItems = useCallback(() => {
     if (!db) return;
-    const transaction = db.transaction(STORE_NAME, 'readonly');
-    const objectStore = transaction.objectStore(STORE_NAME);
-    const getAllRequest = objectStore.getAll();
+    let tx;
+    try {
+      tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE], 'readonly');
+    } catch (err) {
+      console.error('IndexedDB transaction failed (missing store or closed DB):', err);
+      setItems([]);
+      return;
+    }
+    let books = [];
+    let notes = [];
+    let videos = [];
+    let remaining = 3;
 
-    getAllRequest.onsuccess = (event) => {
-      const result = event.target.result;
-      setBooks(result.sort((a,b) => b.added.getTime() - a.added.getTime()));
+    const tryCombine = () => {
+      remaining--;
+      if (remaining > 0) return;
+      const merged = [
+        ...books.map((r) => ({ ...r, idbStore: BOOKS_STORE })),
+        ...notes.map((r) => ({ ...r, idbStore: NOTES_STORE })),
+        ...videos.map((r) => ({ ...r, idbStore: VIDEOS_STORE })),
+      ].sort((a, b) => modifiedTimeSortKey(b) - modifiedTimeSortKey(a));
+      if (import.meta.env.DEV) {
+        console.info(
+          `[InfoDepo] ${location.origin} — DB rows: books=${books.length} notes=${notes.length} videos=${videos.length} → library UI: ${merged.length}`
+        );
+      }
+      setItems(merged);
     };
-    getAllRequest.onerror = (event) => {
-      console.error('Error fetching books:', event.target.error);
-    };
+
+    const booksReq = tx.objectStore(BOOKS_STORE).getAll();
+    booksReq.onsuccess  = (e) => { books  = e.target.result; tryCombine(); };
+    booksReq.onerror    = (e) => { console.error('Error loading books:', e.target.error); tryCombine(); };
+
+    const notesReq = tx.objectStore(NOTES_STORE).getAll();
+    notesReq.onsuccess  = (e) => { notes  = e.target.result; tryCombine(); };
+    notesReq.onerror    = (e) => { console.error('Error loading notes:', e.target.error); tryCombine(); };
+
+    const videosReq = tx.objectStore(VIDEOS_STORE).getAll();
+    videosReq.onsuccess = (e) => { videos = e.target.result; tryCombine(); };
+    videosReq.onerror   = (e) => { console.error('Error loading videos:', e.target.error); tryCombine(); };
   }, [db]);
 
   useEffect(() => {
-    if (isInitialized) {
-        loadBooks();
-    }
-  }, [isInitialized, loadBooks]);
+    if (isInitialized) loadItems();
+  }, [isInitialized, loadItems]);
 
-  const addBook = useCallback(async (name, type, data) => {
-    if (!db) {
-        console.error('Database not initialized');
+  const addItem = useCallback(async (name, type, data) => {
+    if (!db) { console.error('Database not initialized'); return Promise.reject(new Error('Database not initialized')); }
+    const mime = typeof type === 'string' ? type.trim() : type;
+    const size = blobLikeSize(data);
+    const store = storeForNewItem(name, mime);
+    if (store === VIDEOS_STORE && size === 0) {
+      return Promise.reject(new Error('YouTube entry has no data to save.'));
+    }
+    let storedType = mime;
+    const lowerName = (name || '').toLowerCase();
+    if (store === NOTES_STORE && !isNoteType(mime)) {
+      storedType = 'text/markdown';
+    } else if (store === VIDEOS_STORE && !isYoutubeType(mime) && lowerName.endsWith('.youtube')) {
+      storedType = 'application/x-youtube';
+    }
+    return new Promise((resolve, reject) => {
+      let tx;
+      try {
+        tx = db.transaction(store, 'readwrite');
+      } catch (err) {
+        console.error('addItem: transaction failed:', store, err);
+        reject(err);
         return;
-    }
-    return new Promise((resolve, reject) => {
-        const transaction = db.transaction(STORE_NAME, 'readwrite');
-        const objectStore = transaction.objectStore(STORE_NAME);
-        const bookData = {
-            name,
-            type,
-            data,
-            size: data.size,
-            added: new Date(),
-        };
-        const addRequest = objectStore.add(bookData);
-
-        addRequest.onsuccess = () => {
-            loadBooks();
-            resolve();
-        };
-
-        addRequest.onerror = (event) => {
-            console.error('Error adding book:', event.target.error);
-            reject(event.target.error);
-        };
+      }
+      const record = { name, type: storedType, data, size, driveId: '', modifiedTime: new Date() };
+      const addRequest = tx.objectStore(store).add(record);
+      addRequest.onsuccess = () => { loadItems(); resolve(); };
+      addRequest.onerror   = (e) => { console.error('Error adding item:', store, e.target.error); reject(e.target.error); };
     });
-  }, [db, loadBooks]);
+  }, [db, loadItems]);
 
-  const updateBook = useCallback((id, content) => {
+  const updateItem = useCallback((id, content, type) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    const mime = type != null && String(type).trim() !== '' ? String(type).trim() : 'text/markdown';
+    const preferred  = storeForType(mime);
+    const secondary  = preferred === NOTES_STORE ? BOOKS_STORE : NOTES_STORE;
+    const size       = blobLikeSize(content);
+
+    const tryStore = (store, allowFallback) =>
+      new Promise((resolve, reject) => {
+        let tx;
+        try { tx = db.transaction(store, 'readwrite'); } catch (err) { reject(err); return; }
+        const os = tx.objectStore(store);
+        const getRequest = os.get(id);
+        getRequest.onsuccess = () => {
+          const existing = getRequest.result;
+          if (!existing) {
+            if (allowFallback) { tryStore(secondary, false).then(resolve).catch(reject); }
+            else               { reject(new Error('Item not found')); }
+            return;
+          }
+          const nextType = store === NOTES_STORE && !isNoteType(existing.type) ? 'text/markdown' : existing.type;
+          // Do NOT update modifiedTime here — it tracks the Drive sync version, not local edit time.
+          // Advancing it on local saves would make Drive appear "older" and block future syncs.
+          const putRequest = os.put({ ...existing, type: nextType, data: content, size });
+          putRequest.onsuccess = () => { loadItems(); resolve(); };
+          putRequest.onerror   = () => reject(putRequest.error);
+        };
+        getRequest.onerror = () => reject(getRequest.error);
+      });
+
+    return tryStore(preferred, true);
+  }, [db, loadItems]);
+
+  const addImage = useCallback((noteId, name, data, type) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readwrite');
-      const objectStore = transaction.objectStore(STORE_NAME);
-      const getRequest = objectStore.get(id);
-      getRequest.onsuccess = (event) => {
-        const existing = event.target.result;
-        if (!existing) { reject(new Error('Book not found')); return; }
-        const updated = { ...existing, data: content, size: content.size };
-        const putRequest = objectStore.put(updated);
-        putRequest.onsuccess = () => { loadBooks(); resolve(); };
-        putRequest.onerror = (e) => reject(e.target.error);
-      };
-      getRequest.onerror = (e) => reject(e.target.error);
-    });
-  }, [db, loadBooks]);
-
-  const addAsset = useCallback((noteId, filename, data, mimeType) => {
-    if (!db) return Promise.reject(new Error('Database not initialized'));
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(ASSETS_STORE, 'readwrite');
-      const objectStore = transaction.objectStore(ASSETS_STORE);
-      const addRequest = objectStore.add({ noteId, filename, data, mimeType });
-      addRequest.onsuccess = (event) => resolve(event.target.result);
-      addRequest.onerror = (e) => reject(e.target.error);
+      const tx = db.transaction(IMAGES_STORE, 'readwrite');
+      const record = { noteId, name, data, type, size: blobLikeSize(data), driveId: '', modifiedTime: new Date() };
+      const addRequest = tx.objectStore(IMAGES_STORE).add(record);
+      addRequest.onsuccess = (e) => resolve(e.target.result);
+      addRequest.onerror   = (e) => reject(e.target.error);
     });
   }, [db]);
 
-  const getAssetsForNote = useCallback((noteId) => {
+  const getImagesForNote = useCallback((noteId) => {
     if (!db) return Promise.resolve([]);
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(ASSETS_STORE, 'readonly');
-      const index = transaction.objectStore(ASSETS_STORE).index('noteId');
-      const request = index.getAll(IDBKeyRange.only(noteId));
-      request.onsuccess = (event) => resolve(event.target.result);
-      request.onerror = (e) => reject(e.target.error);
+      const tx = db.transaction(IMAGES_STORE, 'readonly');
+      const request = tx.objectStore(IMAGES_STORE).index('noteId').getAll(IDBKeyRange.only(noteId));
+      request.onsuccess = (e) => resolve(e.target.result);
+      request.onerror   = (e) => reject(e.target.error);
     });
   }, [db]);
 
-  const deleteAssetsForNote = useCallback((noteId) => {
+  const getAllImages = useCallback(() => {
+    if (!db) return Promise.resolve([]);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IMAGES_STORE, 'readonly');
+      const request = tx.objectStore(IMAGES_STORE).getAll();
+      request.onsuccess = (e) => resolve(e.target.result);
+      request.onerror   = (e) => reject(e.target.error);
+    });
+  }, [db]);
+
+  const deleteImagesForNote = useCallback((noteId) => {
     if (!db) return Promise.resolve();
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(ASSETS_STORE, 'readwrite');
-      const index = transaction.objectStore(ASSETS_STORE).index('noteId');
-      const request = index.openCursor(IDBKeyRange.only(noteId));
+      const tx = db.transaction(IMAGES_STORE, 'readwrite');
+      const request = tx.objectStore(IMAGES_STORE).index('noteId').openCursor(IDBKeyRange.only(noteId));
       request.onsuccess = (event) => {
         const cursor = event.target.result;
-        if (cursor) { cursor.delete(); cursor.continue(); }
-        else resolve();
+        if (cursor) { cursor.delete(); cursor.continue(); } else resolve();
       };
       request.onerror = (e) => reject(e.target.error);
     });
   }, [db]);
 
-  const deleteBook = useCallback((id) => {
+  const deleteItem = useCallback((id, type) => {
     if (!db) return Promise.resolve();
-    return deleteAssetsForNote(id).then(() => new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readwrite');
-      const objectStore = transaction.objectStore(STORE_NAME);
-      const deleteRequest = objectStore.delete(id);
-      deleteRequest.onsuccess = () => { loadBooks(); resolve(); };
-      deleteRequest.onerror = (event) => {
-        console.error('Error deleting book:', event.target.error);
-        reject(event.target.error);
-      };
+    const store = storeForType(type);
+    return deleteImagesForNote(id).then(() => new Promise((resolve, reject) => {
+      const tx = db.transaction(store, 'readwrite');
+      const deleteRequest = tx.objectStore(store).delete(id);
+      deleteRequest.onsuccess = () => { loadItems(); resolve(); };
+      deleteRequest.onerror   = (e) => { console.error('Error deleting item:', e.target.error); reject(e.target.error); };
     }));
-  }, [db, loadBooks, deleteAssetsForNote]);
+  }, [db, loadItems, deleteImagesForNote]);
 
-  const clearBooks = useCallback(() => {
+  const clearAll = useCallback(() => {
     if (!db) return;
-    const transaction = db.transaction([STORE_NAME, ASSETS_STORE], 'readwrite');
-    transaction.objectStore(ASSETS_STORE).clear();
-    const clearRequest = transaction.objectStore(STORE_NAME).clear();
-    clearRequest.onsuccess = () => { setBooks([]); };
-    clearRequest.onerror = (event) => {
-      console.error('Error clearing books:', event.target.error);
-    };
+    const tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, IMAGES_STORE], 'readwrite');
+    tx.objectStore(IMAGES_STORE).clear();
+    tx.objectStore(VIDEOS_STORE).clear();
+    tx.objectStore(NOTES_STORE).clear();
+    const clearReq = tx.objectStore(BOOKS_STORE).clear();
+    clearReq.onsuccess = () => setItems([]);
+    clearReq.onerror   = (e) => console.error('Error clearing library:', e.target.error);
   }, [db]);
 
-  // --- Drive sync operations ---
+  /** Update the driveId on any store record after a successful Drive upload. */
+  const setItemDriveId = useCallback((id, storeName, driveId) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(storeName, 'readwrite'); } catch (err) { reject(err); return; }
+      const os = tx.objectStore(storeName);
+      const getRequest = os.get(id);
+      getRequest.onsuccess = () => {
+        const existing = getRequest.result;
+        if (!existing) { reject(new Error('Record not found')); return; }
+        const putRequest = os.put({ ...existing, driveId });
+        putRequest.onsuccess = () => { loadItems(); resolve(); };
+        putRequest.onerror   = () => reject(putRequest.error);
+      };
+      getRequest.onerror = () => reject(getRequest.error);
+    });
+  }, [db, loadItems]);
+
+  // --- Drive sync operations (books + notes stores) ---
 
   const getBookByDriveId = useCallback((driveId) => {
-    if (!db) return Promise.resolve(undefined);
+    if (!db || !driveId) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readonly');
-      const index = transaction.objectStore(STORE_NAME).index('driveId');
-      const request = index.get(driveId);
-      request.onsuccess = (event) => resolve(event.target.result);
-      request.onerror = (e) => reject(e.target.error);
+      const tx = db.transaction([BOOKS_STORE, NOTES_STORE], 'readonly');
+      let pending = 2;
+      let bHit, nHit;
+      const finish = () => { pending--; if (pending === 0) resolve(bHit || nHit); };
+      const bReq = tx.objectStore(BOOKS_STORE).index('driveId').get(driveId);
+      bReq.onsuccess = () => { bHit = bReq.result; finish(); };
+      bReq.onerror   = (e) => reject(e.target.error);
+      const nReq = tx.objectStore(NOTES_STORE).index('driveId').get(driveId);
+      nReq.onsuccess = () => { nHit = nReq.result; finish(); };
+      nReq.onerror   = (e) => reject(e.target.error);
     });
   }, [db]);
 
   const getBookByName = useCallback((name) => {
     if (!db) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readonly');
-      const request = transaction.objectStore(STORE_NAME).getAll();
-      request.onsuccess = (event) => resolve(event.target.result.find(b => b.name === name));
-      request.onerror = (e) => reject(e.target.error);
+      const tx = db.transaction([BOOKS_STORE, NOTES_STORE], 'readonly');
+      let pending = 2;
+      let booksList, notesList;
+      const finish = () => {
+        pending--;
+        if (pending > 0) return;
+        resolve(
+          (booksList && booksList.find((b) => b.name === name))
+          || (notesList && notesList.find((b) => b.name === name))
+        );
+      };
+      const bReq = tx.objectStore(BOOKS_STORE).getAll();
+      bReq.onsuccess = (e) => { booksList = e.target.result; finish(); };
+      bReq.onerror   = (e) => reject(e.target.error);
+      const nReq = tx.objectStore(NOTES_STORE).getAll();
+      nReq.onsuccess = (e) => { notesList = e.target.result; finish(); };
+      nReq.onerror   = (e) => reject(e.target.error);
     });
   }, [db]);
 
-  // Adds a metadata-only stub (no blob) for a Drive file not yet downloaded
-  const addMetadataBook = useCallback(({ name, type, size, driveId, driveModifiedTime }) => {
-    if (!db) return Promise.reject(new Error('Database not initialized'));
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readwrite');
-      const objectStore = transaction.objectStore(STORE_NAME);
-      const record = {
-        name,
-        type,
-        data: null,
-        size: parseInt(size) || 0,
-        added: new Date(),
-        driveId,
-        driveModifiedTime,
-        isMetadataOnly: true,
-      };
-      const addRequest = objectStore.add(record);
-      addRequest.onsuccess = () => { loadBooks(); resolve(); };
-      addRequest.onerror = (e) => reject(e.target.error);
-    });
-  }, [db, loadBooks]);
-
-  // Upgrades a metadata-only record to a full record after user downloads
-  const markAsDownloaded = useCallback((id, blob) => {
-    if (!db) return Promise.reject(new Error('Database not initialized'));
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readwrite');
-      const objectStore = transaction.objectStore(STORE_NAME);
-      const getRequest = objectStore.get(id);
-      getRequest.onsuccess = (event) => {
-        const existing = event.target.result;
-        if (!existing) { reject(new Error('Book not found')); return; }
-        const updated = { ...existing, data: blob, size: blob.size, isMetadataOnly: false };
-        const putRequest = objectStore.put(updated);
-        putRequest.onsuccess = () => { loadBooks(); resolve(); };
-        putRequest.onerror = (e) => reject(e.target.error);
-      };
-      getRequest.onerror = (e) => reject(e.target.error);
-    });
-  }, [db, loadBooks]);
-
-  // Core sync primitive: create or update a Drive-linked book record
   const upsertDriveBook = useCallback(async (driveFile, blob) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
-
-    // Look up by driveId first, then by name as fallback
+    if (!blob) return Promise.resolve('skipped'); // no-blob stubs no longer supported
     let existing = await getBookByDriveId(driveFile.driveId);
     if (!existing) existing = await getBookByName(driveFile.name);
 
+    const targetStore = existing
+      ? storeForType(existing.type)
+      : (driveFile.mimeType === 'text/markdown' ? NOTES_STORE : BOOKS_STORE);
+
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readwrite');
-      const objectStore = transaction.objectStore(STORE_NAME);
+      const tx = db.transaction(targetStore, 'readwrite');
+      const os = tx.objectStore(targetStore);
 
       if (existing) {
         const updated = {
           ...existing,
           driveId: driveFile.driveId,
-          driveModifiedTime: driveFile.driveModifiedTime,
-          ...(blob ? { data: blob, size: blob.size, isMetadataOnly: false } : {}),
+          modifiedTime: driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date(),
+          data: blob, size: blob.size,
         };
-        const putRequest = objectStore.put(updated);
-        putRequest.onsuccess = () => { loadBooks(); resolve('updated'); };
-        putRequest.onerror = (e) => reject(e.target.error);
+        const putRequest = os.put(updated);
+        putRequest.onsuccess = () => { loadItems(); resolve('updated'); };
+        putRequest.onerror   = (e) => reject(e.target.error);
       } else {
         const record = {
-          name: driveFile.name,
-          type: driveFile.mimeType,
-          data: blob || null,
-          size: blob ? blob.size : (parseInt(driveFile.size) || 0),
-          added: new Date(driveFile.driveModifiedTime || Date.now()),
+          name: driveFile.name, type: driveFile.mimeType,
+          data: blob, size: blob.size,
           driveId: driveFile.driveId,
-          driveModifiedTime: driveFile.driveModifiedTime,
-          isMetadataOnly: !blob,
+          modifiedTime: driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date(),
         };
-        const addRequest = objectStore.add(record);
-        addRequest.onsuccess = () => { loadBooks(); resolve('added'); };
-        addRequest.onerror = (e) => reject(e.target.error);
+        const addRequest = os.add(record);
+        addRequest.onsuccess = () => { loadItems(); resolve('added'); };
+        addRequest.onerror   = (e) => reject(e.target.error);
       }
     });
-  }, [db, loadBooks, getBookByDriveId, getBookByName]);
-
-  // Converts fully-downloaded Drive books to metadata stubs to free up storage
-  const evictToMetadata = useCallback((bookIds) => {
-    if (!db) return Promise.reject(new Error('Database not initialized'));
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readwrite');
-      const objectStore = transaction.objectStore(STORE_NAME);
-      let pending = bookIds.length;
-      if (pending === 0) { loadBooks(); resolve(); return; }
-
-      bookIds.forEach((id) => {
-        const getRequest = objectStore.get(id);
-        getRequest.onsuccess = (event) => {
-          const existing = event.target.result;
-          if (!existing) { pending--; if (pending === 0) { loadBooks(); resolve(); } return; }
-          const updated = { ...existing, data: null, isMetadataOnly: true };
-          const putRequest = objectStore.put(updated);
-          putRequest.onsuccess = () => {
-            pending--;
-            if (pending === 0) { loadBooks(); resolve(); }
-          };
-          putRequest.onerror = (e) => reject(e.target.error);
-        };
-        getRequest.onerror = (e) => reject(e.target.error);
-      });
-    });
-  }, [db, loadBooks]);
+  }, [db, loadItems, getBookByDriveId, getBookByName]);
 
   return {
-    db, books, addBook, updateBook, deleteBook, clearBooks, isInitialized,
-    addAsset, getAssetsForNote,
-    // Drive sync
-    getBookByDriveId, getBookByName, addMetadataBook, markAsDownloaded,
-    upsertDriveBook, evictToMetadata,
+    items, isInitialized,
+    addItem, updateItem, deleteItem, clearAll,
+    addImage, getImagesForNote, getAllImages,
+    setItemDriveId,
+    // Drive sync (books + notes)
+    getBookByDriveId, getBookByName, upsertDriveBook,
   };
 };

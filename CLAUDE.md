@@ -11,6 +11,7 @@ A client-side e-book reader. Books are imported from local files or (in dev mode
 > - [Google Drive Integration](documents/google-drive-integration.md)
 > - [Testing](documents/testing.md)
 > - [Dev Setup](documents/dev-setup.md)
+> - [Data Stores](documents/data-stores.md)
 
 ## Tech Stack
 

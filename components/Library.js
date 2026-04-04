@@ -1,40 +1,40 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { BookCard } from './BookCard.js';
+import { VideoCard } from './VideoCard.js';
 import { BookIcon } from './icons/BookIcon.js';
 import { TrashIcon } from './icons/TrashIcon.js';
 import { DevDriveBrowser } from './DevDriveBrowser.js';
 import { DriveSettingsModal } from './DriveSettingsModal.js';
 import { getDriveCredentials, saveDriveCredentials } from '../utils/driveCredentials.js';
 import { NewNoteModal } from './NewNoteModal.js';
+import { NewYoutubeModal } from './NewYoutubeModal.js';
 import { getOAuthToken } from '../utils/driveAuth.js';
-import { syncDriveToLocal, selectEvictionCandidates } from '../utils/driveSync.js';
-import { getSyncSettings, saveSyncSettings } from '../utils/syncSettings.js';
-import { formatBytes } from '../utils/fileUtils.js';
+import { syncDriveToLocal, backupAllToGDrive } from '../utils/driveSync.js';
+import { libraryItemKey } from '../utils/libraryItemKey.js';
 
 const IS_DEV = import.meta.env.DEV;
 const UPLOAD_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
 
 export const Library = ({
-  books, onSelectBook, onAddBook, onDeleteBook, onClearLibrary,
-  getBookByDriveId, getBookByName, upsertDriveBook, evictToMetadata,
+  items, onSelectItem, onAddItem, onDeleteItem, onClearLibrary,
+  onSetDriveId, onGetAllImages,
+  getBookByDriveId, getBookByName, upsertDriveBook,
 }) => {
   const fileInputRef      = useRef(null);
   const uploadTokenRef    = useRef(null);
-  const storageInputRef   = useRef(null);
   const [isDevBrowserOpen, setIsDevBrowserOpen] = useState(false);
   const [isSettingsOpen,   setIsSettingsOpen]   = useState(false);
   const [driveFolderName,  setDriveFolderName]  = useState(null);
   const [uploadStatuses,   setUploadStatuses]   = useState({});
   const [credentials,      setCredentials]      = useState(() => getDriveCredentials());
   const [isNewNoteOpen,    setIsNewNoteOpen]    = useState(false);
+  const [isYoutubeOpen,    setIsYoutubeOpen]    = useState(false);
 
-  // Sync state
-  const [isSyncing,    setIsSyncing]    = useState(false);
-  const [syncResult,   setSyncResult]   = useState(null);
-  const [overLimitData, setOverLimitData] = useState(null);
-  const [maxStorageMB, setMaxStorageMB] = useState(() => getSyncSettings().maxStorageMB);
+  // Sync + Backup state (combined operation)
+  const [isSyncing,   setIsSyncing]   = useState(false);
+  const [syncResult,  setSyncResult]  = useState(null);
+  const [syncProgress, setSyncProgress] = useState('');
 
   const hasCredentials = !!(credentials.clientId && credentials.apiKey && credentials.folderId);
 
@@ -53,8 +53,8 @@ export const Library = ({
     uploadTokenRef.current = null;
   }, [credentials.clientId]);
 
-  const setStatus = (id, status) =>
-    setUploadStatuses(prev => ({ ...prev, [id]: status }));
+  const setStatus = (key, status) =>
+    setUploadStatuses(prev => ({ ...prev, [key]: status }));
 
   const getUploadToken = () =>
     new Promise((resolve, reject) => {
@@ -74,20 +74,25 @@ export const Library = ({
       client.requestAccessToken({ prompt: '' });
     });
 
-  const handleUpload = async (book) => {
-    setStatus(book.id, 'uploading');
+  const handleUpload = async (video) => {
+    const uKey = libraryItemKey(video);
+    setStatus(uKey, 'uploading');
     try {
       const token = await getUploadToken();
 
+      // YouTube links: upload as .json so Drive can display the content
+      const isYoutube = video.type === 'application/x-youtube';
+      const driveName = isYoutube ? video.name.replace(/\.youtube$/i, '.json') : video.name;
+      const driveMime = isYoutube ? 'application/json' : (video.type || 'application/octet-stream');
       const metadata = {
-        name: book.name,
-        mimeType: book.type || 'application/octet-stream',
+        name: driveName,
+        mimeType: driveMime,
         ...(credentials.folderId ? { parents: [credentials.folderId] } : {}),
       };
 
       const form = new FormData();
       form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-      form.append('file', book.data);
+      form.append('file', video.data);
 
       const res = await fetch(
         'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',
@@ -99,23 +104,27 @@ export const Library = ({
         throw new Error(err.error?.message || res.statusText);
       }
 
-      setStatus(book.id, 'success');
+      const driveFile = await res.json();
+      // Persist the Drive file ID back to IndexedDB
+      await onSetDriveId(video.id, video.idbStore, driveFile.id);
+      setStatus(uKey, 'success');
     } catch (err) {
       console.error('Upload failed:', err.message);
       uploadTokenRef.current = null;
-      setStatus(book.id, 'error');
+      setStatus(uKey, 'error');
     }
   };
+
 
   const handleFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    await onAddBook(file.name, file.type, file);
+    await onAddItem(file.name, file.type, file);
     e.target.value = '';
   };
 
   const handleConfirmClear = () => {
-    if (window.confirm('Are you sure you want to delete all books from your local library? This action cannot be undone.')) {
+    if (window.confirm('Are you sure you want to delete all items from your library? This action cannot be undone.')) {
       onClearLibrary();
     }
   };
@@ -139,45 +148,49 @@ export const Library = ({
     if (!hasCredentials || isSyncing) return;
     setIsSyncing(true);
     setSyncResult(null);
-    setOverLimitData(null);
+    setSyncProgress('');
+    const combined = {};
     try {
-      const token = await getOAuthToken(credentials.clientId, READ_SCOPE);
-      const result = await syncDriveToLocal({
-        accessToken: token,
+      // Phase 1: backup local-only items to Drive
+      setSyncProgress('Backing up local items...');
+      const uploadToken = await getUploadToken();
+      const images = onGetAllImages ? await onGetAllImages() : [];
+      const backupResult = await backupAllToGDrive({
+        accessToken: uploadToken,
+        folderId: credentials.folderId,
+        items,
+        images,
+        onSetDriveId,
+        onProgress: setSyncProgress,
+      });
+      combined.backed = backupResult.backed;
+      combined.backupFailed = backupResult.failed;
+
+      // Phase 2: sync Drive → local
+      setSyncProgress('Syncing from Drive...');
+      const readToken = await getOAuthToken(credentials.clientId, READ_SCOPE);
+      const syncResult = await syncDriveToLocal({
+        accessToken: readToken,
         apiKey: credentials.apiKey,
         folderId: credentials.folderId,
-        maxStorageBytes: maxStorageMB * 1024 * 1024,
-        books,
+        books: items.filter(i => i.type !== 'application/x-youtube'),
         getBookByDriveId,
         getBookByName,
         upsertDriveBook,
       });
-      if (result.overLimit) {
-        setOverLimitData(result);
-      } else {
-        setSyncResult(result);
-      }
+      combined.added = syncResult.added;
+      combined.updated = syncResult.updated;
+      combined.skipped = syncResult.skipped;
+
+      setSyncResult(combined);
     } catch (err) {
       console.error('Sync failed:', err);
       setSyncResult({ error: err.message });
+      uploadTokenRef.current = null;
     } finally {
       setIsSyncing(false);
+      setSyncProgress('');
     }
-  };
-
-  const handleFreeUpSpace = async () => {
-    if (!overLimitData) return;
-    const idsToEvict = selectEvictionCandidates(overLimitData.candidates, overLimitData.excess);
-    setOverLimitData(null);
-    await evictToMetadata(idsToEvict);
-    // Re-run sync now that space has been freed
-    await runSync();
-  };
-
-  const handleIncreaseLimit = () => {
-    setOverLimitData(null);
-    // Focus the storage input so user can type a new value
-    setTimeout(() => storageInputRef.current?.focus(), 50);
   };
 
   // Folder badge
@@ -195,14 +208,13 @@ export const Library = ({
     driveFolderName
   );
 
-  // Sync button (shown only when credentials are available)
   const syncButton = hasCredentials && React.createElement(
     'button',
     {
       onClick: runSync,
       disabled: isSyncing,
       className: 'flex items-center gap-1.5 bg-teal-800 hover:bg-teal-700 disabled:opacity-50 text-white text-sm font-bold py-2 px-4 rounded-xl transition-all active:scale-95',
-      title: 'Sync library with Drive folder'
+      title: 'Back up local items to Drive, then sync Drive → local'
     },
     isSyncing
       ? React.createElement('div', { className: 'h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin' })
@@ -211,25 +223,7 @@ export const Library = ({
           { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
           React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' })
         ),
-    isSyncing ? 'Syncing...' : 'Sync'
-  );
-
-  // Storage limit input
-  const storageInput = React.createElement(
-    'div',
-    { className: 'flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded-xl px-3 py-1.5' },
-    React.createElement('span', { className: 'text-xs text-gray-400 whitespace-nowrap' }, 'Sync limit:'),
-    React.createElement('input', {
-      ref: storageInputRef,
-      type: 'number',
-      min: 50,
-      max: 100000,
-      value: maxStorageMB,
-      onChange: (e) => setMaxStorageMB(Number(e.target.value)),
-      onBlur: () => saveSyncSettings({ maxStorageMB }),
-      className: 'w-16 bg-transparent text-sm text-white text-right focus:outline-none',
-    }),
-    React.createElement('span', { className: 'text-xs text-gray-400' }, 'MB')
+    isSyncing ? (syncProgress || 'Syncing...') : 'Sync'
   );
 
   return React.createElement(
@@ -251,9 +245,9 @@ export const Library = ({
         React.createElement(
           'span',
           { className: 'text-sm text-gray-500 font-medium bg-gray-800 px-3 py-1 rounded-full border border-gray-700' },
-          books.length,
+          items.length,
           ' ',
-          books.length === 1 ? 'Book' : 'Books'
+          items.length === 1 ? 'Item' : 'Items'
         ),
 
         // Dev mode: yellow DEV button
@@ -307,9 +301,8 @@ export const Library = ({
           folderBadge
         ),
 
-        // Sync button + storage limit input (shown when credentials set)
+        // Sync button (backup local → Drive, then sync Drive → local)
         hasCredentials && syncButton,
-        hasCredentials && storageInput,
 
         React.createElement(
           'button',
@@ -325,6 +318,22 @@ export const Library = ({
           ),
           'New Note'
         ),
+
+        React.createElement(
+          'button',
+          {
+            onClick: () => setIsYoutubeOpen(true),
+            className: 'flex items-center gap-2 bg-red-700 hover:bg-red-600 text-white font-bold py-2 px-5 rounded-xl transition-all active:scale-95',
+            title: 'Add a YouTube video or channel'
+          },
+          React.createElement(
+            'svg',
+            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-5 w-5', fill: 'currentColor', viewBox: '0 0 24 24' },
+            React.createElement('path', { d: 'M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z' })
+          ),
+          'Add YouTube'
+        ),
+
         React.createElement(
           'button',
           {
@@ -332,9 +341,9 @@ export const Library = ({
             className: 'flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-5 rounded-xl transition-all shadow-lg shadow-indigo-500/10 active:scale-95'
           },
           React.createElement(BookIcon, { className: 'h-5 w-5' }),
-          React.createElement('span', null, 'Add Book')
+          React.createElement('span', null, 'Add File')
         ),
-        books.length > 0 &&
+        items.length > 0 &&
           React.createElement(
             'button',
             {
@@ -354,7 +363,7 @@ export const Library = ({
       )
     ),
 
-    // Sync result banner
+    // Sync result banner (covers both backup and sync phases)
     syncResult && React.createElement(
       'div',
       {
@@ -362,30 +371,33 @@ export const Library = ({
       },
       syncResult.error
         ? `Sync failed: ${syncResult.error}`
-        : `Sync complete — ${syncResult.added} added, ${syncResult.updated} updated, ${syncResult.metadataOnly} cloud-only, ${syncResult.skipped} unchanged`,
+        : [
+            syncResult.backed > 0 && `${syncResult.backed} backed up`,
+            syncResult.backupFailed > 0 && `${syncResult.backupFailed} backup failed`,
+            `${syncResult.added} added`,
+            `${syncResult.updated} updated`,
+            `${syncResult.skipped} unchanged`,
+          ].filter(Boolean).join(', '),
       React.createElement(
         'button',
-        {
-          onClick: () => setSyncResult(null),
-          className: 'ml-4 text-current opacity-60 hover:opacity-100 text-lg leading-none'
-        },
+        { onClick: () => setSyncResult(null), className: 'ml-4 text-current opacity-60 hover:opacity-100 text-lg leading-none' },
         '×'
       )
     ),
 
-    // Book grid or empty state
-    books.length > 0
+    // Item grid or empty state
+    items.length > 0
       ? React.createElement(
           'div',
           { className: 'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6' },
-          books.map((book) =>
-            React.createElement(BookCard, {
-              key: book.id,
-              book: book,
-              onSelect: onSelectBook,
-              onDelete: onDeleteBook,
+          items.map((video) =>
+            React.createElement(VideoCard, {
+              key: libraryItemKey(video),
+              video: video,
+              onSelect: onSelectItem,
+              onDelete: onDeleteItem,
               onUpload: handleUpload,
-              uploadStatus: uploadStatuses[book.id] ?? null,
+              uploadStatus: uploadStatuses[libraryItemKey(video)] ?? null,
             })
           )
         )
@@ -397,15 +409,11 @@ export const Library = ({
             { className: 'bg-gray-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 border border-gray-700' },
             React.createElement(BookIcon, { className: 'h-8 w-8 text-gray-600' })
           ),
-          React.createElement(
-            'h3',
-            { className: 'text-xl font-semibold text-gray-400' },
-            'Library is Empty'
-          ),
+          React.createElement('h3', { className: 'text-xl font-semibold text-gray-400' }, 'Library is Empty'),
           React.createElement(
             'p',
             { className: 'text-gray-500 mt-2 max-w-sm mx-auto' },
-            'Click "Add Book" to import an EPUB, PDF, or TXT file from your device.'
+            'Click "Add File" to import an EPUB, PDF, TXT, or Markdown file, or "Add YouTube" to save a video link.'
           ),
           React.createElement(
             'button',
@@ -414,13 +422,13 @@ export const Library = ({
               className: 'mt-6 inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-6 rounded-xl transition-all'
             },
             React.createElement(BookIcon, { className: 'h-5 w-5' }),
-            'Add Your First Book'
+            'Add Your First File'
           )
         ),
 
     // Drive browser modal
     isDevBrowserOpen && React.createElement(DevDriveBrowser, {
-      onFileSelect: onAddBook,
+      onFileSelect: onAddItem,
       onClose: () => setIsDevBrowserOpen(false),
       clientId: credentials.clientId,
       apiKey:   credentials.apiKey,
@@ -435,71 +443,14 @@ export const Library = ({
 
     // New note modal
     isNewNoteOpen && React.createElement(NewNoteModal, {
-      onSave:  onAddBook,
+      onSave:  onAddItem,
       onClose: () => setIsNewNoteOpen(false),
     }),
 
-    // Over-limit modal
-    overLimitData && React.createElement(
-      'div',
-      { className: 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm' },
-      React.createElement(
-        'div',
-        { className: 'bg-gray-800 rounded-2xl w-full max-w-md p-6 border border-gray-700' },
-        React.createElement('h2', { className: 'text-lg font-bold text-white mb-2' }, 'Storage limit exceeded'),
-        React.createElement(
-          'p',
-          { className: 'text-gray-400 text-sm mb-2' },
-          `Your Drive-synced library uses ${formatBytes((overLimitData.candidates.reduce((s, b) => s + (b.size || 0), 0)))} — ${formatBytes(overLimitData.excess)} over your ${maxStorageMB} MB limit.`
-        ),
-        React.createElement(
-          'p',
-          { className: 'text-gray-500 text-xs mb-6' },
-          '"Free up space" will convert the oldest/largest Drive-synced books to cloud-only stubs and then re-run sync.'
-        ),
-        // List of candidates to be evicted (preview)
-        overLimitData.candidates.length > 0 && React.createElement(
-          'div',
-          { className: 'mb-5 max-h-36 overflow-y-auto rounded-xl bg-gray-900/60 border border-gray-700 divide-y divide-gray-700/50' },
-          selectEvictionCandidates(overLimitData.candidates, overLimitData.excess).map(id => {
-            const book = overLimitData.candidates.find(b => b.id === id);
-            return book ? React.createElement(
-              'div',
-              { key: id, className: 'flex items-center justify-between px-3 py-2 text-xs' },
-              React.createElement('span', { className: 'text-gray-300 truncate mr-2', title: book.name }, book.name),
-              React.createElement('span', { className: 'text-gray-500 shrink-0' }, formatBytes(book.size))
-            ) : null;
-          })
-        ),
-        React.createElement(
-          'div',
-          { className: 'flex gap-3' },
-          React.createElement(
-            'button',
-            {
-              onClick: () => setOverLimitData(null),
-              className: 'flex-1 px-4 py-2 text-sm text-gray-400 hover:text-white rounded-xl hover:bg-gray-700 transition-colors border border-gray-700'
-            },
-            'Cancel'
-          ),
-          React.createElement(
-            'button',
-            {
-              onClick: handleIncreaseLimit,
-              className: 'flex-1 px-4 py-2 text-sm font-bold bg-gray-700 hover:bg-gray-600 text-white rounded-xl transition-colors'
-            },
-            'Increase limit'
-          ),
-          React.createElement(
-            'button',
-            {
-              onClick: handleFreeUpSpace,
-              className: 'flex-1 px-4 py-2 text-sm font-bold bg-orange-700 hover:bg-orange-600 text-white rounded-xl transition-colors'
-            },
-            'Free up space'
-          )
-        )
-      )
-    )
+    // New YouTube modal
+    isYoutubeOpen && React.createElement(NewYoutubeModal, {
+      onSave:  onAddItem,
+      onClose: () => setIsYoutubeOpen(false),
+    })
   );
 };
