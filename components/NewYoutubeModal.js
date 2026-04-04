@@ -5,14 +5,41 @@ const isValidYoutubeUrl = (url) =>
   /(?:youtube\.com|youtu\.be)/.test(url);
 
 export const NewYoutubeModal = ({ onSave, onClose }) => {
-  const [url,   setUrl]   = useState('');
-  const [title, setTitle] = useState('');
-  const [error, setError] = useState(null);
-  const urlRef            = useRef(null);
+  const [url,          setUrl]          = useState('');
+  const [title,        setTitle]        = useState('');
+  const [titleEdited,  setTitleEdited]  = useState(false);
+  const [isFetching,   setIsFetching]   = useState(false);
+  const [error,        setError]        = useState(null);
+  const urlRef   = useRef(null);
+  const debounce = useRef(null);
 
   useEffect(() => {
     urlRef.current?.focus();
   }, []);
+
+  // Auto-fetch video title via oEmbed when a valid URL is entered
+  useEffect(() => {
+    clearTimeout(debounce.current);
+    const trimmed = url.trim();
+    if (!trimmed || !isValidYoutubeUrl(trimmed) || titleEdited) return;
+    debounce.current = setTimeout(async () => {
+      setIsFetching(true);
+      try {
+        const res = await fetch(
+          `https://www.youtube.com/oembed?url=${encodeURIComponent(trimmed)}&format=json`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.title) setTitle(data.title);
+        }
+      } catch {
+        // silently ignore — user can fill in manually
+      } finally {
+        setIsFetching(false);
+      }
+    }, 600);
+    return () => clearTimeout(debounce.current);
+  }, [url, titleEdited]);
 
   const handleSave = async () => {
     const trimmedUrl = url.trim();
@@ -108,14 +135,22 @@ export const NewYoutubeModal = ({ onSave, onClose }) => {
         React.createElement(
           'div',
           { className: 'flex flex-col gap-1' },
-          React.createElement('label', { className: 'text-sm font-medium text-gray-400', htmlFor: 'yt-title' }, 'Title ',
-            React.createElement('span', { className: 'text-xs text-gray-500 font-normal' }, '(optional)')
+          React.createElement(
+            'label',
+            { className: 'text-sm font-medium text-gray-400 flex items-center gap-2', htmlFor: 'yt-title' },
+            'Title',
+            isFetching && React.createElement(
+              'span',
+              { className: 'text-xs text-gray-500 font-normal flex items-center gap-1' },
+              React.createElement('div', { className: 'h-3 w-3 border border-gray-500 border-t-transparent rounded-full animate-spin' }),
+              'Fetching...'
+            )
           ),
           React.createElement('input', {
             id: 'yt-title',
             type: 'text',
             value: title,
-            onChange: (e) => setTitle(e.target.value),
+            onChange: (e) => { setTitle(e.target.value); setTitleEdited(true); },
             placeholder: 'YouTube Video',
             className: 'bg-gray-700 border border-gray-600 text-gray-100 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-red-500 placeholder-gray-500',
           })

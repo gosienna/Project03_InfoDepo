@@ -23,6 +23,7 @@ export const Library = ({
 }) => {
   const fileInputRef      = useRef(null);
   const uploadTokenRef    = useRef(null);
+  const readTokenRef      = useRef(null); // { token, expiresAt }
   const [isDevBrowserOpen, setIsDevBrowserOpen] = useState(false);
   const [isSettingsOpen,   setIsSettingsOpen]   = useState(false);
   const [driveFolderName,  setDriveFolderName]  = useState(null);
@@ -48,9 +49,10 @@ export const Library = ({
       .catch(() => {});
   }, [credentials.folderId, credentials.apiKey]);
 
-  // Clear cached upload token if client ID changes
+  // Clear cached tokens if client ID changes
   useEffect(() => {
     uploadTokenRef.current = null;
+    readTokenRef.current = null;
   }, [credentials.clientId]);
 
   const setStatus = (key, status) =>
@@ -168,7 +170,13 @@ export const Library = ({
 
       // Phase 2: sync Drive → local
       setSyncProgress('Syncing from Drive...');
-      const readToken = await getOAuthToken(credentials.clientId, READ_SCOPE);
+      const cached = readTokenRef.current;
+      const readToken = (cached && Date.now() < cached.expiresAt)
+        ? cached.token
+        : await getOAuthToken(credentials.clientId, READ_SCOPE).then(t => {
+            readTokenRef.current = { token: t, expiresAt: Date.now() + 55 * 60 * 1000 };
+            return t;
+          });
       const syncResult = await syncDriveToLocal({
         accessToken: readToken,
         apiKey: credentials.apiKey,
