@@ -165,6 +165,7 @@ YouTube channel metadata and their video listings, fetched via YouTube Data API 
       duration: string,    // ISO 8601 duration
     }
   ],
+  tags: string[],         // same tag system as books/notes/videos
   driveId: string,         // '' (reserved for future backup)
   modifiedTime: Date,
 }
@@ -187,6 +188,10 @@ YouTube channel metadata and their video listings, fetched via YouTube Data API 
 | `addChannel(record)`            | Save a new channel record |
 | `deleteChannel(id)`             | Remove a channel |
 | `updateChannel(id, data)`       | Update channel fields (e.g. refresh video list) |
+
+### UI
+
+On the library overview (owner mode), channels render in a **section above the main grid** using the same column layout as items (`DataTile` with `tileType: 'channel'`) — same card shell and width as other tiles (`h-40` media area, red **Channel** badge, upload/delete, title, video count, optional handle line, tag row). Upload writes `{ _type: 'infodepo-channel', ... }` as `.channel.json` to Drive and sets `driveId`. Opens `YoutubeChannelViewer` on card click. Hidden in shared viewer mode.
 
 ---
 

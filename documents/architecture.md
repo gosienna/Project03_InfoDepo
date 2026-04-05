@@ -20,7 +20,7 @@ User
 App.js
 ├── Header.js               # Nav bar, back button
 ├── Library.js              # Item grid, file upload, YouTube modal, Drive browser
-│   ├── VideoCard.js        # Individual item card + delete
+│   ├── DataTile.js         # Library grid tiles (items + channels; same column layout)
 │   ├── NewNoteModal.js     # Create a new Markdown note
 │   ├── NewYoutubeModal.js  # Add a YouTube video or channel link
 │   └── DevDriveBrowser.js  # Dev/prod: OAuth + Drive API folder browser
@@ -45,7 +45,7 @@ Import (dev/prod Drive)
   DevDriveBrowser → OAuth → Drive API v3 → Blob → useIndexedDB.upsertDriveBook() → IndexedDB 'books' store
 
 Open item
-  VideoCard click → App.handleSelectVideo(video)
+  DataTile click → App.handleSelectVideo(video)
     ├── EPUB    → window.open('/reader.html?id=X')
     │             └── reader.html reads IndexedDB 'books' store by ID → EPUB.js
     ├── PDF/TXT → Reader.js → inline viewer component
@@ -59,7 +59,7 @@ Open item
 |------|------|
 | `App.js` | Root — view state, item selection routing |
 | `hooks/useIndexedDB.js` | All IndexedDB CRUD. Three stores: `books` (files), `videos` (YouTube), `assets` (images). See [data-stores.md](data-stores.md) |
-| `components/VideoCard.js` | Item card — shows YouTube thumbnail for YouTube items, BookIcon for others |
+| `components/DataTile.js` | Grid cards for items and channels — same shell; YouTube thumb or BookIcon; tags |
 | `components/YoutubeViewer.js` | Embeds YouTube video via `youtube-nocookie.com/embed/{id}` iframe |
 | `components/NewYoutubeModal.js` | Modal to save a YouTube URL as a `application/x-youtube` JSON blob |
 | `reader.html` | Standalone EPUB reader page, no React |

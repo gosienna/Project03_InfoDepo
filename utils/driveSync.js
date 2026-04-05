@@ -1,9 +1,13 @@
+import { SHARE_MANIFEST_NAME } from './shareManifest.js';
+
+const CHANNEL_JSON_MARKER = 'infodepo-channel';
+
 const SUPPORTED_MIME_TYPES = [
   'application/epub+zip',
   'application/pdf',
   'text/plain',
   'text/markdown',
-  'application/json', // YouTube URL entries backed up from the app
+  'application/json', // YouTube URL entries + channel records backed up from the app
 ];
 
 const IMAGE_MIME_TYPES = [
@@ -21,6 +25,7 @@ const ALL_SYNCABLE_MIME_TYPES = [...SUPPORTED_MIME_TYPES, ...IMAGE_MIME_TYPES];
  * Syncs the Google Drive folder to local IndexedDB.
  * Downloads all supported files (documents + images) from Drive that are new or updated.
  * Images are matched to their parent notes by scanning markdown content for ![...](filename).
+ * If allowedDriveIds is a Set, only those Drive file IDs are downloaded (shared read-only mode).
  * Returns: { added, updated, skipped }
  */
 export async function syncDriveToLocal({
@@ -35,7 +40,9 @@ export async function syncDriveToLocal({
   getImageByName,
   upsertDriveImage,
   getNotes,
+  upsertDriveChannel,
   onProgress,
+  allowedDriveIds,
 }) {
   const progress = onProgress || (() => {});
 
@@ -61,8 +68,19 @@ export async function syncDriveToLocal({
       modifiedTime: f.modifiedTime,
     }));
 
-  const contentFiles = allDriveFiles.filter(f => SUPPORTED_MIME_TYPES.includes(f.mimeType));
-  const imageFiles   = allDriveFiles.filter(f => IMAGE_MIME_TYPES.includes(f.mimeType));
+  const isManifest = (f) => f.name === SHARE_MANIFEST_NAME;
+
+  let contentFiles = allDriveFiles.filter(
+    (f) => SUPPORTED_MIME_TYPES.includes(f.mimeType) && !isManifest(f)
+  );
+  let imageFiles = allDriveFiles.filter(
+    (f) => IMAGE_MIME_TYPES.includes(f.mimeType) && !isManifest(f)
+  );
+
+  if (allowedDriveIds && allowedDriveIds.size > 0) {
+    contentFiles = contentFiles.filter((f) => allowedDriveIds.has(f.driveId));
+    imageFiles = imageFiles.filter((f) => allowedDriveIds.has(f.driveId));
+  }
 
   contentFiles.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
   imageFiles.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
@@ -102,12 +120,19 @@ export async function syncDriveToLocal({
       try {
         const text = await blob.text();
         const parsed = JSON.parse(text);
-        if (parsed.url && /youtube\.com|youtu\.be/.test(parsed.url)) {
+        if (parsed._type === CHANNEL_JSON_MARKER && parsed.channelId && upsertDriveChannel) {
+          const { _type, ...channelData } = parsed;
+          const action = await upsertDriveChannel(driveFile, channelData);
+          if (action === 'added') counts.added++;
+          else if (action === 'updated') counts.updated++;
+          else counts.skipped++;
+          continue;
+        } else if (parsed.url && /youtube\.com|youtu\.be/.test(parsed.url)) {
           const safeTitle = (parsed.title || 'YouTube Video').replace(/[/\\?%*:|"<>]/g, '-');
           effectiveFile = { ...driveFile, name: safeTitle + '.youtube', mimeType: 'application/x-youtube' };
           blob = new Blob([text], { type: 'application/x-youtube' });
         }
-      } catch { /* not valid JSON or not a YouTube entry — skip */ }
+      } catch { /* not valid JSON — fall through to upsertDriveBook */ }
     }
 
     const action = await upsertDriveBook(effectiveFile, blob);
@@ -191,6 +216,7 @@ export async function backupAllToGDrive({
   folderId,
   items,
   images,
+  channels,
   onSetDriveId,
   onProgress,
 }) {
@@ -246,6 +272,25 @@ export async function backupAllToGDrive({
       backed++;
     } catch (err) {
       console.warn(`Backup failed for image "${img.name}":`, err.message);
+      failed++;
+    }
+  }
+
+  // Back up channels
+  const pendingChannels = (channels || []).filter(ch => ch.driveId === '');
+  for (const ch of pendingChannels) {
+    const label = ch.name || ch.handle || ch.channelId;
+    progress(`Backing up channel "${label}"...`);
+    try {
+      const { id, driveId, ...rest } = ch;
+      const payload = JSON.stringify({ _type: CHANNEL_JSON_MARKER, ...rest });
+      const blob = new Blob([payload], { type: 'application/json' });
+      const safeName = label.replace(/[/\\?%*:|"<>]/g, '-');
+      const driveFile = await uploadBlob(blob, `${safeName}.channel.json`, 'application/json');
+      await onSetDriveId(id, 'channels', driveFile.id);
+      backed++;
+    } catch (err) {
+      console.warn(`Backup failed for channel "${label}":`, err.message);
       failed++;
     }
   }

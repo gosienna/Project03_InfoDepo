@@ -31,18 +31,7 @@ root.render(
 
 ### 3. `App.js` — first render
 
-On mount, two things happen in parallel:
-
-```
-App mounts
-├── useIndexedDB() hook initialises
-│     └── indexedDB.open('InfoDepo', 4)
-│           ├── onupgradeneeded → creates/migrates 'videos' object store
-│           └── onsuccess → db instance ready → loadVideos() → setIsInitialized(true)
-└── React renders loading spinner (isInitialized = false)
-```
-
-Once `isInitialized` becomes `true`, the spinner is replaced with the Library view.
+On mount, `useIndexedDB()` opens IndexedDB (`InfoDepo`; version from [`utils/infodepoDb.js`](../utils/infodepoDb.js)) and loads merged `items` (books + notes + videos) plus `channels`. When `isInitialized` is `true`, the loading spinner is replaced with the Library view (or Reader / `YoutubeChannelViewer` depending on `view`). See [data-stores.md](data-stores.md) for object stores and schema.
 
 ### 4. Loading states
 
@@ -65,7 +54,9 @@ isInitialized = true   →  Library view rendered
       <main>
         <Library />                      ← view = 'library'
         OR
-        <Reader />                       ← view = 'reader' (PDF / TXT / MD / YouTube)
+        <YoutubeChannelViewer />         ← view = 'channel' (full channel video grid)
+        OR
+        <Reader />                       ← view implied when currentVideo set (PDF / TXT / MD / YouTube)
       </main>
     </App>
   </div>
@@ -73,7 +64,7 @@ isInitialized = true   →  Library view rendered
 
 ### EPUB Reader (`reader.html`)
 
-Standalone page, no React. Opens in a new browser tab. Reads from the `videos` IndexedDB store.
+Standalone page, no React. Opens in a new browser tab. Reads the EPUB from the `books` IndexedDB store by `id` query param.
 
 ```
 <body>
@@ -88,18 +79,20 @@ Standalone page, no React. Opens in a new browser tab. Reads from the `videos` I
 ## Component Reference
 
 ### `App.js`
-**Role:** Root component. Owns view state and item selection routing.
+**Role:** Root component. Owns view state, library mode, and selection routing.
 
 **State:**
 | State | Type | Purpose |
 |-------|------|---------|
-| `view` | `'library' \| 'reader'` | Which view is shown |
-| `currentVideo` | `object \| null` | Item being viewed (non-EPUB) |
-| `downloadPromptVideo` | `object \| null` | Cloud-only item awaiting download confirmation |
+| `view` | `'library' \| 'reader' \| 'channel'` | `'library'` → `Library`; `'reader'` → `Reader` (`currentVideo`); `'channel'` → `YoutubeChannelViewer` (`currentChannel`) |
+| `libraryMode` | `'owner' \| 'shared'` | Persisted via `utils/libraryMode.js` — shared sync uses Drive manifest + tag shares |
+| `currentVideo` | `object \| null` | Item being read (non-EPUB in-app) |
+| `currentChannel` | `object \| null` | Channel when `view === 'channel'` |
 
 **Key logic:**
-- `handleSelectVideo(video)` — if EPUB, calls `window.open('/reader.html?id=X', '_blank')` and returns. All other types set `currentVideo` and switch to reader view. Cloud-only items show a download prompt instead.
-- Delegates all IndexedDB operations to `useIndexedDB` hook.
+- `handleSelectVideo` / `openVideo` — EPUB opens `reader.html?id=` in a new tab; other types set `currentVideo` and show `Reader`.
+- `handleSelectChannel` — sets `currentChannel` and `view` to `'channel'` for `YoutubeChannelViewer`.
+- Delegates IndexedDB to `useIndexedDB` (`items`, `channels`, CRUD, tags, Drive sync helpers).
 
 ---
 
@@ -111,112 +104,95 @@ Standalone page, no React. Opens in a new browser tab. Reads from the `videos` I
 |------|------|---------|
 | `onBack` | `function \| undefined` | If provided, shows back arrow (reader view only) |
 
-**Renders:** App logo + title. Back button appears only when in reader view.
+**Renders:** App logo + title. Back button appears when not on the library view (reader or channel).
 
 ---
 
 ### `Library.js`
-**Role:** Item grid, file import, YouTube modal, Drive browser trigger (dev + prod).
+**Role:** Library overview — merged item grid, YouTube **channels** grid (owner mode), search/filters, owner vs shared mode, Drive sync/backup, tag sharing, and add flows (file, note, YouTube, channel).
 
-**Props:**
+**Layout:** Two sections use the **same responsive grid** (`grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6`): **channels** first (hidden in shared mode), then **items**. Both use [`DataTile.js`](DataTile.js).
+
+**Props (representative):**
 | Prop | Type | Purpose |
 |------|------|---------|
-| `videos` | `array` | List of items from IndexedDB |
-| `onSelectVideo` | `function` | Called when an item card is clicked |
-| `onAddVideo` | `function` | Saves a new item to IndexedDB |
-| `onDeleteVideo` | `function` | Deletes an item by ID |
-| `onClearLibrary` | `function` | Clears all items |
-| `getVideoByDriveId` | `function` | Drive sync lookup |
-| `getVideoByName` | `function` | Drive sync lookup |
-| `upsertDriveVideo` | `function` | Drive sync upsert |
-| `evictToMetadata` | `function` | Convert items to cloud-only stubs |
+| `items` | `array` | Merged books + notes + videos from `useIndexedDB` |
+| `channels` | `array` | `channels` store rows |
+| `libraryMode` | `'owner' \| 'shared'` | UI for owner backup vs read-only shared sync |
+| `onLibraryModeChange` | `function` | Toggle mode |
+| `onSelectItem` | `function` | Open item in reader / EPUB tab |
+| `onSelectChannel` | `function` | Open `YoutubeChannelViewer` |
+| `onAddItem` | `function` | Add local file / note / YouTube item |
+| `onDeleteItem` | `function` | Delete library item |
+| `onClearLibrary` | `function` | Wipe stores |
+| `onSetDriveId` | `function` | Persist Drive file id after upload |
+| `onAddChannel` / `onDeleteChannel` | `function` | Channel CRUD |
+| `setRecordTags` | `function` | Tag persistence (`idbStore` or `'channels'`) |
+| `getTagSharesList`, `setTagShareEmails`, `deleteTagShare` | `function` | Tag-based Drive sharing |
+| `getMergedLibraryItems` | `function` | Manifest / sync snapshot |
+| Plus Drive sync helpers | … | `getBookByDriveId`, `upsertDriveBook`, images, `upsertDriveChannel`, etc. |
 
-**State:**
+**State (representative):**
 | State | Purpose |
 |-------|---------|
-| `isDevBrowserOpen` | Toggles `DevDriveBrowser` modal |
-| `isSettingsOpen` | Toggles `DriveSettingsModal` (production only) |
-| `isNewNoteOpen` | Toggles `NewNoteModal` |
-| `isYoutubeOpen` | Toggles `NewYoutubeModal` |
-| `credentials` | `{clientId, apiKey, folderId}` — sourced from `getDriveCredentials()` |
-| `driveFolderName` | Display name fetched from Drive API when credentials are valid |
-| `uploadStatuses` | Per-item Drive upload state (`null \| 'uploading' \| 'success' \| 'error'`) |
+| `searchQuery`, `activeFilters` | Filter items and channels (e.g. by store type) |
+| `isDevBrowserOpen`, `isSettingsOpen` | Drive folder browser / credentials modal |
+| `isNewNoteOpen`, `isYoutubeOpen`, `isChannelOpen` | Add modals |
+| `isTagShareOpen`, `isSystemSettingsOpen`, `isAddMenuOpen` | Tag sharing & menus |
+| `uploadStatuses` | Per-tile Drive upload state; keys include `libraryItemKey(item)` and `channel-${id}` for channels |
+| `credentials`, `driveFolderName` | Drive linkage |
+| `isSyncing`, `syncResult`, `syncProgress` | Combined sync + backup |
+| `availableTags` | Union of tags from items, channels, and tag-share rows (for `DataTile` dropdowns) |
 
-**Toolbar buttons:**
-```
-DEV: Test Folder   (dev only)  → opens DevDriveBrowser
-Drive Folder       (prod only) → opens DriveSettingsModal or DevDriveBrowser
-Sync                           → syncDriveToLocal()
-New Note                       → opens NewNoteModal
-Add YouTube                    → opens NewYoutubeModal
-Add File                       → hidden <input type="file"> triggered via ref
-🗑 (trash)                     → confirm + onClearLibrary()
-```
+**Toolbar / actions (simplified):** Drive folder access (dev/prod), **Sync** (owner backup + sync + manifest), **Mode: owner / shared**, search, filter chips (Books / Notes / Videos / Channels), add menu (file, note, YouTube, channel), tag sharing, clear library.
 
-**File upload flow:**
-```
-"Add File" clicked
-  → hidden <input type="file"> triggered via ref
-  → user selects file
-  → handleFileChange(e)
-  → onAddVideo(file.name, file.type, file)   ← File extends Blob, stored directly
-  → input value reset (allows re-selecting same file)
-```
+**File upload:** Hidden file input → `onAddItem(name, type, file)`.
 
-**YouTube add flow:**
-```
-"Add YouTube" clicked
-  → NewYoutubeModal opens
-  → user enters URL (+ optional title)
-  → JSON blob created: { url, title }
-  → onAddVideo(filename, 'application/x-youtube', blob)
-  → modal closes
-```
-
-**Drive button behaviour:**
-```
-Dev:   yellow "DEV: Test Folder" → opens DevDriveBrowser (credentials from .env)
-Prod:  teal "Drive Folder"
-         no credentials saved → opens DriveSettingsModal first
-         credentials saved    → opens DevDriveBrowser directly
-                                 gear icon beside button opens DriveSettingsModal to edit
-```
-
-**Empty state:** When `videos.length === 0`, shows a centred placeholder with an "Add Your First File" button.
+**Empty / no-results:** Placeholders when the filtered grid is empty or shared sync has nothing yet.
 
 ---
 
-### `VideoCard.js`
-**Role:** Single item card in the grid.
+### `DataTile.js`
+**Role:** Single component for library **items** (`tileType: 'item'`) and **YouTube channels** (`tileType: 'channel'`). Both use the same Tailwind shell (`DATA_TILE_SHELL` in source: rounded card, shadow, `w-full`, hover lift) so tile **width** matches whatever grid column `Library.js` assigns.
 
-**Props:**
+**Props (`tileType: 'item'`):**
 | Prop | Type | Purpose |
 |------|------|---------|
-| `video` | `object` | `{id, name, type, data, size, added, isMetadataOnly?}` |
+| `item` | `object` | `{ id, name, type, data, size, idbStore, tags?, ... }` |
 | `onSelect` | `function` | Opens the item |
-| `onDelete` | `function` | Deletes the item |
-| `onUpload` | `function` | Uploads to Google Drive |
+| `onDelete` | `function` | `(id, type) => void` — routed to the correct store |
+| `onUpload` | `function` | `(item) => void` — multipart upload to Drive folder |
 | `uploadStatus` | `null \| 'uploading' \| 'success' \| 'error'` | Drive upload state |
+| `onSetTags` | `function \| undefined` | `(item, tags) => void` — `setRecordTags(id, idbStore, tags)` |
+| `readOnly` | `boolean` | Hides upload, delete, tag editing (shared viewer) |
+| `availableTags` | `string[]` | Suggestions for the tag dropdown |
 
-**Renders:**
-```
-Card (clickable)
-├── Cover area
-│   ├── YouTube items  → thumbnail from img.youtube.com/vi/{id}/mqdefault.jpg
-│   │                    (red play-button SVG if no video ID, e.g. channel links)
-│   └── Other items    → BookIcon
-│   ├── Type badge (top-right): red "YouTube" for YouTube, indigo extension for others
-│   ├── "☁ Cloud" badge (top-left, cloud-only items only)
-│   └── Action buttons (bottom-right, visible on hover)
-│       ├── Upload button (Drive)
-│       └── Delete button
-└── Info area
-    ├── Item name (truncated)
-    ├── File size (formatted: KB / MB)
-    └── "Click to download & read" (cloud-only items only)
-```
+**Props (`tileType: 'channel'`):**
+| Prop | Type | Purpose |
+|------|------|---------|
+| `channel` | `object` | `channels` store record (`name`, `thumbnailUrl`, `videos[]`, `tags`, `driveId`, …) |
+| `onSelect` | `function` | Opens `YoutubeChannelViewer` |
+| `onDelete` | `function` | `(id) => void` — e.g. `deleteChannel` |
+| `onUpload` | `function` | `(channel) => void` — uploads `{ _type: 'infodepo-channel', ... }` as `.channel.json` (aligned with `utils/driveSync.js` backup) |
+| `uploadStatus` | `null \| 'uploading' \| 'success' \| 'error'` | Per-channel upload state |
+| `onSetTags` | `function \| undefined` | `(channel, tags) => void` — `setRecordTags(id, 'channels', tags)` |
+| `readOnly` | `boolean` | Same as items |
+| `availableTags` | `string[]` | Tag suggestions |
 
-YouTube thumbnail is extracted asynchronously via `FileReader` reading the JSON blob on mount.
+**Item card layout:** `h-40` media (YouTube thumb from blob URL or `BookIcon`), type badge, upload/delete on hover (bottom-right), title, size, tag chips; add-tag **dropdown / new-tag input** are hidden until **hover** on the tag row or **focus-within** (keyboard). Optional IndexedDB hint line for Markdown notes.
+
+**Channel tile layout:** Same shell as items: `h-40` cover (channel avatar or YouTube logo fallback), red **Channel** badge, upload/delete on hover, title, video count, optional handle, tag row (same hover behaviour).
+
+YouTube thumbnails for **items** are resolved asynchronously via `FileReader` on the JSON blob.
+
+---
+
+### `YoutubeChannelViewer.js`
+**Role:** Full-page view for a saved YouTube channel — sortable list of non-Shorts videos from the `channels` record.
+
+**Props:** `channel`, `onBack`, `onSelectItem` (opens a video in `Reader` via parent), `onDeleteChannel`.
+
+**UI:** Header with back, avatar, title, delete channel; sort buttons; grid of `DataTile` (`tileType: 'item'`) with synthetic `application/x-youtube` items built from each `videoId` (plus metadata row under each card).
 
 ---
 
@@ -227,9 +203,10 @@ YouTube thumbnail is extracted asynchronously via `FileReader` reading the JSON 
 | Prop | Type | Purpose |
 |------|------|---------|
 | `video` | `object` | Full item record from IndexedDB |
-| `onUpdateVideo` | `function` | Persists updated Markdown content |
-| `onAddAsset` | `function` | Saves image assets for Markdown notes |
-| `onGetAssets` | `function` | Retrieves image assets for Markdown notes |
+| `onUpdateItem` | `function` | Persists updated blob (e.g. Markdown saves) |
+| `onAddImage` | `function` | Saves image assets for Markdown notes |
+| `onGetImages` | `function` | Retrieves image assets for the note |
+| `readOnly` | `boolean` | Passed through to `MarkdownEditor` in shared mode |
 
 **Routing logic:**
 ```js
@@ -302,9 +279,10 @@ videoId absent  → YouTube logo + "Open in YouTube" link (channel/playlist fall
 | Prop | Type | Purpose |
 |------|------|---------|
 | `video` | `object` | Note record (`id`, `name`, `data`) |
-| `onUpdateVideo` | `function` | Saves updated Markdown blob |
-| `onAddAsset` | `function` | Stores an image asset linked to the note |
-| `onGetAssets` | `function` | Retrieves image assets for the note |
+| `onUpdateItem` | `function` | Saves updated Markdown blob |
+| `onAddImage` | `function` | Stores an image asset linked to the note |
+| `onGetImages` | `function` | Retrieves image assets for the note |
+| `readOnly` | `boolean` | Disables editing when true |
 
 **Features:**
 - Live preview — transparent textarea overlays rendered HTML; caret stays aligned.
@@ -314,9 +292,9 @@ videoId absent  → YouTube logo + "Open in YouTube" link (channel/playlist fall
   - Images (full / 300px / 500px / 800px)
   - **YouTube embed** — inserts `[Video Title](https://youtube.com/watch?v=)` placeholder
 - YouTube link rendering — `[text](youtube-url)` renders as an inline thumbnail card in the preview.
-- Image assets — drag-drop, paste, or slash-command insert; stored in `assets` IndexedDB store.
+- Image assets — drag-drop, paste, or slash-command insert; stored in the `images` IndexedDB store (see [data-stores.md](data-stores.md)).
 - Export as ZIP — `.md` file + `images/` folder.
-- Save — Ctrl+S or Save button → `onUpdateVideo(id, blob)`.
+- Save — Ctrl+S or Save button → `onUpdateItem(id, blob)`.
 
 ---
 
@@ -399,38 +377,25 @@ Displays text in a `<pre>` tag with `whitespace-pre-wrap` to preserve formatting
 
 ## `useIndexedDB` Hook
 
-Located at `hooks/useIndexedDB.js`. Encapsulates all database logic.
+Located at [`hooks/useIndexedDB.js`](../hooks/useIndexedDB.js). Encapsulates all IndexedDB access.
 
-**Database:** `InfoDepo` (version 4)
-**Object stores:** `videos` (primary), `assets` (image attachments for Markdown notes)
-**Schema (`videos`):** `{ id (auto), name, type, data (Blob|null), size, added (Date), driveId?, driveModifiedTime?, isMetadataOnly? }`
-**Schema (`assets`):** `{ id (auto), noteId, filename, data (Blob), mimeType }`
-**Sort order:** Newest first (`added` timestamp descending)
+**Database:** `InfoDepo` — version `INFO_DEPO_DB_VERSION` from [`utils/infodepoDb.js`](../utils/infodepoDb.js).
 
-**Migration history:**
-| Version | Change |
-|---------|--------|
-| 1 | Created `videos` store (originally `books`) |
-| 2 | Added `assets` store with `noteId` index |
-| 3 | Added `driveId` index on `videos`/`books` store |
-| 4 | Renamed `books` → `videos` (copy + delete migration) |
+**Stores:** `books`, `notes`, `videos`, `images`, `channels`, and `tagShares` (upgrade path adds tag-shares store). Merged **items** in the UI combine `books` + `notes` + `videos` with `idbStore` and `tags` attached for each row.
 
-**Returned API:**
-| | Type | Description |
-|--|------|-------------|
-| `videos` | `array` | All items, sorted newest-first |
-| `isInitialized` | `bool` | False until DB is open and items are loaded |
-| `addVideo(name, type, data)` | `async fn` | Adds an item, reloads list |
-| `updateVideo(id, blob)` | `async fn` | Updates item data (used by MarkdownEditor) |
-| `deleteVideo(id)` | `async fn` | Deletes by ID (also removes linked assets) |
-| `clearVideos()` | `fn` | Removes all items and assets |
-| `addAsset(noteId, filename, data, mimeType)` | `async fn` | Stores an image asset |
-| `getAssetsForNote(noteId)` | `async fn` | Retrieves all assets for a note |
-| `getVideoByDriveId(driveId)` | `async fn` | Drive sync lookup |
-| `getVideoByName(name)` | `async fn` | Drive sync lookup |
-| `upsertDriveVideo(driveFile, blob)` | `async fn` | Create or update Drive-linked record |
-| `evictToMetadata(ids)` | `async fn` | Convert items to metadata-only stubs |
-| `markAsDownloaded(id, blob)` | `async fn` | Upgrade stub to full local copy |
+**Authoritative schema, field lists, and Drive behaviour:** see **[data-stores.md](data-stores.md)** and [google-drive-integration.md](google-drive-integration.md).
+
+**Returned API (high level):**
+| | Description |
+|--|-------------|
+| `items`, `channels` | Arrays for the library UI |
+| `addItem`, `updateItem`, `deleteItem`, `clearAll` | Item CRUD across routed stores |
+| `addChannel`, `deleteChannel`, `updateChannel`, `upsertDriveChannel`, … | Channel CRUD + Drive |
+| `addImage`, `getImagesForNote`, `getAllImages`, … | Note images |
+| `setItemDriveId`, `setRecordTags` | Drive ids and per-row tags |
+| `getTagSharesList`, `setTagShareEmails`, `deleteTagShare` | Tag-based sharing |
+| `getMergedLibraryItems` | Snapshot for manifest / sync |
+| `getBookByDriveId`, `getBookByName`, `upsertDriveBook`, … | Drive sync helpers |
 
 ---
 
@@ -446,25 +411,18 @@ Browser opens app
   index.js → ReactDOM.createRoot → renders App
        │
        ▼
-  App mounts → useIndexedDB initialises IndexedDB (v4, store: 'videos')
+  App mounts → useIndexedDB opens InfoDepo and loads items + channels
        │
-  isInitialized = false
-       │  (DB opens, items loaded)
-       ▼
-  isInitialized = true → Library rendered
+  isInitialized = false → spinner
        │
-  ┌────┴────────────────────────┐
-  │                             │
-User uploads file/URL        User clicks card
-  │                             │
-  ├── Add File → file picker    ├── EPUB    → window.open(reader.html?id=X)
-  ├── Add YouTube → modal       ├── PDF/TXT → Reader.js → PdfViewer / TxtViewer
-  └── New Note → modal          ├── MD      → Reader.js → MarkdownEditor
-       │                        └── YouTube → Reader.js → YoutubeViewer
+  isInitialized = true → Library (grid: channels section + items section)
+       │
+  ┌────┴────────────────────────────────────────────┐
+  │                                                  │
+Add flows (owner)                              Open from grid
+  ├── Add file / note / YouTube / channel        ├── Item card → Reader or reader.html (EPUB)
+  └── onAddItem / addChannel → IndexedDB         ├── Channel card → YoutubeChannelViewer
+       │                                           └── DataTile re-renders on state updates
        ▼
-  addVideo() →
-  IndexedDB write →
-  loadVideos() →
-  videos state updates →
-  VideoCard re-renders
+  loadItems() / loadChannels() (inside hook)
 ```

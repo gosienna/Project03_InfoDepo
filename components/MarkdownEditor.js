@@ -208,7 +208,7 @@ const SLASH_COMMANDS = [
 
 // Saves go through onUpdateItem → useIndexedDB.updateItem (routes by `video.type`: `notes` vs `books`).
 
-export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages }) => {
+export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, readOnly }) => {
   const [text,      setText]      = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isDirty,   setIsDirty]   = useState(false);
@@ -586,6 +586,29 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages })
       'div',
       { className: 'flex items-center justify-center h-full' },
       React.createElement('div', { className: 'animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-400' })
+    );
+  }
+
+  if (readOnly) {
+    return React.createElement(
+      'div',
+      { className: 'w-full h-full flex flex-col bg-gray-800 rounded-lg shadow-lg overflow-hidden' },
+      React.createElement(
+        'div',
+        { className: 'flex items-center justify-between px-4 py-2 border-b border-gray-700 bg-gray-800/80 shrink-0' },
+        React.createElement(
+          'span',
+          { className: 'text-sm text-gray-400 font-mono truncate max-w-xs', title: video.name },
+          video.name
+        ),
+        React.createElement('span', { className: 'text-xs text-amber-400 font-medium' }, 'Read-only')
+      ),
+      React.createElement('div', {
+        className: 'bg-gray-900 text-gray-100 text-sm leading-relaxed p-6 overflow-auto flex-1',
+        dangerouslySetInnerHTML: {
+          __html: text ? renderMarkdown(text, assetUrls) : '<p class="text-gray-500">Empty note</p>',
+        },
+      })
     );
   }
 

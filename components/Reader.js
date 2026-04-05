@@ -16,7 +16,7 @@ const MIME_TO_EXT = {
   'application/x-youtube': 'youtube',
 };
 
-export const Reader = ({ video, onUpdateItem, onAddImage, onGetImages }) => {
+export const Reader = ({ video, onUpdateItem, onAddImage, onGetImages, readOnly }) => {
   const fileExtension = useMemo(() => {
     const ext = getFileExtension(video.name);
     return ext || MIME_TO_EXT[video.type] || '';
@@ -31,7 +31,7 @@ export const Reader = ({ video, onUpdateItem, onAddImage, onGetImages }) => {
       case 'txt':
         return React.createElement(TxtViewer, { data: video.data });
       case 'md':
-        return React.createElement(MarkdownEditor, { video, onUpdateItem, onAddImage, onGetImages });
+        return React.createElement(MarkdownEditor, { video, onUpdateItem, onAddImage, onGetImages, readOnly });
       case 'youtube':
         return React.createElement(YoutubeViewer, { video });
       default:

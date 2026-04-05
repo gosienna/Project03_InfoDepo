@@ -8,7 +8,7 @@
  *
  * books/notes/videos/images use: { id, name, data, driveId, type, size, modifiedTime }
  * images adds: noteId
- * channels uses: { id, channelId, handle, name, thumbnailUrl, videos[], driveId, modifiedTime }
+ * channels uses: { id, channelId, handle, name, thumbnailUrl, videos[], tags[], driveId, modifiedTime }
  *
  * To reset: clear site data (DevTools → Application → Storage → Clear site data).
  */

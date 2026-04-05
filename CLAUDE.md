@@ -59,7 +59,7 @@ App.js                         # View switching (library ↔ reader ↔ channel)
 │   ├── DriveSettingsModal.js  # Production UI to enter/save Drive credentials
 │   ├── NewChannelModal.js     # YouTube channel URL input + API fetch
 │   └── NewYoutubeModal.js     # Single YouTube video URL input
-├── YoutubeChannelViewer.js    # Sortable video grid for a channel (reuses VideoCard)
+├── YoutubeChannelViewer.js    # Sortable video grid for a channel (reuses DataTile)
 └── Reader.js                  # Dispatches to viewer by file extension / MIME type
     ├── PdfViewer.js
     └── TxtViewer.js

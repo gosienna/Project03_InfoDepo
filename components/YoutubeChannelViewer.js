@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo } from 'react';
-import { VideoCard } from './VideoCard.js';
+import { DataTile } from './DataTile.js';
 
 const SORT_MODES = [
   { key: 'newest',      label: 'Newest First' },
@@ -149,8 +149,9 @@ export const YoutubeChannelViewer = ({ channel, onBack, onSelectItem, onDeleteCh
             return React.createElement(
               'div',
               { key: cv.videoId, className: 'relative' },
-              React.createElement(VideoCard, {
-                video: item,
+              React.createElement(DataTile, {
+                tileType: 'item',
+                item,
                 onSelect: handleSelect,
                 onDelete: () => {},
                 onUpload: () => {},

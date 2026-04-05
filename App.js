@@ -6,6 +6,7 @@ import { Reader } from './components/Reader.js';
 import { YoutubeChannelViewer } from './components/YoutubeChannelViewer.js';
 import { useIndexedDB } from './hooks/useIndexedDB.js';
 import { libraryItemKey } from './utils/libraryItemKey.js';
+import { getLibraryMode as readLibraryMode, setLibraryMode as persistLibraryMode } from './utils/libraryMode.js';
 
 const App = () => {
   const {
@@ -14,8 +15,17 @@ const App = () => {
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
     setItemDriveId,
     addChannel, deleteChannel, updateChannel,
+    getChannelByDriveId, upsertDriveChannel,
     getBookByDriveId, getBookByName, upsertDriveBook,
+    setRecordTags,
+    getTagSharesList, setTagShareEmails, deleteTagShare,
+    getMergedLibraryItems,
   } = useIndexedDB();
+  const [libraryMode, setLibraryModeState] = useState(() => readLibraryMode());
+  const setLibraryMode = (mode) => {
+    persistLibraryMode(mode);
+    setLibraryModeState(mode);
+  };
   const [currentVideo, setCurrentVideo] = useState(null);
   const [currentChannel, setCurrentChannel] = useState(null);
   const [view, setView] = useState('library');
@@ -73,6 +83,8 @@ const App = () => {
         ? React.createElement(Library, {
             items,
             channels,
+            libraryMode,
+            onLibraryModeChange: setLibraryMode,
             onSelectItem: handleSelectVideo,
             onSelectChannel: handleSelectChannel,
             onAddItem: addItem,
@@ -82,6 +94,8 @@ const App = () => {
             onGetAllImages: getAllImages,
             onAddChannel: addChannel,
             onDeleteChannel: deleteChannel,
+            getChannelByDriveId,
+            upsertDriveChannel,
             getBookByDriveId,
             getBookByName,
             upsertDriveBook,
@@ -89,6 +103,11 @@ const App = () => {
             getImageByName,
             upsertDriveImage,
             getNotes,
+            setRecordTags,
+            getTagSharesList,
+            setTagShareEmails,
+            deleteTagShare,
+            getMergedLibraryItems,
           })
         : view === 'channel' && currentChannel
         ? React.createElement(YoutubeChannelViewer, {
@@ -104,6 +123,7 @@ const App = () => {
             onUpdateItem: updateItem,
             onAddImage: addImage,
             onGetImages: getImagesForNote,
+            readOnly: libraryMode === 'shared',
           })
         : React.createElement(
             "div",
