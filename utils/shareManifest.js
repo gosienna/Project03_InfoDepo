@@ -54,6 +54,150 @@ export async function collectDriveIdsForTag(tag, items, images, channels) {
 }
 
 /**
+ * Drive IDs for explicitly listed refs: each driveId plus embedded images for markdown notes.
+ */
+export async function collectDriveIdsForExplicitRefs(explicitRefs, items, images, channels) {
+  const ids = new Set();
+  const itemsArr = items || [];
+  const imagesArr = images || [];
+  const refs = explicitRefs || [];
+
+  for (const ref of refs) {
+    const did = String(ref?.driveId || '').trim();
+    if (!did) continue;
+    ids.add(did);
+    const item = itemsArr.find((it) => it.driveId === did);
+    if (item && item.idbStore === NOTES_STORE && item.type === 'text/markdown' && item.data) {
+      const text = await blobToText(item.data);
+      const imgRefs = text.match(/!\[[^\]]*\]\(([^)]+)\)/g) || [];
+      for (const r of imgRefs) {
+        const m = r.match(/!\[[^\]]*\]\(([^)]+)\)/);
+        if (!m) continue;
+        const fname = m[1];
+        const img = imagesArr.find((im) => im.noteId === item.id && im.name === fname);
+        if (img?.driveId) ids.add(img.driveId);
+      }
+    }
+    const ch = (channels || []).find((c) => c.driveId === did);
+    if (ch) ids.add(did);
+  }
+
+  return [...ids];
+}
+
+/**
+ * @param {Array<{
+ *   recipients: string[],
+ *   includeTags: string[],
+ *   explicitRefs: { name: string, driveId: string }[],
+ *   role?: string
+ * }>} shareRecords — owner rows only
+ */
+export async function buildFileToDesiredReadersFromShareRecords(shareRecords, items, images, channels) {
+  const map = new Map();
+  const rows = (shareRecords || []).filter((r) => r && r.role !== 'receiver');
+
+  for (const rec of rows) {
+    const emails = [
+      ...new Set(
+        (rec.recipients || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean)
+      ),
+    ];
+    if (emails.length === 0) continue;
+
+    const idSet = new Set();
+    for (const tag of rec.includeTags || []) {
+      const tids = await collectDriveIdsForTag(tag, items, images, channels || []);
+      tids.forEach((id) => idSet.add(id));
+    }
+    const eids = await collectDriveIdsForExplicitRefs(rec.explicitRefs, items, images, channels || []);
+    eids.forEach((id) => idSet.add(id));
+
+    for (const fid of idSet) {
+      if (!map.has(fid)) map.set(fid, new Set());
+      const set = map.get(fid);
+      for (const e of emails) set.add(e);
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Union of recipient emails from owner share records and optional previous Drive payloads.
+ */
+export function collectRecipientEmailsFromShares(shareRecords, previousPayloads) {
+  const s = new Set();
+  for (const rec of shareRecords || []) {
+    if (rec?.role === 'receiver') continue;
+    for (const e of rec.recipients || []) {
+      const n = String(e).trim().toLowerCase();
+      if (n) s.add(n);
+    }
+  }
+  for (const p of previousPayloads || []) {
+    for (const e of p?.recipients || []) {
+      const n = String(e).trim().toLowerCase();
+      if (n) s.add(n);
+    }
+  }
+  return s;
+}
+
+/**
+ * Expand a saved share JSON payload to all Drive file IDs it implies (tags + explicit + note images).
+ */
+export async function expandSharePayloadToDriveIds(payload, items, images, channels) {
+  const ids = new Set();
+  if (!payload) return ids;
+  for (const tag of payload.includeTags || []) {
+    (await collectDriveIdsForTag(tag, items, images, channels || [])).forEach((id) => ids.add(id));
+  }
+  (await collectDriveIdsForExplicitRefs(payload.explicitRefs, items, images, channels || [])).forEach((id) =>
+    ids.add(id)
+  );
+  return ids;
+}
+
+/**
+ * All Drive file IDs to reconcile for share ACLs: library + current owner config + previous payloads.
+ * @param {Array<object>} [currentOwnerRecords] — owner rows with includeTags / explicitRefs
+ */
+export async function collectAllDriveFileIdsForShareReconcile(
+  items,
+  images,
+  channels,
+  previousPayloads,
+  currentOwnerRecords
+) {
+  const ids = new Set();
+  for (const it of items || []) {
+    if (it.driveId) ids.add(it.driveId);
+  }
+  for (const im of images || []) {
+    if (im.driveId) ids.add(im.driveId);
+  }
+  for (const ch of channels || []) {
+    if (ch.driveId) ids.add(ch.driveId);
+  }
+  for (const rec of currentOwnerRecords || []) {
+    if (!rec || rec.role === 'receiver') continue;
+    const expanded = await expandSharePayloadToDriveIds(
+      { includeTags: rec.includeTags, explicitRefs: rec.explicitRefs },
+      items,
+      images,
+      channels || []
+    );
+    expanded.forEach((id) => ids.add(id));
+  }
+  for (const p of previousPayloads || []) {
+    const expanded = await expandSharePayloadToDriveIds(p, items, images, channels || []);
+    expanded.forEach((id) => ids.add(id));
+  }
+  return ids;
+}
+
+/**
  * @param {object} opts
  * @param {Array} opts.items — merged library rows (books, notes, videos)
  * @param {Array} opts.images

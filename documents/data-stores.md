@@ -1,6 +1,6 @@
 # Data Stores
 
-InfoDepo uses **five** IndexedDB object stores inside the `InfoDepo` database (schema version: **1**).
+InfoDepo uses **six** IndexedDB object stores inside the `InfoDepo` database (schema version: **2**).
 
 ---
 
@@ -13,8 +13,19 @@ InfoDepo uses **five** IndexedDB object stores inside the `InfoDepo` database (s
 | `videos`   | YouTube links (JSON blob)             | Yes — as `.json` |
 | `images`   | Image attachments for Markdown notes  | Yes          |
 | `channels` | YouTube channel metadata + video list | No           |
+| `shares`   | Drive share configs (JSON shape, string `id` key) | N/A (metadata only) |
 
-The hook `useIndexedDB` (`hooks/useIndexedDB.js`) manages all stores and exposes a unified `items` array (books + notes + videos combined, sorted newest-first by `modifiedTime`) and a separate `channels` array.
+The hook `useIndexedDB` (`hooks/useIndexedDB.js`) manages all stores and exposes a unified `items` array (books + notes + videos combined, sorted newest-first by `modifiedTime`), a `channels` array, and a **`shares` array** (rows from the `shares` store).
+
+**Clear library:** `clearAll()` wipes all six object stores.
+
+Upgrading from DB v1: existing `localStorage` key `infodepo_shares_v1` is migrated into `shares` on first open and then removed.
+
+---
+
+## Store: `shares`
+
+Owner and receiver **share configs** (recipients by email, `includeTags`, `explicitRefs`, `driveFileName`, `driveFileId`, `role`, `updatedAt`) use the same logical shape as the Drive JSON in [`utils/sharesDriveJson.js`](../utils/sharesDriveJson.js) (`*.infodepo-shares.json` in the linked folder). **Drive Permissions API** (`utils/driveSharePermissions.js`) grants reader access to listed files. If grants fail with 403, the client may need broader Drive scope than `drive.file` — see Google’s Drive API auth docs.
 
 ---
 
@@ -64,7 +75,7 @@ File-based reading content imported from local disk or synced down from Google D
 | `addItem(name, type, data)`        | Routes here for EPUB/PDF/TXT MIME types |
 | `updateItem(id, content, type)`    | Replace blob; sets `modifiedTime: new Date()` |
 | `deleteItem(id, type)`             | Delete record + any linked images |
-| `clearAll()`                       | Wipe all four stores |
+| `clearAll()`                       | Wipe all six object stores |
 | `getBookByDriveId(driveId)`        | Look up by Drive file ID (searches books + notes) |
 | `getBookByName(name)`              | Look up by filename (searches books + notes) |
 | `upsertDriveBook(driveFile, blob)` | Insert or update a Drive-synced record |
@@ -230,6 +241,6 @@ See [google-drive-integration.md](google-drive-integration.md) for the full back
 
 ## Schema Version
 
-Current version: **1** — all five stores created in a single upgrade block with the final schema. No migration chain.
+Current version: **2** — adds the `shares` store (`keyPath: 'id'`, index `driveFileId`). Upgrading from v1 runs a one-time migration: rows from `localStorage` key `infodepo_shares_v1` are copied into `shares`, then that key is removed.
 
 To reset the database (e.g. after a schema change during development): DevTools → Application → Storage → Clear site data, then reload.

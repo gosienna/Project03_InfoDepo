@@ -8,7 +8,10 @@ const NOTES_STORE    = 'notes';
 const VIDEOS_STORE   = 'videos';
 const IMAGES_STORE   = 'images';
 const CHANNELS_STORE = 'channels';
-const TAG_SHARES_STORE = 'tagShares';
+const SHARES_STORE   = 'shares';
+
+/** Legacy localStorage key — migrated to `shares` store on DB v2 upgrade. */
+const LEGACY_SHARES_LS_KEY = 'infodepo_shares_v1';
 
 const isYoutubeType = (type) =>
   type != null && String(type).trim() === 'application/x-youtube';
@@ -52,6 +55,7 @@ export const useIndexedDB = () => {
   const [db, setDb] = useState(null);
   const [items, setItems] = useState([]);
   const [channels, setChannels] = useState([]);
+  const [shares, setShares] = useState([]);
   const [isInitialized, setIsInitialized] = useState(false);
 
   const initDB = useCallback(() => {
@@ -90,8 +94,23 @@ export const useIndexedDB = () => {
         addStore(IMAGES_STORE,   [{ key: 'noteId',    path: 'noteId',    unique: false }]);
         addStore(CHANNELS_STORE, [{ key: 'channelId', path: 'channelId', unique: true  }]);
       }
-      if (event.oldVersion < 2 && !dbInstance.objectStoreNames.contains(TAG_SHARES_STORE)) {
-        dbInstance.createObjectStore(TAG_SHARES_STORE, { keyPath: 'tag' });
+      if (event.oldVersion < 2 && !dbInstance.objectStoreNames.contains(SHARES_STORE)) {
+        const sharesOs = dbInstance.createObjectStore(SHARES_STORE, { keyPath: 'id' });
+        sharesOs.createIndex('driveFileId', 'driveFileId', { unique: false });
+        try {
+          const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(LEGACY_SHARES_LS_KEY) : null;
+          if (raw) {
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr)) {
+              for (const row of arr) {
+                if (row && row.id) sharesOs.put(row);
+              }
+            }
+          }
+          localStorage.removeItem(LEGACY_SHARES_LS_KEY);
+        } catch (e) {
+          console.warn('[InfoDepo] shares migration from localStorage:', e);
+        }
       }
     };
   }, []);
@@ -161,72 +180,58 @@ export const useIndexedDB = () => {
     req.onerror = () => setChannels([]);
   }, [db]);
 
-  /** Remove `tagShares` rows whose tag no longer appears on any book, note, video, channel, or image. */
-  const pruneOrphanTagShares = useCallback(() => {
-    if (!db) return Promise.resolve();
-    const contentStores = [BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, CHANNELS_STORE, IMAGES_STORE];
+  const loadShares = useCallback(() => {
+    if (!db) return;
+    let tx;
+    try {
+      tx = db.transaction(SHARES_STORE, 'readonly');
+    } catch {
+      setShares([]);
+      return;
+    }
+    const req = tx.objectStore(SHARES_STORE).getAll();
+    req.onsuccess = () => setShares(req.result || []);
+    req.onerror = () => setShares([]);
+  }, [db]);
+
+  /** @returns {Promise<import('../utils/sharesDriveJson.js').ShareClientRecord[]>} */
+  const getSharesList = useCallback(
+    () =>
+      new Promise((resolve) => {
+        if (!db) {
+          resolve([]);
+          return;
+        }
+        let tx;
+        try {
+          tx = db.transaction(SHARES_STORE, 'readonly');
+        } catch {
+          resolve([]);
+          return;
+        }
+        const req = tx.objectStore(SHARES_STORE).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => resolve([]);
+      }),
+    [db]
+  );
+
+  useEffect(() => {
+    if (isInitialized) {
+      loadItems();
+      loadChannels();
+      loadShares();
+    }
+  }, [isInitialized, loadItems, loadChannels, loadShares]);
+
+  /** Merged books + notes + videos for Drive share ACL resolution (same shape as Library `items`). */
+  const getMergedLibraryItems = useCallback(() => {
+    if (!db) return Promise.resolve([]);
     return new Promise((resolve) => {
       let tx;
       try {
-        tx = db.transaction(contentStores, 'readonly');
-      } catch {
-        resolve();
-        return;
-      }
-      const tagsInUse = new Set();
-      let pending = contentStores.length;
-      const afterReads = () => {
-        if (pending > 0) return;
-        let tx2;
-        try {
-          tx2 = db.transaction(TAG_SHARES_STORE, 'readwrite');
-        } catch {
-          resolve();
-          return;
-        }
-        const os = tx2.objectStore(TAG_SHARES_STORE);
-        const gr = os.getAll();
-        gr.onsuccess = () => {
-          const rows = gr.result || [];
-          for (const row of rows) {
-            if (row?.tag && !tagsInUse.has(row.tag)) {
-              os.delete(row.tag);
-            }
-          }
-          tx2.oncomplete = () => resolve();
-          tx2.onerror = () => resolve();
-        };
-        gr.onerror = () => resolve();
-      };
-      for (const sn of contentStores) {
-        const req = tx.objectStore(sn).getAll();
-        req.onsuccess = (e) => {
-          for (const r of e.target.result || []) {
-            for (const t of normalizeTagsList(r.tags || [])) tagsInUse.add(t);
-          }
-          pending--;
-          afterReads();
-        };
-        req.onerror = () => {
-          pending--;
-          afterReads();
-        };
-      }
-    });
-  }, [db]);
-
-  useEffect(() => {
-    if (isInitialized) { loadItems(); loadChannels(); }
-  }, [isInitialized, loadItems, loadChannels]);
-
-  /** Snapshot of merged library rows (for share manifest after backup). */
-  const getMergedLibraryItems = useCallback(() => {
-    if (!db) return Promise.resolve([]);
-    return new Promise((resolve, reject) => {
-      let tx;
-      try {
         tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE], 'readonly');
-      } catch (err) {
+      } catch {
         resolve([]);
         return;
       }
@@ -260,6 +265,64 @@ export const useIndexedDB = () => {
       vq.onerror = () => finish();
     });
   }, [db]);
+
+  const addShare = useCallback(
+    (record) => {
+      if (!db) return Promise.reject(new Error('Database not initialized'));
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(SHARES_STORE, 'readwrite');
+        const req = tx.objectStore(SHARES_STORE).put(record);
+        req.onsuccess = () => {
+          loadShares();
+          resolve();
+        };
+        req.onerror = () => reject(req.error);
+      });
+    },
+    [db, loadShares]
+  );
+
+  const updateShare = useCallback(
+    (id, patch) => {
+      if (!db) return Promise.reject(new Error('Database not initialized'));
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(SHARES_STORE, 'readwrite');
+        const os = tx.objectStore(SHARES_STORE);
+        const g = os.get(id);
+        g.onsuccess = () => {
+          const existing = g.result;
+          if (!existing) {
+            reject(new Error('Share not found'));
+            return;
+          }
+          const p = os.put({ ...existing, ...patch });
+          p.onsuccess = () => {
+            loadShares();
+            resolve();
+          };
+          p.onerror = () => reject(p.error);
+        };
+        g.onerror = () => reject(g.error);
+      });
+    },
+    [db, loadShares]
+  );
+
+  const deleteShare = useCallback(
+    (id) => {
+      if (!db) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(SHARES_STORE, 'readwrite');
+        const req = tx.objectStore(SHARES_STORE).delete(id);
+        req.onsuccess = () => {
+          loadShares();
+          resolve();
+        };
+        req.onerror = () => reject(req.error);
+      });
+    },
+    [db, loadShares]
+  );
 
   const addItem = useCallback(async (name, type, data) => {
     if (!db) { console.error('Database not initialized'); return Promise.reject(new Error('Database not initialized')); }
@@ -451,22 +514,39 @@ export const useIndexedDB = () => {
       const deleteRequest = tx.objectStore(store).delete(id);
       deleteRequest.onsuccess = () => {
         loadItems();
-        pruneOrphanTagShares().then(() => resolve()).catch(() => resolve());
+        resolve();
       };
       deleteRequest.onerror   = (e) => { console.error('Error deleting item:', e.target.error); reject(e.target.error); };
     }));
-  }, [db, loadItems, deleteImagesForNote, pruneOrphanTagShares]);
+  }, [db, loadItems, deleteImagesForNote]);
 
   const clearAll = useCallback(() => {
     if (!db) return;
-    const tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, IMAGES_STORE, CHANNELS_STORE, TAG_SHARES_STORE], 'readwrite');
-    tx.objectStore(TAG_SHARES_STORE).clear();
+    let tx;
+    try {
+      tx = db.transaction(
+        [BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, IMAGES_STORE, CHANNELS_STORE, SHARES_STORE],
+        'readwrite'
+      );
+    } catch (e) {
+      console.error('clearAll transaction failed:', e);
+      return;
+    }
+    try {
+      tx.objectStore(SHARES_STORE).clear();
+    } catch {
+      /* store missing on very old DB — ignore */
+    }
     tx.objectStore(IMAGES_STORE).clear();
     tx.objectStore(VIDEOS_STORE).clear();
     tx.objectStore(NOTES_STORE).clear();
     tx.objectStore(CHANNELS_STORE).clear();
     const clearReq = tx.objectStore(BOOKS_STORE).clear();
-    clearReq.onsuccess = () => { setItems([]); setChannels([]); };
+    clearReq.onsuccess = () => {
+      setItems([]);
+      setChannels([]);
+      setShares([]);
+    };
     clearReq.onerror   = (e) => console.error('Error clearing library:', e.target.error);
   }, [db]);
 
@@ -607,11 +687,11 @@ export const useIndexedDB = () => {
       const req = tx.objectStore(CHANNELS_STORE).delete(id);
       req.onsuccess = () => {
         loadChannels();
-        pruneOrphanTagShares().then(() => resolve()).catch(() => resolve());
+        resolve();
       };
       req.onerror = (e) => reject(e.target.error);
     });
-  }, [db, loadChannels, pruneOrphanTagShares]);
+  }, [db, loadChannels]);
 
   const updateChannel = useCallback((id, data) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
@@ -698,54 +778,16 @@ export const useIndexedDB = () => {
         putReq.onsuccess = () => {
           if (storeName === CHANNELS_STORE) loadChannels();
           else if (storeName !== IMAGES_STORE) loadItems();
-          pruneOrphanTagShares().then(() => resolve()).catch(() => resolve());
+          resolve();
         };
         putReq.onerror = () => reject(putReq.error);
       };
       getReq.onerror = () => reject(getReq.error);
     });
-  }, [db, loadItems, loadChannels, pruneOrphanTagShares]);
-
-  const getTagSharesList = useCallback(() => {
-    if (!db) return Promise.resolve([]);
-    return new Promise((resolve, reject) => {
-      let tx;
-      try { tx = db.transaction(TAG_SHARES_STORE, 'readonly'); } catch (err) { resolve([]); return; }
-      const req = tx.objectStore(TAG_SHARES_STORE).getAll();
-      req.onsuccess = (e) => resolve(e.target.result || []);
-      req.onerror = (e) => reject(e.target.error);
-    });
-  }, [db]);
-
-  const setTagShareEmails = useCallback((tag, emails) => {
-    if (!db) return Promise.reject(new Error('Database not initialized'));
-    const normalizedTag = normalizeTagsList([tag])[0];
-    if (!normalizedTag) return Promise.reject(new Error('Empty tag'));
-    const emailsNorm = [...new Set((emails || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean))];
-    return new Promise((resolve, reject) => {
-      let tx;
-      try { tx = db.transaction(TAG_SHARES_STORE, 'readwrite'); } catch (err) { reject(err); return; }
-      const putReq = tx.objectStore(TAG_SHARES_STORE).put({ tag: normalizedTag, emails: emailsNorm });
-      putReq.onsuccess = () => resolve();
-      putReq.onerror = () => reject(putReq.error);
-    });
-  }, [db]);
-
-  const deleteTagShare = useCallback((tag) => {
-    if (!db) return Promise.resolve();
-    const normalizedTag = normalizeTagsList([tag])[0];
-    if (!normalizedTag) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-      let tx;
-      try { tx = db.transaction(TAG_SHARES_STORE, 'readwrite'); } catch (err) { resolve(); return; }
-      const delReq = tx.objectStore(TAG_SHARES_STORE).delete(normalizedTag);
-      delReq.onsuccess = () => resolve();
-      delReq.onerror = () => reject(delReq.error);
-    });
-  }, [db]);
+  }, [db, loadItems, loadChannels]);
 
   return {
-    items, channels, isInitialized,
+    items, channels, shares, isInitialized,
     addItem, updateItem, deleteItem, clearAll,
     addImage, getImagesForNote, getAllImages,
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
@@ -754,7 +796,11 @@ export const useIndexedDB = () => {
     getChannelByDriveId, upsertDriveChannel,
     getBookByDriveId, getBookByName, upsertDriveBook,
     setRecordTags,
-    getTagSharesList, setTagShareEmails, deleteTagShare,
     getMergedLibraryItems,
+    loadShares,
+    getSharesList,
+    addShare,
+    updateShare,
+    deleteShare,
   };
 };

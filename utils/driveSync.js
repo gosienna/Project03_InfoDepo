@@ -199,6 +199,120 @@ export async function syncDriveToLocal({
 }
 
 /**
+ * Download individual files by Drive ID (for linked shares where files are shared
+ * via permissions, not in a folder listing). Fetches metadata first, then content.
+ */
+export async function syncSharedFilesByDriveId({
+  accessToken,
+  driveIds,
+  getBookByDriveId,
+  getBookByName,
+  upsertDriveBook,
+  getImageByDriveId,
+  getImageByName,
+  upsertDriveImage,
+  getNotes,
+  upsertDriveChannel,
+  onProgress,
+}) {
+  const progress = onProgress || (() => {});
+  const counts = { added: 0, updated: 0, skipped: 0 };
+  const ids = driveIds instanceof Set ? driveIds : new Set(driveIds || []);
+  if (ids.size === 0) return counts;
+
+  for (const driveId of ids) {
+    progress(`Fetching metadata for ${driveId.slice(0, 12)}…`);
+    const metaRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?fields=id,name,mimeType,size,modifiedTime`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!metaRes.ok) {
+      console.warn(`[share sync] metadata failed for ${driveId}:`, metaRes.statusText);
+      counts.skipped++;
+      continue;
+    }
+    const meta = await metaRes.json();
+    const driveFile = {
+      driveId: meta.id,
+      name: meta.name,
+      mimeType: meta.mimeType,
+      size: parseInt(meta.size) || 0,
+      modifiedTime: meta.modifiedTime,
+    };
+
+    const isImage = IMAGE_MIME_TYPES.includes(driveFile.mimeType);
+    const isContent = SUPPORTED_MIME_TYPES.includes(driveFile.mimeType);
+    if (!isImage && !isContent) { counts.skipped++; continue; }
+
+    let existing;
+    if (isImage) {
+      existing = getImageByDriveId ? await getImageByDriveId(driveFile.driveId) : undefined;
+      if (!existing && getImageByName) existing = await getImageByName(driveFile.name);
+    } else {
+      existing = await getBookByDriveId(driveFile.driveId);
+      if (!existing) existing = await getBookByName(driveFile.name);
+    }
+
+    const driveIsNewer = existing
+      ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
+      : true;
+
+    if (existing && !driveIsNewer) {
+      counts.skipped++;
+      continue;
+    }
+
+    progress(`Downloading ${driveFile.name}…`);
+    const blobRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!blobRes.ok) {
+      console.warn(`[share sync] download failed for ${driveFile.name}:`, blobRes.statusText);
+      counts.skipped++;
+      continue;
+    }
+    let blob = await blobRes.blob();
+
+    if (isImage) {
+      const noteId = existing ? existing.noteId : 0;
+      const action = await upsertDriveImage(driveFile, blob, noteId);
+      if (action === 'added') counts.added++;
+      else if (action === 'updated') counts.updated++;
+      else counts.skipped++;
+      continue;
+    }
+
+    let effectiveFile = driveFile;
+    if (driveFile.mimeType === 'application/json') {
+      try {
+        const text = await blob.text();
+        const parsed = JSON.parse(text);
+        if (parsed._type === CHANNEL_JSON_MARKER && parsed.channelId && upsertDriveChannel) {
+          const { _type, ...channelData } = parsed;
+          const action = await upsertDriveChannel(driveFile, channelData);
+          if (action === 'added') counts.added++;
+          else if (action === 'updated') counts.updated++;
+          else counts.skipped++;
+          continue;
+        } else if (parsed.url && /youtube\.com|youtu\.be/.test(parsed.url)) {
+          const safeTitle = (parsed.title || 'YouTube Video').replace(/[/\\?%*:|"<>]/g, '-');
+          effectiveFile = { ...driveFile, name: safeTitle + '.youtube', mimeType: 'application/x-youtube' };
+          blob = new Blob([text], { type: 'application/x-youtube' });
+        }
+      } catch { /* not valid JSON — fall through to upsertDriveBook */ }
+    }
+
+    const action = await upsertDriveBook(effectiveFile, blob);
+    if (action === 'added') counts.added++;
+    else counts.updated++;
+  }
+
+  progress('');
+  return counts;
+}
+
+/**
  * Uploads all local items that have no driveId to Google Drive (backup).
  * After each successful upload, calls onSetDriveId to persist the Drive file ID.
  *

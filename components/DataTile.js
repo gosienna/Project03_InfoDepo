@@ -60,12 +60,13 @@ const UploadButton = ({ status, onClick }) => {
 };
 
 /**
- * Library tile: merged books / notes / videos (`tileType: 'item'`) or YouTube channel (`tileType: 'channel'`, same card shell as items).
+ * Library tile: merged books / notes / videos (`tileType: 'item'`), YouTube channel (`tileType: 'channel'`), or Drive share (`tileType: 'share'`).
  */
 export const DataTile = ({
   tileType,
   item,
   channel,
+  share,
   onSelect,
   onDelete,
   onUpload,
@@ -75,9 +76,11 @@ export const DataTile = ({
   availableTags,
 }) => {
   const isChannel = tileType === 'channel';
+  const isShare = tileType === 'share';
   const video = item;
   const ch = channel;
-  const record = isChannel ? ch : video;
+  const sh = share;
+  const record = isChannel ? ch : isShare ? sh : video;
   const recordId = record?.id;
 
   const fileExtension = !isChannel && video?.name ? getFileExtension(video.name) : '';
@@ -91,7 +94,7 @@ export const DataTile = ({
   const tagSuggestions = (availableTags || []).filter((t) => !tags.includes(t));
 
   useEffect(() => {
-    if (isChannel || !isYoutube || !video?.data) {
+    if (isChannel || isShare || !isYoutube || !video?.data) {
       setThumbVideoId(null);
       return;
     }
@@ -104,7 +107,7 @@ export const DataTile = ({
       } catch {}
     };
     reader.readAsText(video.data);
-  }, [isChannel, video?.id, video?.type, isYoutube, video?.size, video?.data]);
+  }, [isChannel, isShare, video?.id, video?.type, isYoutube, video?.size, video?.data]);
 
   useEffect(() => {
     setTagInput('');
@@ -155,12 +158,13 @@ export const DataTile = ({
     onSetTags(tagSubject(), tags.filter((x) => x !== tag));
   };
 
-  const idPrefix = isChannel ? `ch-${recordId}` : `item-${recordId}`;
+  const idPrefix = isChannel ? `ch-${recordId}` : isShare ? `share-${recordId}` : `item-${recordId}`;
 
   const addTagControlsHidden =
     'opacity-0 pointer-events-none transition-opacity duration-150 group-hover/tagadd:opacity-100 group-hover/tagadd:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto';
 
   const tagRow =
+    !isShare &&
     (tags.length > 0 || !readOnly) &&
     React.createElement(
       'div',
@@ -252,6 +256,97 @@ export const DataTile = ({
               )
         )
     );
+
+  if (isShare) {
+    const handleShareDelete = (e) => {
+      e.stopPropagation();
+      if (!onDelete) return;
+      if (window.confirm(`Remove share "${sh.driveFileName}" from this device?`)) {
+        onDelete(sh);
+      }
+    };
+
+    const nRec = (sh.recipients || []).length;
+    const nTags = (sh.includeTags || []).length;
+    const nExplicit = (sh.explicitRefs || []).length;
+    const driveOk = !!(sh.driveFileId && String(sh.driveFileId).trim());
+
+    return React.createElement(
+      'div',
+      {
+        className: DATA_TILE_SHELL,
+        onClick: () => onSelect(sh),
+      },
+      React.createElement(
+        'div',
+        { className: 'relative p-4 bg-gray-700 h-40 flex items-center justify-center overflow-hidden' },
+        React.createElement(
+          'div',
+          { className: 'flex items-center justify-center w-full h-full' },
+          React.createElement(
+            'svg',
+            {
+              xmlns: 'http://www.w3.org/2000/svg',
+              className: 'h-20 w-20 text-teal-500/80',
+              fill: 'none',
+              viewBox: '0 0 24 24',
+              stroke: 'currentColor',
+            },
+            React.createElement('path', {
+              strokeLinecap: 'round',
+              strokeLinejoin: 'round',
+              strokeWidth: 1.5,
+              d: 'M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z',
+            })
+          )
+        ),
+        React.createElement(
+          'span',
+          {
+            className: 'absolute top-2 right-2 bg-teal-700 text-white text-xs font-bold px-2 py-1 rounded',
+          },
+          sh.role === 'receiver' ? 'Share · In' : 'Share'
+        ),
+        React.createElement(
+          'div',
+          { className: 'absolute bottom-2 right-2 flex items-center gap-1.5' },
+          !readOnly &&
+            onDelete &&
+            React.createElement(
+              'button',
+              {
+                type: 'button',
+                onClick: handleShareDelete,
+                className:
+                  'p-2 rounded-full bg-red-600/50 text-white opacity-0 group-hover:opacity-100 hover:bg-red-600 transition-all duration-300',
+                title: 'Remove share',
+              },
+              React.createElement(TrashIcon, { className: 'h-4 w-4' })
+            )
+        )
+      ),
+      React.createElement(
+        'div',
+        { className: 'p-4' },
+        React.createElement('h3', { className: 'font-bold text-md text-gray-100 truncate', title: sh.driveFileName }, sh.driveFileName),
+        React.createElement(
+          'p',
+          { className: 'text-sm text-gray-400' },
+          sh.role === 'receiver' ? 'Receiver' : 'Owner',
+          ' · ',
+          nRec,
+          nRec === 1 ? ' recipient' : ' recipients',
+          (nTags > 0 || nExplicit > 0) &&
+            ` · ${[nTags && `${nTags} tag${nTags === 1 ? '' : 's'}`, nExplicit && `${nExplicit} pick${nExplicit === 1 ? '' : 's'}`]
+              .filter(Boolean)
+              .join(' · ')}`
+        ),
+        driveOk
+          ? React.createElement('p', { className: 'text-xs text-teal-500/90 mt-1' }, 'Linked to Drive')
+          : React.createElement('p', { className: 'text-xs text-amber-500/90 mt-1' }, 'Not uploaded yet')
+      )
+    );
+  }
 
   if (isChannel) {
     const handleChannelDelete = (e) => {

@@ -12,7 +12,7 @@ import { needsDriveOAuthLogin } from './utils/driveOAuthGateCheck.js';
 
 const App = () => {
   const {
-    items, channels, addItem, updateItem, deleteItem, clearAll, isInitialized,
+    items, channels, shares, addItem, updateItem, deleteItem, clearAll, isInitialized,
     addImage, getImagesForNote, getAllImages,
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
     setItemDriveId,
@@ -20,8 +20,11 @@ const App = () => {
     getChannelByDriveId, upsertDriveChannel,
     getBookByDriveId, getBookByName, upsertDriveBook,
     setRecordTags,
-    getTagSharesList, setTagShareEmails, deleteTagShare,
     getMergedLibraryItems,
+    getSharesList,
+    addShare,
+    updateShare,
+    deleteShare,
   } = useIndexedDB();
   const [libraryMode, setLibraryModeState] = useState(() => readLibraryMode());
   const setLibraryMode = (mode) => {
@@ -126,6 +129,7 @@ const App = () => {
         ? React.createElement(Library, {
             items,
             channels,
+            shares,
             libraryMode,
             onLibraryModeChange: setLibraryMode,
             onSelectItem: handleSelectVideo,
@@ -147,10 +151,11 @@ const App = () => {
             upsertDriveImage,
             getNotes,
             setRecordTags,
-            getTagSharesList,
-            setTagShareEmails,
-            deleteTagShare,
             getMergedLibraryItems,
+            getSharesList,
+            addShare,
+            updateShare,
+            deleteShare,
             onGoogleUserEmail: setGoogleUserEmail,
             onDriveCredentialsChanged: recheckDriveOAuthGate,
           })

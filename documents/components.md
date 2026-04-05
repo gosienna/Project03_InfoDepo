@@ -29,15 +29,28 @@ root.render(
 
 `React.StrictMode` causes effects to run twice in development (intentional React behaviour for catching side effects).
 
-### 3. `App.js` — first render
+### 3. `App.js` — IndexedDB, then Google Drive gate (when configured)
 
-On mount, `useIndexedDB()` opens IndexedDB (`InfoDepo`; version from [`utils/infodepoDb.js`](../utils/infodepoDb.js)) and loads merged `items` (books + notes + videos) plus `channels`. When `isInitialized` is `true`, the loading spinner is replaced with the Library view (or Reader / `YoutubeChannelViewer` depending on `view`). See [data-stores.md](data-stores.md) for object stores and schema.
+On mount, `useIndexedDB()` opens IndexedDB (`InfoDepo`; version from [`utils/infodepoDb.js`](../utils/infodepoDb.js)) and loads merged `items` (books + notes + videos), `channels`, and `shares`. See [data-stores.md](data-stores.md) for object stores and schema.
+
+After the database is ready, the app decides whether the user must complete **Google Drive setup** before any library UI appears:
+
+- [`utils/driveOAuthGateCheck.js`](../utils/driveOAuthGateCheck.js) — `needsDriveOAuthLogin()` returns `true` only when **both** `VITE_CLIENT_ID` and `VITE_API_KEY` are set (see [`utils/driveCredentials.js`](../utils/driveCredentials.js)) **and** either:
+  - no Drive folder ID is stored in `localStorage` ([`utils/driveFolderStorage.js`](../utils/driveFolderStorage.js), key `infodepo_drive_folder_id`), or
+  - there is no **non-expired** stored OAuth access token for the **current library mode** (owner vs shared use different scopes — [`utils/driveScopes.js`](../utils/driveScopes.js); tokens are keyed in [`utils/driveOAuthStorage.js`](../utils/driveOAuthStorage.js)).
+- If `VITE_CLIENT_ID` or `VITE_API_KEY` is missing, the gate is skipped and the library loads without that step (local-only / no env configuration).
+- When the gate is required, the user sees [`GoogleOAuthGate.js`](../components/GoogleOAuthGate.js): enter or paste the Drive folder ID, then **Save folder & continue with Google** runs Google Identity Services (GIS), stores the token, fetches profile email for the header, and only then mounts the main shell.
+
+Switching **library mode** (owner ↔ shared) can require signing in again if there is no valid token yet for the other scope.
 
 ### 4. Loading states
 
 ```
-isInitialized = false  →  "Initializing Database..." spinner (full screen)
-isInitialized = true   →  Library view rendered
+isInitialized = false     →  "Initializing Database..." spinner (full screen)
+isInitialized = true      →  one frame: "Checking Google sign-in…" (oauthGatePending)
+then:
+  needsDriveOAuthLogin()  →  full-screen GoogleOAuthGate (folder + Google sign-in)
+  else                    →  Header + main (Library, or Reader / YoutubeChannelViewer by view)
 ```
 
 ---
@@ -50,14 +63,14 @@ isInitialized = true   →  Library view rendered
 <body>
   <div id="root">                        ← React mounts here
     <App>
-      <Header />                         ← always visible
-      <main>
-        <Library />                      ← view = 'library'
-        OR
-        <YoutubeChannelViewer />         ← view = 'channel' (full channel video grid)
-        OR
-        <Reader />                       ← view implied when currentVideo set (PDF / TXT / MD / YouTube)
-      </main>
+      — GoogleOAuthGate (full screen)     ← when VITE_CLIENT_ID + VITE_API_KEY and folder/token incomplete
+      — or Header + main after sign-in:
+          <Header userEmail? />
+          <main>
+            <Library />                  ← view = 'library'
+            OR <YoutubeChannelViewer />  ← view = 'channel'
+            OR <Reader />                ← currentVideo (PDF / TXT / MD / YouTube)
+          </main>
     </App>
   </div>
 ```
@@ -79,20 +92,24 @@ Standalone page, no React. Opens in a new browser tab. Reads the EPUB from the `
 ## Component Reference
 
 ### `App.js`
-**Role:** Root component. Owns view state, library mode, and selection routing.
+**Role:** Root component. Owns view state, library mode, OAuth gate, and selection routing.
 
 **State:**
 | State | Type | Purpose |
 |-------|------|---------|
 | `view` | `'library' \| 'reader' \| 'channel'` | `'library'` → `Library`; `'reader'` → `Reader` (`currentVideo`); `'channel'` → `YoutubeChannelViewer` (`currentChannel`) |
-| `libraryMode` | `'owner' \| 'shared'` | Persisted via `utils/libraryMode.js` — shared sync uses Drive manifest + tag shares |
+| `libraryMode` | `'owner' \| 'shared'` | Persisted via `utils/libraryMode.js` — shared mode syncs files the account can read from the linked folder |
 | `currentVideo` | `object \| null` | Item being read (non-EPUB in-app) |
 | `currentChannel` | `object \| null` | Channel when `view === 'channel'` |
+| `googleUserEmail` | `string \| null` | Shown in `Header` after OAuth gate or Library refresh |
+| `oauthGatePending` | `boolean` | `true` until first post-DB check of `needsDriveOAuthLogin()` (brief "Checking Google sign-in…") |
+| `oauthGateActive` | `boolean` | `true` → render `GoogleOAuthGate` instead of main UI |
 
 **Key logic:**
+- After `isInitialized`, `needsDriveOAuthLogin()` (depends on `libraryMode`) controls whether `GoogleOAuthGate` is shown; `recheckDriveOAuthGate` is passed to `Library` so credential/folder changes can re-open the gate if needed.
 - `handleSelectVideo` / `openVideo` — EPUB opens `reader.html?id=` in a new tab; other types set `currentVideo` and show `Reader`.
 - `handleSelectChannel` — sets `currentChannel` and `view` to `'channel'` for `YoutubeChannelViewer`.
-- Delegates IndexedDB to `useIndexedDB` (`items`, `channels`, CRUD, tags, Drive sync helpers).
+- Delegates IndexedDB to `useIndexedDB` (`items`, `channels`, `shares`, CRUD, tags, share registry, Drive sync helpers).
 
 ---
 
@@ -103,13 +120,26 @@ Standalone page, no React. Opens in a new browser tab. Reads the EPUB from the `
 | Prop | Type | Purpose |
 |------|------|---------|
 | `onBack` | `function \| undefined` | If provided, shows back arrow (reader view only) |
+| `userEmail` | `string \| undefined` | Optional signed-in Google email (right side) |
 
 **Renders:** App logo + title. Back button appears when not on the library view (reader or channel).
 
 ---
 
+### `GoogleOAuthGate.js`
+**Role:** Full-screen first-run (or recovery) screen when Drive OAuth is required: collect the Drive folder ID, persist it via `setDriveFolderId`, then ensure a GIS access token exists for the scope matching `libraryMode` (`getDriveScopeForLibraryMode`), save it with `saveStoredAccessToken`, call `fetchGoogleUserEmail`, invoke `onSuccess` so `App` mounts the main UI.
+
+**Props:**
+| Prop | Type | Purpose |
+|------|------|-------------|
+| `libraryMode` | `'owner' \| 'shared'` | Selects owner vs shared OAuth scope |
+| `onSuccess` | `function` | Called after folder + token (+ email fetch attempt) succeed |
+| `onGoogleUserEmail` | `function \| undefined` | `(email \| null) => void` for header display |
+
+---
+
 ### `Library.js`
-**Role:** Library overview — merged item grid, YouTube **channels** grid (owner mode), search/filters, owner vs shared mode, Drive sync/backup, tag sharing, and add flows (file, note, YouTube, channel).
+**Role:** Library overview — merged item grid, YouTube **channels** grid (owner mode), search/filters, owner vs shared mode, Drive sync/backup, **Shares** (owner editor + receiver viewer via `SharesListModal` / `SharesEditorModal`), and add flows (file, note, YouTube, channel, new share, link share).
 
 **Layout:** Two sections use the **same responsive grid** (`grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6`): **channels** first (hidden in shared mode), then **items**. Both use [`DataTile.js`](DataTile.js).
 
@@ -118,6 +148,7 @@ Standalone page, no React. Opens in a new browser tab. Reads the EPUB from the `
 |------|------|---------|
 | `items` | `array` | Merged books + notes + videos from `useIndexedDB` |
 | `channels` | `array` | `channels` store rows |
+| `shares` | `array` | Share configs from the `shares` store (see [data-stores.md](data-stores.md)) |
 | `libraryMode` | `'owner' \| 'shared'` | UI for owner backup vs read-only shared sync |
 | `onLibraryModeChange` | `function` | Toggle mode |
 | `onSelectItem` | `function` | Open item in reader / EPUB tab |
@@ -128,27 +159,35 @@ Standalone page, no React. Opens in a new browser tab. Reads the EPUB from the `
 | `onSetDriveId` | `function` | Persist Drive file id after upload |
 | `onAddChannel` / `onDeleteChannel` | `function` | Channel CRUD |
 | `setRecordTags` | `function` | Tag persistence (`idbStore` or `'channels'`) |
-| `getTagSharesList`, `setTagShareEmails`, `deleteTagShare` | `function` | Tag-based Drive sharing |
-| `getMergedLibraryItems` | `function` | Manifest / sync snapshot |
+| `getMergedLibraryItems` | `function` | Merged books + notes + videos for Drive share ACL resolution |
+| `getSharesList`, `addShare`, `updateShare`, `deleteShare` | `function` | `shares` store CRUD |
+| `onGoogleUserEmail` | `function \| undefined` | Updates app header email after GIS / userinfo |
+| `onDriveCredentialsChanged` | `function \| undefined` | Re-runs `needsDriveOAuthLogin()` after folder or token changes |
 | Plus Drive sync helpers | … | `getBookByDriveId`, `upsertDriveBook`, images, `upsertDriveChannel`, etc. |
 
 **State (representative):**
 | State | Purpose |
 |-------|---------|
 | `searchQuery`, `activeFilters` | Filter items and channels (e.g. by store type) |
-| `isDevBrowserOpen`, `isSettingsOpen` | Drive folder browser / credentials modal |
+| `isDevBrowserOpen` | `DevDriveBrowser` modal — import files from the linked Drive folder |
 | `isNewNoteOpen`, `isYoutubeOpen`, `isChannelOpen` | Add modals |
-| `isTagShareOpen`, `isSystemSettingsOpen`, `isAddMenuOpen` | Tag sharing & menus |
+| `isSharesListOpen`, `activeShare` | Shares list and editor/viewer |
+| `isSystemSettingsOpen`, `isAddMenuOpen` | Menus (system settings: folder draft, OAuth, etc.) |
 | `uploadStatuses` | Per-tile Drive upload state; keys include `libraryItemKey(item)` and `channel-${id}` for channels |
-| `credentials`, `driveFolderName` | Drive linkage |
+| `credentials`, `driveFolderId`, `driveFolderDraft` | From `getDriveCredentials()` / `getDriveFolderId()`; draft edits folder before save |
 | `isSyncing`, `syncResult`, `syncProgress` | Combined sync + backup |
-| `availableTags` | Union of tags from items, channels, and tag-share rows (for `DataTile` dropdowns) |
+| `availableTags` | Union of tags from items and channels (for `DataTile` and share editor) |
 
-**Toolbar / actions (simplified):** Drive folder access (dev/prod), **Sync** (owner backup + sync + manifest), **Mode: owner / shared**, search, filter chips (Books / Notes / Videos / Channels), add menu (file, note, YouTube, channel), tag sharing, clear library.
+**Toolbar / actions (simplified):** Drive folder browser, **Sync** (owner backup + sync), **Shares**, **Mode: owner / shared**, search, filter chips (Books / Notes / Videos / Channels), add menu (file, note, YouTube, channel, new share, link share), system settings, clear library.
 
 **File upload:** Hidden file input → `onAddItem(name, type, file)`.
 
 **Empty / no-results:** Placeholders when the filtered grid is empty or shared sync has nothing yet.
+
+---
+
+### `SharesListModal.js` / `SharesEditorModal.js`
+**Role:** **Shares list** — new share, link share by Drive file id, open row in editor or viewer. **Editor** — owner sets filename, recipient emails, include-by-tag and explicit items with `driveId`; **Save & upload** writes [`utils/sharesDriveJson.js`](../utils/sharesDriveJson.js) JSON to the linked folder via [`utils/sharesDriveFile.js`](../utils/sharesDriveFile.js) and runs [`applyShareRecordsToDriveFiles`](../utils/driveSharePermissions.js). **Receiver** — read-only with optional refresh from Drive.
 
 ---
 
@@ -340,38 +379,20 @@ Displays text in a `<pre>` tag with `whitespace-pre-wrap` to preserve formatting
 | `apiKey` | `string` | Google API key |
 | `folderId` | `string` | Drive folder ID |
 
-**Credentials:** Received as props from `Library.js`, which sources them from `utils/driveCredentials.js` (`.env` in dev, `localStorage` in prod).
+**Credentials:** `clientId` and `apiKey` from `getDriveCredentials()`; `folderId` from `getDriveFolderId()` in `Library.js` (same folder as the OAuth gate).
 
 **Flow:** See [google-drive-integration.md](google-drive-integration.md).
 
 ---
 
-### `DriveSettingsModal.js` *(production only)*
-**Role:** Modal form for entering and saving Google Drive credentials in production.
-
-**Props:**
-| Prop | Type | Purpose |
-|------|------|---------|
-| `onSave` | `function` | Called with `{clientId, apiKey, folderId}` after saving |
-| `onClose` | `function` | Closes the modal without saving |
-
-**Behaviour:**
-- Pre-fills fields from `localStorage` (via `getDriveCredentials()`) if credentials were previously saved.
-- On submit: calls `saveDriveCredentials()` → saves to `localStorage` → calls `onSave(creds)`.
-- "Clear credentials" button calls `clearDriveCredentials()` and empties the fields.
-
----
-
 ### `utils/driveCredentials.js`
-**Role:** Single source of truth for Drive credentials.
+**Role:** OAuth client ID and Google API key from the Vite environment (`.env` locally, host env on Netlify). Same variable names everywhere: `VITE_CLIENT_ID`, `VITE_API_KEY`.
 
 | Export | Description |
 |--------|-------------|
-| `getDriveCredentials()` | Returns `{clientId, apiKey, folderId}` — from `import.meta.env` in dev, `localStorage` in prod |
-| `saveDriveCredentials(creds)` | Persists credentials to `localStorage` (prod only) |
-| `clearDriveCredentials()` | Removes credentials from `localStorage` |
+| `getDriveCredentials()` | Returns `{ clientId, apiKey }` from `import.meta.env` |
 
-`localStorage` key: `infodepo_drive_credentials`.
+The Drive **folder** ID is not part of this object; it lives in `localStorage` via [`utils/driveFolderStorage.js`](../utils/driveFolderStorage.js) (`infodepo_drive_folder_id`), including the value set on `GoogleOAuthGate`.
 
 ---
 
@@ -381,20 +402,20 @@ Located at [`hooks/useIndexedDB.js`](../hooks/useIndexedDB.js). Encapsulates all
 
 **Database:** `InfoDepo` — version `INFO_DEPO_DB_VERSION` from [`utils/infodepoDb.js`](../utils/infodepoDb.js).
 
-**Stores:** `books`, `notes`, `videos`, `images`, `channels`, and `tagShares` (upgrade path adds tag-shares store). Merged **items** in the UI combine `books` + `notes` + `videos` with `idbStore` and `tags` attached for each row.
+**Stores:** `books`, `notes`, `videos`, `images`, `channels`, `shares`. Merged **items** in the UI combine `books` + `notes` + `videos` with `idbStore` and `tags` attached for each row.
 
 **Authoritative schema, field lists, and Drive behaviour:** see **[data-stores.md](data-stores.md)** and [google-drive-integration.md](google-drive-integration.md).
 
 **Returned API (high level):**
 | | Description |
 |--|-------------|
-| `items`, `channels` | Arrays for the library UI |
+| `items`, `channels`, `shares` | Arrays for the library UI |
 | `addItem`, `updateItem`, `deleteItem`, `clearAll` | Item CRUD across routed stores |
 | `addChannel`, `deleteChannel`, `updateChannel`, `upsertDriveChannel`, … | Channel CRUD + Drive |
 | `addImage`, `getImagesForNote`, `getAllImages`, … | Note images |
 | `setItemDriveId`, `setRecordTags` | Drive ids and per-row tags |
-| `getTagSharesList`, `setTagShareEmails`, `deleteTagShare` | Tag-based sharing |
-| `getMergedLibraryItems` | Snapshot for manifest / sync |
+| `getSharesList`, `addShare`, `updateShare`, `deleteShare`, `loadShares` | `shares` store CRUD |
+| `getMergedLibraryItems` | Merged rows for Drive share ACL helpers |
 | `getBookByDriveId`, `getBookByName`, `upsertDriveBook`, … | Drive sync helpers |
 
 ---
@@ -413,9 +434,20 @@ Browser opens app
        ▼
   App mounts → useIndexedDB opens InfoDepo and loads items + channels
        │
-  isInitialized = false → spinner
+  isInitialized = false → "Initializing Database…"
        │
-  isInitialized = true → Library (grid: channels section + items section)
+       ▼
+  isInitialized = true → brief "Checking Google sign-in…"
+       │
+       ▼
+  VITE_CLIENT_ID + VITE_API_KEY set?
+       ├── no  → main shell (Library, etc.) — no Google gate
+       └── yes → folder ID + valid token for current mode?
+                 ├── no  → GoogleOAuthGate (folder + GIS sign-in)
+                 └── yes → main shell
+       │
+       ▼
+  Library (grid: channels section + items section) or Reader / YoutubeChannelViewer
        │
   ┌────┴────────────────────────────────────────────┐
   │                                                  │
