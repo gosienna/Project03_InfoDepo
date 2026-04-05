@@ -15,7 +15,7 @@
 - **Offline reading** — books stored in IndexedDB, no server required
 - **EPUB reader** — full pagination, TOC, and chapter navigation via EPUB.js
 - **PDF & TXT viewers** — inline rendering
-- **Dev mode Drive browser** — import books from a Google Drive folder during development
+- **Google Drive** — optional import and sync from your Drive root (`My Drive`) when `VITE_CLIENT_ID` and `VITE_API_KEY` are set
 
 ## Getting Started
 
@@ -45,15 +45,14 @@ EPUB files open in a dedicated reader tab with Prev / Next navigation and a page
 
 ### Environment Variables
 
-Create a `.env` file at the project root for dev-only Drive access:
+Set these at build time (`.env` locally, [Netlify environment variables](https://docs.netlify.com/environment-variables/overview/) in production). The same names are used everywhere.
 
 ```
-VITE_TEST_DRIVE_FOLDER_ID=   # Google Drive folder ID
-VITE_TEST_CLIENT_ID=         # OAuth 2.0 Client ID
-VITE_TEST_API_KEY=            # Google API Key (AIza...)
+VITE_CLIENT_ID=   # OAuth 2.0 Web client ID (...apps.googleusercontent.com)
+VITE_API_KEY=     # Google API key (AIza...) — Drive listing + YouTube channel search
 ```
 
-The yellow **"DEV: Test Folder"** button appears only in dev mode and is stripped from production builds.
+After first load, you **enter a Google Drive folder** (ID or URL); it is saved in the browser as `infodepo_drive_folder_id`. OAuth access tokens are stored separately in `localStorage` after you sign in.
 
 ### Scripts
 
@@ -63,7 +62,6 @@ The yellow **"DEV: Test Folder"** button appears only in dev mode and is strippe
 | `npm run build` | Production build |
 | `npm run test:epub` | Open EPUB viewer test in browser |
 | `npm run test:epub:headless` | Run EPUB test headless via Playwright |
-| `npm run test:drive` | Validate Drive credentials and list test folder |
 
 ## Tech Stack
 

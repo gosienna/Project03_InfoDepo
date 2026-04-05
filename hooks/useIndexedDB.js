@@ -161,6 +161,60 @@ export const useIndexedDB = () => {
     req.onerror = () => setChannels([]);
   }, [db]);
 
+  /** Remove `tagShares` rows whose tag no longer appears on any book, note, video, channel, or image. */
+  const pruneOrphanTagShares = useCallback(() => {
+    if (!db) return Promise.resolve();
+    const contentStores = [BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, CHANNELS_STORE, IMAGES_STORE];
+    return new Promise((resolve) => {
+      let tx;
+      try {
+        tx = db.transaction(contentStores, 'readonly');
+      } catch {
+        resolve();
+        return;
+      }
+      const tagsInUse = new Set();
+      let pending = contentStores.length;
+      const afterReads = () => {
+        if (pending > 0) return;
+        let tx2;
+        try {
+          tx2 = db.transaction(TAG_SHARES_STORE, 'readwrite');
+        } catch {
+          resolve();
+          return;
+        }
+        const os = tx2.objectStore(TAG_SHARES_STORE);
+        const gr = os.getAll();
+        gr.onsuccess = () => {
+          const rows = gr.result || [];
+          for (const row of rows) {
+            if (row?.tag && !tagsInUse.has(row.tag)) {
+              os.delete(row.tag);
+            }
+          }
+          tx2.oncomplete = () => resolve();
+          tx2.onerror = () => resolve();
+        };
+        gr.onerror = () => resolve();
+      };
+      for (const sn of contentStores) {
+        const req = tx.objectStore(sn).getAll();
+        req.onsuccess = (e) => {
+          for (const r of e.target.result || []) {
+            for (const t of normalizeTagsList(r.tags || [])) tagsInUse.add(t);
+          }
+          pending--;
+          afterReads();
+        };
+        req.onerror = () => {
+          pending--;
+          afterReads();
+        };
+      }
+    });
+  }, [db]);
+
   useEffect(() => {
     if (isInitialized) { loadItems(); loadChannels(); }
   }, [isInitialized, loadItems, loadChannels]);
@@ -395,10 +449,13 @@ export const useIndexedDB = () => {
     return deleteImagesForNote(id).then(() => new Promise((resolve, reject) => {
       const tx = db.transaction(store, 'readwrite');
       const deleteRequest = tx.objectStore(store).delete(id);
-      deleteRequest.onsuccess = () => { loadItems(); resolve(); };
+      deleteRequest.onsuccess = () => {
+        loadItems();
+        pruneOrphanTagShares().then(() => resolve()).catch(() => resolve());
+      };
       deleteRequest.onerror   = (e) => { console.error('Error deleting item:', e.target.error); reject(e.target.error); };
     }));
-  }, [db, loadItems, deleteImagesForNote]);
+  }, [db, loadItems, deleteImagesForNote, pruneOrphanTagShares]);
 
   const clearAll = useCallback(() => {
     if (!db) return;
@@ -548,10 +605,13 @@ export const useIndexedDB = () => {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(CHANNELS_STORE, 'readwrite');
       const req = tx.objectStore(CHANNELS_STORE).delete(id);
-      req.onsuccess = () => { loadChannels(); resolve(); };
+      req.onsuccess = () => {
+        loadChannels();
+        pruneOrphanTagShares().then(() => resolve()).catch(() => resolve());
+      };
       req.onerror = (e) => reject(e.target.error);
     });
-  }, [db, loadChannels]);
+  }, [db, loadChannels, pruneOrphanTagShares]);
 
   const updateChannel = useCallback((id, data) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
@@ -638,13 +698,13 @@ export const useIndexedDB = () => {
         putReq.onsuccess = () => {
           if (storeName === CHANNELS_STORE) loadChannels();
           else if (storeName !== IMAGES_STORE) loadItems();
-          resolve();
+          pruneOrphanTagShares().then(() => resolve()).catch(() => resolve());
         };
         putReq.onerror = () => reject(putReq.error);
       };
       getReq.onerror = () => reject(getReq.error);
     });
-  }, [db, loadItems, loadChannels]);
+  }, [db, loadItems, loadChannels, pruneOrphanTagShares]);
 
   const getTagSharesList = useCallback(() => {
     if (!db) return Promise.resolve([]);

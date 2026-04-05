@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Spinner } from './Spinner.js';
 import { getOAuthToken } from '../utils/driveAuth.js';
+import { getDriveFolderId } from '../utils/driveFolderStorage.js';
 
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
 const SUPPORTED_MIME_TYPES = [
@@ -11,7 +12,7 @@ const SUPPORTED_MIME_TYPES = [
   'application/json', // YouTube URL entries backed up from the app
 ];
 
-export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey, folderId }) => {
+export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey }) => {
   const [status, setStatus] = useState('Connecting...');
   const [error, setError] = useState(null);
   const [files, setFiles] = useState([]);
@@ -21,6 +22,7 @@ export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey, folde
   const listFiles = useCallback(async (token) => {
     setStatus('Loading files...');
     try {
+      const folderId = getDriveFolderId();
       const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
       const fields = encodeURIComponent('files(id,name,mimeType,size,modifiedTime)');
       const res = await fetch(
@@ -38,11 +40,15 @@ export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey, folde
     } catch (err) {
       setError(err.message);
     }
-  }, [folderId, apiKey]);
+  }, [apiKey]);
 
   useEffect(() => {
-    if (!clientId || !apiKey || !folderId) {
-      setError('Missing credentials. Fill in Client ID, API Key, and Folder ID.');
+    if (!clientId || !apiKey) {
+      setError('Missing credentials. Set VITE_CLIENT_ID and VITE_API_KEY in your environment.');
+      return;
+    }
+    if (!getDriveFolderId().trim()) {
+      setError('No Drive folder ID. Complete setup or save a folder in System settings.');
       return;
     }
 
@@ -54,7 +60,7 @@ export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey, folde
       .catch((err) => {
         setError(`Auth failed: ${err.message}`);
       });
-  }, [clientId, apiKey, folderId, listFiles]);
+  }, [clientId, apiKey, listFiles]);
 
   const handleDownload = async (file) => {
     setDownloading(file.id);
@@ -101,8 +107,6 @@ export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey, folde
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-  const isDev = import.meta.env.DEV;
-
   return React.createElement(
     'div',
     { className: 'fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm' },
@@ -116,8 +120,13 @@ export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey, folde
         React.createElement(
           'div',
           null,
-          React.createElement('h2', { className: 'text-lg font-bold text-white' }, 'Drive Folder'),
-          isDev && React.createElement('p', { className: 'text-xs text-yellow-400 font-mono mt-0.5' }, 'DEV MODE')
+          React.createElement('h2', { className: 'text-lg font-bold text-white' }, 'Drive folder'),
+          React.createElement(
+            'p',
+            { className: 'text-xs text-gray-500 mt-0.5 font-mono truncate' },
+            getDriveFolderId().slice(0, 20),
+            getDriveFolderId().length > 20 ? '…' : '',
+          ),
         ),
         React.createElement(
           'button',

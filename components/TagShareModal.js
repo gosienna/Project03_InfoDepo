@@ -19,7 +19,8 @@ export const TagShareModal = ({ onClose, getTagSharesList, setTagShareEmails, de
       .catch(() => setRows([]));
   };
 
-  useEffect(() => { load(); }, []);
+  // Reload when modal opens and whenever library tags change (e.g. DataTile edits prune `tagShares`)
+  useEffect(() => { load(); }, [availableTags]);
 
   const tagsAlreadyConfigured = useMemo(() => new Set(rows.map((r) => r.tag)), [rows]);
 
@@ -88,9 +89,13 @@ export const TagShareModal = ({ onClose, getTagSharesList, setTagShareEmails, de
       React.createElement(
         'p',
         { className: 'text-sm text-gray-400 mb-3' },
-        'Pick a tag that already exists on your library items, then enter who can see that tag after Sync. Run Sync to upload ',
+        'Tag items, then assign Gmail addresses per tag. On ',
+        React.createElement('strong', { className: 'text-gray-300' }, 'Sync'),
+        ', the app grants those accounts ',
+        React.createElement('strong', { className: 'text-gray-300' }, 'View'),
+        ' access on each matching file in Google Drive (via the Drive sharing API), uploads ',
         React.createElement('code', { className: 'text-teal-300' }, 'InfoDepo.share.json'),
-        ' to Drive. Share the folder with those people as Viewer in Google Drive.'
+        ', and recipients can use Sync shared. Optionally share the folder as Viewer in Drive if you rely on folder access.'
       ),
       (availableTags || []).length > 0 &&
         React.createElement(

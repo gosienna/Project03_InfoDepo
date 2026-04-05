@@ -21,7 +21,7 @@ export const NewChannelModal = ({ onSave, onClose, apiKey }) => {
       return;
     }
     if (!apiKey) {
-      setError('YouTube API key not configured. Set VITE_TEST_API_KEY in your .env file.');
+      setError('YouTube API key not configured. Set VITE_API_KEY in your environment.');
       return;
     }
 

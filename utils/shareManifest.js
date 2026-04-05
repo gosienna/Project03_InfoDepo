@@ -11,14 +11,16 @@ async function blobToText(blob) {
 }
 
 /**
- * Collect Drive file IDs for a tag: tagged items with driveId, plus images referenced by tagged notes.
+ * Collect Drive file IDs for a tag: tagged items with driveId, images referenced by tagged notes,
+ * tagged images, and tagged YouTube channel JSON files (`channels` store).
  */
-export async function collectDriveIdsForTag(tag, items, images) {
+export async function collectDriveIdsForTag(tag, items, images, channels) {
   const t = normalizeTag(tag);
   if (!t) return [];
   const ids = new Set();
   const itemsArr = items || [];
   const imagesArr = images || [];
+  const channelsArr = channels || [];
 
   for (const item of itemsArr) {
     const tags = normalizeTagsList(item.tags || []);
@@ -43,6 +45,11 @@ export async function collectDriveIdsForTag(tag, items, images) {
     if (tags.includes(t) && img.driveId) ids.add(img.driveId);
   }
 
+  for (const ch of channelsArr) {
+    const tags = normalizeTagsList(ch.tags || []);
+    if (tags.includes(t) && ch.driveId) ids.add(ch.driveId);
+  }
+
   return [...ids];
 }
 
@@ -50,21 +57,101 @@ export async function collectDriveIdsForTag(tag, items, images) {
  * @param {object} opts
  * @param {Array} opts.items — merged library rows (books, notes, videos)
  * @param {Array} opts.images
+ * @param {Array} [opts.channels] — YouTube channel rows (driveId + tags when backed up)
  * @param {Array<{ tag: string, emails: string[] }>} opts.tagSharesRows
  */
-export async function buildShareManifest({ items, images, tagSharesRows }) {
+export async function buildShareManifest({ items, images, channels, tagSharesRows }) {
   const tagsOut = {};
   const rows = tagSharesRows || [];
+  const chList = channels || [];
 
   for (const row of rows) {
     const tagKey = normalizeTag(row.tag);
     if (!tagKey) continue;
     const emails = [...new Set((row.emails || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean))];
-    const driveFileIds = await collectDriveIdsForTag(tagKey, items, images);
+    const driveFileIds = await collectDriveIdsForTag(tagKey, items, images, chList);
     tagsOut[tagKey] = { emails, driveFileIds };
   }
 
   return { version: 1, tags: tagsOut };
+}
+
+/**
+ * Map each Drive file ID → Set of emails that should have reader access from current tags + tag shares.
+ * Same inclusion rules as {@link collectDriveIdsForTag} per tag row.
+ */
+export async function buildFileToDesiredReaders(tagSharesRows, items, images, channels) {
+  const map = new Map();
+  const rows = tagSharesRows || [];
+
+  for (const row of rows) {
+    const tagKey = normalizeTag(row.tag);
+    if (!tagKey) continue;
+    const emails = [
+      ...new Set(
+        (row.emails || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean)
+      ),
+    ];
+    if (emails.length === 0) continue;
+
+    const driveIds = await collectDriveIdsForTag(tagKey, items, images, channels || []);
+    for (const fid of driveIds) {
+      if (!map.has(fid)) map.set(fid, new Set());
+      const set = map.get(fid);
+      for (const e of emails) set.add(e);
+    }
+  }
+
+  return map;
+}
+
+/** Union of recipient emails from tag-share rows and from a v1 manifest (for revoke after config changes). */
+export function collectRecipientEmailsUnion(tagSharesRows, manifest) {
+  const s = new Set();
+  for (const row of tagSharesRows || []) {
+    for (const e of row.emails || []) {
+      const n = String(e).trim().toLowerCase();
+      if (n) s.add(n);
+    }
+  }
+  if (manifest?.tags) {
+    for (const entry of Object.values(manifest.tags)) {
+      const list = entry?.emails;
+      if (!Array.isArray(list)) continue;
+      for (const e of list) {
+        const n = String(e).trim().toLowerCase();
+        if (n) s.add(n);
+      }
+    }
+  }
+  return s;
+}
+
+/**
+ * All Drive file IDs to reconcile permissions for: current library + any IDs from a previous manifest
+ * (covers files no longer in local DB but still on Drive with stale ACLs).
+ */
+export function collectAllDriveFileIdsForReconcile(items, images, channels, manifest) {
+  const ids = new Set();
+  for (const it of items || []) {
+    if (it.driveId) ids.add(it.driveId);
+  }
+  for (const im of images || []) {
+    if (im.driveId) ids.add(im.driveId);
+  }
+  for (const ch of channels || []) {
+    if (ch.driveId) ids.add(ch.driveId);
+  }
+  if (manifest?.tags) {
+    for (const entry of Object.values(manifest.tags)) {
+      const files = entry?.driveFileIds;
+      if (!Array.isArray(files)) continue;
+      for (const id of files) {
+        if (id) ids.add(id);
+      }
+    }
+  }
+  return ids;
 }
 
 export function parseShareManifestJson(text) {

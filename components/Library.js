@@ -3,8 +3,15 @@ import React, { useRef, useState, useEffect } from 'react';
 import { DataTile } from './DataTile.js';
 import { BookIcon } from './icons/BookIcon.js';
 import { DevDriveBrowser } from './DevDriveBrowser.js';
-import { DriveSettingsModal } from './DriveSettingsModal.js';
-import { getDriveCredentials, saveDriveCredentials, clearDriveCredentials } from '../utils/driveCredentials.js';
+import { getDriveCredentials } from '../utils/driveCredentials.js';
+import { getDriveFolderId, setDriveFolderId, parseDriveFolderIdInput } from '../utils/driveFolderStorage.js';
+import {
+  getStoredAccessToken,
+  saveStoredAccessToken,
+  removeStoredAccessToken,
+  clearAllStoredAccessTokens,
+  getAllStoredAccessTokens,
+} from '../utils/driveOAuthStorage.js';
 import { NewNoteModal } from './NewNoteModal.js';
 import { NewYoutubeModal } from './NewYoutubeModal.js';
 import { NewChannelModal } from './NewChannelModal.js';
@@ -17,14 +24,12 @@ import {
   fetchShareManifest,
   getDriveIdsForRecipientEmail,
 } from '../utils/shareManifest.js';
+import { applyTagSharesToDriveFiles } from '../utils/driveSharePermissions.js';
 import { fetchGoogleUserEmail } from '../utils/googleUser.js';
 import { normalizeTag } from '../utils/tagUtils.js';
+import { OWNER_DRIVE_SCOPE, SHARED_DRIVE_SCOPE } from '../utils/driveScopes.js';
 
-const YT_API_KEY = import.meta.env.VITE_TEST_API_KEY || '';
-
-const IS_DEV = import.meta.env.DEV;
-const OWNER_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
-const SHARED_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly openid https://www.googleapis.com/auth/userinfo.email';
+const YT_API_KEY = import.meta.env.VITE_API_KEY || '';
 
 /** Must match `CHANNEL_JSON_MARKER` in `utils/driveSync.js` for Drive backup/sync. */
 const CHANNEL_JSON_MARKER = 'infodepo-channel';
@@ -42,16 +47,19 @@ export const Library = ({
   setRecordTags,
   getTagSharesList, setTagShareEmails, deleteTagShare,
   getMergedLibraryItems,
+  onGoogleUserEmail,
+  onDriveCredentialsChanged,
 }) => {
   const fileInputRef      = useRef(null);
   const uploadTokenRef    = useRef(null);
   const lastScopeRef      = useRef('');
+  const oauthClientModeRef = useRef(null);
   const [isDevBrowserOpen, setIsDevBrowserOpen] = useState(false);
-  const [isSettingsOpen,   setIsSettingsOpen]   = useState(false);
-  const [driveFolderName,  setDriveFolderName]  = useState(null);
   const [uploadStatuses,   setUploadStatuses]   = useState({});
-  const [credentials,      setCredentials]      = useState(() => getDriveCredentials());
+  const credentials = getDriveCredentials();
+  const driveFolderId = getDriveFolderId();
   const [isSystemSettingsOpen, setIsSystemSettingsOpen] = useState(false);
+  const [driveFolderDraft, setDriveFolderDraft] = useState('');
   const [isNewNoteOpen,    setIsNewNoteOpen]    = useState(false);
   const [isYoutubeOpen,    setIsYoutubeOpen]    = useState(false);
   const [isChannelOpen,    setIsChannelOpen]    = useState(false);
@@ -70,7 +78,15 @@ export const Library = ({
   const [syncResult,  setSyncResult]  = useState(null);
   const [syncProgress, setSyncProgress] = useState('');
 
-  const hasCredentials = !!(credentials.clientId && credentials.apiKey && credentials.folderId);
+  const hasCredentials = !!(
+    credentials.clientId &&
+    credentials.apiKey &&
+    driveFolderId.trim()
+  );
+
+  useEffect(() => {
+    if (isSystemSettingsOpen) setDriveFolderDraft(getDriveFolderId());
+  }, [isSystemSettingsOpen]);
 
   // Tags usable in the card dropdown: union of item tags, channel tags + Tag sharing keys
   useEffect(() => {
@@ -102,18 +118,18 @@ export const Library = ({
     return () => { cancelled = true; };
   }, [items, channels, getTagSharesList, isTagShareOpen]);
 
-  // Fetch folder name whenever credentials change
+  // Clear in-memory token when client ID or library mode changes; drop persisted tokens only when those values actually change (not on first mount).
   useEffect(() => {
-    if (!credentials.folderId || !credentials.apiKey || !credentials.apiKey.startsWith('AIza')) return;
-    setDriveFolderName(null);
-    fetch(`https://www.googleapis.com/drive/v3/files/${credentials.folderId}?fields=name&key=${credentials.apiKey}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data?.name) setDriveFolderName(data.name); })
-      .catch(() => {});
-  }, [credentials.folderId, credentials.apiKey]);
-
-  // Clear cached token if client ID or library mode changes
-  useEffect(() => {
+    const next = { clientId: credentials.clientId, libraryMode };
+    if (oauthClientModeRef.current === null) {
+      oauthClientModeRef.current = next;
+    } else {
+      const prev = oauthClientModeRef.current;
+      if (prev.clientId !== next.clientId || prev.libraryMode !== next.libraryMode) {
+        clearAllStoredAccessTokens();
+        oauthClientModeRef.current = next;
+      }
+    }
     uploadTokenRef.current = null;
     lastScopeRef.current = '';
   }, [credentials.clientId, libraryMode]);
@@ -131,6 +147,10 @@ export const Library = ({
         uploadTokenRef.current = null;
         lastScopeRef.current = scope;
       }
+      if (!uploadTokenRef.current) {
+        const fromStorage = getStoredAccessToken(credentials.clientId, scope);
+        if (fromStorage) uploadTokenRef.current = fromStorage;
+      }
       if (uploadTokenRef.current) {
         resolve(uploadTokenRef.current);
         return;
@@ -141,11 +161,37 @@ export const Library = ({
         callback: (res) => {
           if (res.error) { reject(new Error(res.error_description || res.error)); return; }
           uploadTokenRef.current = res.access_token;
+          saveStoredAccessToken(
+            credentials.clientId,
+            scope,
+            res.access_token,
+            res.expires_in,
+          );
           resolve(res.access_token);
         },
       });
       client.requestAccessToken({ prompt: '' });
     });
+
+  useEffect(() => {
+    if (!onGoogleUserEmail) return;
+    if (!hasCredentials) {
+      onGoogleUserEmail(null);
+      return;
+    }
+    let cancelled = false;
+    const scope = isSharedMode ? SHARED_DRIVE_SCOPE : OWNER_DRIVE_SCOPE;
+    (async () => {
+      try {
+        const token = await getDriveTokenForScope(scope);
+        const email = await fetchGoogleUserEmail(token);
+        if (!cancelled) onGoogleUserEmail(email);
+      } catch {
+        if (!cancelled) onGoogleUserEmail(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [hasCredentials, isSharedMode, credentials.clientId, libraryMode, onGoogleUserEmail]);
 
   const handleUpload = async (video) => {
     const uKey = libraryItemKey(video);
@@ -160,7 +206,7 @@ export const Library = ({
       const metadata = {
         name: driveName,
         mimeType: driveMime,
-        ...(credentials.folderId ? { parents: [credentials.folderId] } : {}),
+        parents: [driveFolderId],
       };
 
       const form = new FormData();
@@ -184,6 +230,7 @@ export const Library = ({
     } catch (err) {
       console.error('Upload failed:', err.message);
       uploadTokenRef.current = null;
+      removeStoredAccessToken(credentials.clientId, OWNER_DRIVE_SCOPE);
       setStatus(uKey, 'error');
     }
   };
@@ -206,7 +253,7 @@ export const Library = ({
       const metadata = {
         name: driveName,
         mimeType: 'application/json',
-        ...(credentials.folderId ? { parents: [credentials.folderId] } : {}),
+        parents: [driveFolderId],
       };
       const form = new FormData();
       form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
@@ -228,6 +275,7 @@ export const Library = ({
     } catch (err) {
       console.error('Channel upload failed:', err.message);
       uploadTokenRef.current = null;
+      removeStoredAccessToken(credentials.clientId, OWNER_DRIVE_SCOPE);
       setStatus(uKey, 'error');
     }
   };
@@ -246,39 +294,22 @@ export const Library = ({
   };
 
   const handleDriveButtonClick = () => {
-    if (isSharedMode) {
-      setIsSettingsOpen(true);
-      return;
-    }
-    if (hasCredentials) {
-      setIsDevBrowserOpen(true);
-    } else {
-      setIsSettingsOpen(true);
-    }
-  };
-
-  const handleSaveCredentials = (newCreds) => {
-    saveDriveCredentials(newCreds);
-    setCredentials(newCreds);
-    setIsSettingsOpen(false);
-    if (!isSharedMode) setIsDevBrowserOpen(true);
-  };
-
-  const handleClearCredentials = () => {
-    clearDriveCredentials();
-    uploadTokenRef.current = null;
-    lastScopeRef.current = '';
-    setCredentials({ clientId: '', apiKey: '', folderId: '' });
-    setDriveFolderName(null);
+    if (!hasCredentials) return;
+    setIsDevBrowserOpen(true);
   };
 
   const handleSignOutGoogle = () => {
-    const token = uploadTokenRef.current;
+    const tokens = new Set();
+    if (uploadTokenRef.current) tokens.add(uploadTokenRef.current);
+    for (const t of getAllStoredAccessTokens(credentials.clientId)) tokens.add(t);
     uploadTokenRef.current = null;
     lastScopeRef.current = '';
-    if (token && typeof google !== 'undefined' && google.accounts?.oauth2) {
-      google.accounts.oauth2.revoke(token, () => {});
+    clearAllStoredAccessTokens();
+    onGoogleUserEmail?.(null);
+    if (typeof google !== 'undefined' && google.accounts?.oauth2) {
+      tokens.forEach((token) => google.accounts.oauth2.revoke(token, () => {}));
     }
+    onDriveCredentialsChanged?.();
   };
 
   const runOwnerSync = async () => {
@@ -294,7 +325,7 @@ export const Library = ({
       const images = onGetAllImages ? await onGetAllImages() : [];
       const backupResult = await backupAllToGDrive({
         accessToken: token,
-        folderId: credentials.folderId,
+        folderId: driveFolderId,
         items,
         images,
         channels,
@@ -308,7 +339,7 @@ export const Library = ({
       const syncResult = await syncDriveToLocal({
         accessToken: token,
         apiKey: credentials.apiKey,
-        folderId: credentials.folderId,
+        folderId: driveFolderId,
         books: items.filter(i => i.type !== 'application/x-youtube'),
         getBookByDriveId,
         getBookByName,
@@ -324,20 +355,33 @@ export const Library = ({
       combined.updated = syncResult.updated;
       combined.skipped = syncResult.skipped;
 
+      setSyncProgress('Updating share manifest...');
+      const tagRows = await getTagSharesList();
+      const imagesFresh = onGetAllImages ? await onGetAllImages() : [];
+      const mergedItems = await getMergedLibraryItems();
+
+      let previousShareManifest = null;
       try {
-        setSyncProgress('Updating share manifest...');
-        const tagRows = await getTagSharesList();
-        const imagesFresh = onGetAllImages ? await onGetAllImages() : [];
-        const mergedItems = await getMergedLibraryItems();
+        previousShareManifest = await fetchShareManifest({
+          accessToken: token,
+          apiKey: credentials.apiKey,
+          folderId: driveFolderId,
+        });
+      } catch {
+        previousShareManifest = null;
+      }
+
+      try {
         const manifest = await buildShareManifest({
           items: mergedItems,
           images: imagesFresh,
+          channels: channels || [],
           tagSharesRows: tagRows,
         });
         await uploadShareManifest({
           accessToken: token,
           apiKey: credentials.apiKey,
-          folderId: credentials.folderId,
+          folderId: driveFolderId,
           manifest,
         });
         combined.manifestUploaded = true;
@@ -345,11 +389,31 @@ export const Library = ({
         combined.manifestError = me.message || String(me);
       }
 
+      try {
+        setSyncProgress('Granting View access on Drive for tagged files...');
+        const permResult = await applyTagSharesToDriveFiles({
+          accessToken: token,
+          items: mergedItems,
+          images: imagesFresh,
+          channels: channels || [],
+          tagSharesRows: tagRows,
+          previousManifest: previousShareManifest,
+          onProgress: setSyncProgress,
+        });
+        combined.driveSharesGranted = permResult.granted;
+        combined.driveSharesFailed = permResult.failed;
+        combined.driveSharesRevoked = permResult.revoked;
+        combined.driveSharesRevokeFailed = permResult.revokeFailed;
+      } catch (pe) {
+        combined.driveShareError = pe.message || String(pe);
+      }
+
       setSyncResult(combined);
     } catch (err) {
       console.error('Sync failed:', err);
       setSyncResult({ error: err.message });
       uploadTokenRef.current = null;
+      removeStoredAccessToken(credentials.clientId, OWNER_DRIVE_SCOPE);
     } finally {
       setIsSyncing(false);
       setSyncProgress('');
@@ -369,7 +433,7 @@ export const Library = ({
       const manifest = await fetchShareManifest({
         accessToken: token,
         apiKey: credentials.apiKey,
-        folderId: credentials.folderId,
+        folderId: driveFolderId,
       });
       if (!manifest) {
         setSyncResult({
@@ -377,6 +441,7 @@ export const Library = ({
             'No InfoDepo.share.json in this folder. Ask the owner to run Sync after configuring tag sharing, and share this Drive folder with you as Viewer in Google Drive.',
         });
         uploadTokenRef.current = null;
+        removeStoredAccessToken(credentials.clientId, SHARED_DRIVE_SCOPE);
         return;
       }
       const allowed = getDriveIdsForRecipientEmail(manifest, email);
@@ -385,13 +450,14 @@ export const Library = ({
           error: `No shared items for ${email}. The owner must tag content, add your email under Tag sharing, run Sync, and share the folder with you in Drive.`,
         });
         uploadTokenRef.current = null;
+        removeStoredAccessToken(credentials.clientId, SHARED_DRIVE_SCOPE);
         return;
       }
       setSyncProgress('Syncing shared items...');
       const syncResult = await syncDriveToLocal({
         accessToken: token,
         apiKey: credentials.apiKey,
-        folderId: credentials.folderId,
+        folderId: driveFolderId,
         books: items.filter(i => i.type !== 'application/x-youtube'),
         getBookByDriveId,
         getBookByName,
@@ -416,6 +482,7 @@ export const Library = ({
       console.error('Shared sync failed:', err);
       setSyncResult({ error: err.message });
       uploadTokenRef.current = null;
+      removeStoredAccessToken(credentials.clientId, SHARED_DRIVE_SCOPE);
     } finally {
       setIsSyncing(false);
       setSyncProgress('');
@@ -452,19 +519,18 @@ export const Library = ({
 
   const hasActiveSearch = query || activeFilters.size > 0;
 
-  // Folder badge
-  const folderBadge = driveFolderName && React.createElement(
+  const folderBadge = hasCredentials && React.createElement(
     'span',
     {
       className: 'flex items-center gap-1 bg-gray-800 border border-gray-600/40 text-gray-300 text-xs font-mono px-2.5 py-1.5 rounded-lg',
-      title: `Linked Drive folder: ${driveFolderName}`
+      title: driveFolderId ? `Linked folder: ${driveFolderId}` : '',
     },
     React.createElement(
       'svg',
       { xmlns: 'http://www.w3.org/2000/svg', className: 'h-3 w-3 shrink-0', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
       React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M3 7a2 2 0 012-2h3.586a1 1 0 01.707.293L11 7h10a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z' })
     ),
-    driveFolderName
+    driveFolderId.length > 14 ? `${driveFolderId.slice(0, 8)}…${driveFolderId.slice(-4)}` : driveFolderId || '—',
   );
 
   const syncButton = hasCredentials && React.createElement(
@@ -542,59 +608,31 @@ export const Library = ({
             'Tag sharing'
           ),
 
-        // Dev mode: yellow DEV button (shared viewers open settings to edit folder ID)
-        IS_DEV && React.createElement(
+        React.createElement(
           'div',
           { className: 'flex items-center gap-1.5' },
           React.createElement(
             'button',
             {
               onClick: handleDriveButtonClick,
-              className: 'flex items-center gap-2 bg-yellow-500 hover:bg-yellow-400 text-gray-900 font-bold py-2 px-5 rounded-xl transition-all active:scale-95',
-              title: isSharedMode ? 'Configure Drive credentials' : 'Load from test Drive folder (dev only)'
-            },
-            isSharedMode ? 'DEV: Drive settings' : 'DEV: Test Folder'
-          ),
-          folderBadge
-        ),
-
-        // Production mode: Drive Folder button + gear icon
-        !IS_DEV && React.createElement(
-          'div',
-          { className: 'flex items-center gap-1.5' },
-          React.createElement(
-            'button',
-            {
-              onClick: handleDriveButtonClick,
-              className: 'flex items-center gap-2 bg-teal-700 hover:bg-teal-600 text-white font-bold py-2 px-5 rounded-xl transition-all active:scale-95',
-              title: isSharedMode
-                ? 'Configure the same folder ID the owner shared with you'
-                : hasCredentials
-                  ? 'Browse Drive folder'
-                  : 'Set up Google Drive credentials'
+              disabled: !hasCredentials,
+              className:
+                'flex items-center gap-2 font-bold py-2 px-5 rounded-xl transition-all active:scale-95 ' +
+                (hasCredentials
+                  ? 'bg-teal-700 hover:bg-teal-600 text-white'
+                  : 'bg-gray-700 text-gray-500 cursor-not-allowed'),
+              title: hasCredentials
+                ? 'Browse supported files in your linked Drive folder'
+                : 'Set VITE_CLIENT_ID and VITE_API_KEY in the environment and choose a Drive folder (setup screen or System settings)',
             },
             React.createElement(
               'svg',
               { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
               React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M3 7a2 2 0 012-2h3.586a1 1 0 01.707.293L11 7h10a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z' })
             ),
-            'Drive Folder'
+            'Drive',
           ),
-          hasCredentials && React.createElement(
-            'button',
-            {
-              onClick: () => setIsSettingsOpen(true),
-              className: 'text-gray-500 hover:text-gray-300 p-2 rounded-xl hover:bg-gray-700 transition-colors',
-              title: 'Edit Drive credentials'
-            },
-            React.createElement(
-              'svg',
-              { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
-              React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z' }),
-              React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M15 12a3 3 0 11-6 0 3 3 0 016 0z' })
-            )
-          ),
-          folderBadge
+          folderBadge,
         ),
 
         // Sync button (backup local → Drive, then sync Drive → local)
@@ -803,6 +841,12 @@ export const Library = ({
             `${syncResult.skipped} unchanged`,
             syncResult.manifestUploaded && 'share manifest updated',
             syncResult.manifestError && `manifest upload: ${syncResult.manifestError}`,
+            (syncResult.driveSharesGranted != null ||
+              syncResult.driveSharesFailed ||
+              syncResult.driveSharesRevoked != null ||
+              syncResult.driveSharesRevokeFailed) &&
+              `Drive sharing: ${syncResult.driveSharesGranted ?? 0} granted${(syncResult.driveSharesRevoked ?? 0) > 0 ? `, ${syncResult.driveSharesRevoked} revoked` : ''}${(syncResult.driveSharesFailed ?? 0) > 0 ? `, ${syncResult.driveSharesFailed} grant failed` : ''}${(syncResult.driveSharesRevokeFailed ?? 0) > 0 ? `, ${syncResult.driveSharesRevokeFailed} revoke failed` : ''}`,
+            syncResult.driveShareError && `Drive ACL: ${syncResult.driveShareError}`,
           ].filter(Boolean).join(', '),
       React.createElement(
         'button',
@@ -894,7 +938,7 @@ export const Library = ({
               React.createElement(
                 'p',
                 { className: 'text-amber-100/70 mt-2 max-w-md mx-auto text-sm' },
-                'Configure the same Drive folder ID as the owner, then click Sync shared. If you see an error, confirm the folder is shared with your Google account as Viewer and the owner has run Sync after tagging content for you.'
+                'Use the same VITE_CLIENT_ID and VITE_API_KEY as the owner, sign in with the Google account they shared content with, then click Sync shared. If you see an error, confirm the owner has run Sync after tagging content for you and that your account can access their shared files.'
               )
             )
           : React.createElement(
@@ -928,13 +972,6 @@ export const Library = ({
       onClose: () => setIsDevBrowserOpen(false),
       clientId: credentials.clientId,
       apiKey:   credentials.apiKey,
-      folderId: credentials.folderId,
-    }),
-
-    // Settings modal (production only)
-    isSettingsOpen && React.createElement(DriveSettingsModal, {
-      onSave:  handleSaveCredentials,
-      onClose: () => setIsSettingsOpen(false),
     }),
 
     // New note modal
@@ -1000,39 +1037,71 @@ export const Library = ({
           'div',
           { className: 'p-6 space-y-5' },
 
-          // Section 1: Drive Credentials
+          // Section 1: Google API (build-time env)
           React.createElement(
             'div',
             { className: 'space-y-2' },
-            React.createElement('p', { className: 'text-xs font-semibold text-gray-400 uppercase tracking-wider' }, 'Google Drive'),
+            React.createElement('p', { className: 'text-xs font-semibold text-gray-400 uppercase tracking-wider' }, 'Google API'),
             React.createElement(
               'div',
-              { className: 'flex items-center justify-between bg-gray-900 rounded-xl px-4 py-3' },
+              { className: 'bg-gray-900 rounded-xl px-4 py-3' },
+              React.createElement('p', { className: 'text-sm font-medium text-gray-200' }, 'Client ID & API key'),
               React.createElement(
-                'div',
-                null,
-                React.createElement('p', { className: 'text-sm font-medium text-gray-200' }, 'Drive Credentials'),
-                React.createElement(
-                  'p',
-                  { className: 'text-xs text-gray-500 mt-0.5' },
-                  credentials.folderId
-                    ? `Folder: ${credentials.folderId.slice(0, 12)}…`
-                    : 'No credentials saved'
-                )
+                'p',
+                { className: 'text-xs text-gray-500 mt-1 leading-relaxed' },
+                'Set ',
+                React.createElement('code', { className: 'text-gray-400' }, 'VITE_CLIENT_ID'),
+                ' and ',
+                React.createElement('code', { className: 'text-gray-400' }, 'VITE_API_KEY'),
+                ' in your environment (',
+                React.createElement('code', { className: 'text-gray-400' }, '.env'),
+                ' locally, Netlify site settings in production).',
               ),
+            ),
+          ),
+
+          // Section 1b: Drive folder (localStorage)
+          React.createElement(
+            'div',
+            { className: 'space-y-2' },
+            React.createElement('p', { className: 'text-xs font-semibold text-gray-400 uppercase tracking-wider' }, 'Drive folder'),
+            React.createElement(
+              'div',
+              { className: 'space-y-2' },
+              React.createElement('input', {
+                type: 'text',
+                value: driveFolderDraft,
+                onChange: (e) => setDriveFolderDraft(e.target.value),
+                placeholder: 'Folder ID or Drive URL',
+                className:
+                  'w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-indigo-500 font-mono',
+              }),
               React.createElement(
                 'button',
                 {
+                  type: 'button',
                   onClick: () => {
-                    handleClearCredentials();
+                    const parsed = parseDriveFolderIdInput(driveFolderDraft);
+                    if (!parsed) {
+                      window.alert('Enter a valid folder ID or paste the folder URL from Google Drive.');
+                      return;
+                    }
+                    setDriveFolderId(parsed);
+                    onDriveCredentialsChanged?.();
                     setIsSystemSettingsOpen(false);
                   },
-                  className: 'text-sm text-red-400 hover:text-red-300 px-3 py-1.5 rounded-lg hover:bg-red-900/20 transition-colors',
-                  title: 'Clear all saved Drive credentials',
+                  className: 'w-full py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium',
                 },
-                'Reset'
-              )
-            )
+                'Save folder',
+              ),
+              React.createElement(
+                'p',
+                { className: 'text-xs text-gray-500' },
+                'Stored in this browser as ',
+                React.createElement('code', { className: 'text-gray-400' }, 'infodepo_drive_folder_id'),
+                '. Changing it may require signing in to Google again from the setup screen.',
+              ),
+            ),
           ),
 
           // Section 2: Google Account
