@@ -21,7 +21,6 @@ import { fetchGoogleUserEmail } from '../utils/googleUser.js';
 import { normalizeTag } from '../utils/tagUtils.js';
 import { OWNER_DRIVE_SCOPE, SHARED_DRIVE_SCOPE } from '../utils/driveScopes.js';
 import { SharesEditorModal } from './SharesEditorModal.js';
-import { SharedContentViewer } from './SharedContentViewer.js';
 import { uploadSharesJsonToDrive, fetchSharesJsonByFileId } from '../utils/sharesDriveFile.js';
 import { applyShareRecordsToDriveFiles } from '../utils/driveSharePermissions.js';
 import { payloadToClientRecord, normalizeExplicitRefs } from '../utils/sharesDriveJson.js';
@@ -66,7 +65,7 @@ export const Library = ({
   const [isChannelOpen,    setIsChannelOpen]    = useState(false);
   const [isAddMenuOpen,    setIsAddMenuOpen]    = useState(false);
   const [activeShare,      setActiveShare]      = useState(null);
-  const [viewingShare,     setViewingShare]     = useState(null);
+  const [activeShareFilter, setActiveShareFilter] = useState(null);
   const [availableTags,    setAvailableTags]    = useState([]);
 
   const isSharedMode = libraryMode === 'shared';
@@ -227,7 +226,7 @@ export const Library = ({
         }
       }
 
-      setViewingShare(rec);
+      setActiveShareFilter(rec);
     } catch (e) {
       window.alert(e?.message || String(e));
     }
@@ -315,7 +314,7 @@ export const Library = ({
   };
 
   const handleOpenReceiverShare = async (rec) => {
-    setViewingShare(rec);
+    setActiveShareFilter(rec);
     if (!rec.driveFileId) return;
     try {
       const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
@@ -330,7 +329,7 @@ export const Library = ({
           updatedAt: payload.updatedAt,
         });
         const freshRec = (await getSharesList()).find((s) => s.id === rec.id) || rec;
-        setViewingShare(freshRec);
+        setActiveShareFilter(freshRec);
 
         const driveIds = new Set(
           (updated || []).map((r) => String(r.driveId || '').trim()).filter(Boolean)
@@ -361,7 +360,7 @@ export const Library = ({
           setIsSyncing(false);
           setSyncProgress('');
           const refreshed = (await getSharesList()).find((s) => s.id === rec.id) || rec;
-          setViewingShare(refreshed);
+          setActiveShareFilter(refreshed);
         }
       }
     } catch (e) {
@@ -744,19 +743,35 @@ export const Library = ({
 
   const query = searchQuery.trim().toLowerCase();
 
+  const shareRefDriveIds = useMemo(() => {
+    if (!activeShareFilter) return null;
+    return new Set(
+      (activeShareFilter.explicitRefs || [])
+        .map((r) => String(r.driveId || '').trim())
+        .filter(Boolean)
+    );
+  }, [activeShareFilter]);
+
   const filteredItems = items.filter(item => {
+    if (shareRefDriveIds) {
+      if (!item.driveId || !shareRefDriveIds.has(String(item.driveId))) return false;
+    }
     if (activeFilters.size > 0 && !activeFilters.has(item.idbStore)) return false;
     if (query && !(item.name || '').toLowerCase().includes(query)) return false;
     return true;
   });
 
   const filteredChannels = (channels || []).filter(ch => {
+    if (shareRefDriveIds) {
+      if (!ch.driveId || !shareRefDriveIds.has(String(ch.driveId))) return false;
+    }
     if (activeFilters.size > 0 && !activeFilters.has('channels')) return false;
     if (query && !(ch.name || '').toLowerCase().includes(query)) return false;
     return true;
   });
 
   const filteredShares = (shares || []).filter((s) => {
+    if (shareRefDriveIds) return false;
     if (activeFilters.size > 0 && !activeFilters.has('shares')) return false;
     if (query && !(s.driveFileName || '').toLowerCase().includes(query)) return false;
     return true;
@@ -765,7 +780,7 @@ export const Library = ({
   const totalGridCount = items.length + (channels || []).length + (shares || []).length;
   const filteredGridCount = filteredItems.length + filteredChannels.length + filteredShares.length;
 
-  const hasActiveSearch = query || activeFilters.size > 0;
+  const hasActiveSearch = query || activeFilters.size > 0 || !!activeShareFilter;
 
   const folderBadge = hasCredentials && React.createElement(
     'span',
@@ -1106,6 +1121,43 @@ export const Library = ({
       )
     ),
 
+    // Active share filter banner
+    activeShareFilter && React.createElement(
+      'div',
+      { className: 'mb-4 px-4 py-2.5 rounded-xl text-sm flex items-center justify-between bg-amber-900/30 text-amber-200 border border-amber-800/40' },
+      React.createElement(
+        'span',
+        { className: 'flex items-center gap-2' },
+        React.createElement(
+          'svg',
+          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4 shrink-0', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+          React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z' })
+        ),
+        `Viewing share: ${activeShareFilter.driveFileName || activeShareFilter.id}`,
+        ` (${filteredItems.length + filteredChannels.length} items)`
+      ),
+      React.createElement(
+        'div',
+        { className: 'flex items-center gap-2' },
+        React.createElement(
+          'button',
+          {
+            onClick: () => { setActiveShareFilter(null); setActiveShare(activeShareFilter); },
+            className: 'px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-800/50 hover:bg-amber-700/60 text-amber-100 transition-colors',
+          },
+          'Edit'
+        ),
+        React.createElement(
+          'button',
+          {
+            onClick: () => setActiveShareFilter(null),
+            className: 'text-current opacity-60 hover:opacity-100 text-lg leading-none',
+          },
+          '\u00d7'
+        )
+      )
+    ),
+
     // Channels section (not backed up to Drive — hidden in shared viewer)
     !isSharedMode && filteredChannels.length > 0 && React.createElement(
       'div',
@@ -1162,7 +1214,7 @@ export const Library = ({
               onDelete: (rec) => {
                 deleteShare(rec.id);
                 if (activeShare?.id === rec.id) setActiveShare(null);
-                if (viewingShare?.id === rec.id) setViewingShare(null);
+                if (activeShareFilter?.id === rec.id) setActiveShareFilter(null);
               },
               readOnly: isSharedMode,
             })
@@ -1208,15 +1260,17 @@ export const Library = ({
             React.createElement(
               'p',
               { className: 'text-gray-500 mt-2 max-w-sm mx-auto' },
-              query ? `No items matching "${searchQuery.trim()}"` : 'No items match the selected filters'
+              activeShareFilter
+                ? 'None of the shared items have been synced locally yet. Try syncing first.'
+                : query ? `No items matching "${searchQuery.trim()}"` : 'No items match the selected filters'
             ),
             React.createElement(
               'button',
               {
-                onClick: () => { setSearchQuery(''); setActiveFilters(new Set()); },
+                onClick: () => { setSearchQuery(''); setActiveFilters(new Set()); setActiveShareFilter(null); },
                 className: 'mt-4 text-indigo-400 hover:text-indigo-300 text-sm font-medium transition-colors',
               },
-              'Clear search'
+              activeShareFilter ? 'Clear share filter' : 'Clear search'
             )
           )
         : hasActiveSearch
@@ -1298,20 +1352,6 @@ export const Library = ({
         onRefreshReceiver: activeShare.role === 'receiver' ? handleRefreshReceiverShare : undefined,
       }),
 
-    viewingShare &&
-      React.createElement(SharedContentViewer, {
-        share: viewingShare,
-        items,
-        channels: channels || [],
-        onSelectItem: onSelectItem,
-        onSelectChannel: onSelectChannel,
-        onClose: () => setViewingShare(null),
-        onEdit: () => {
-          const s = viewingShare;
-          setViewingShare(null);
-          setActiveShare(s);
-        },
-      }),
 
     // System settings modal
     isSystemSettingsOpen && React.createElement(

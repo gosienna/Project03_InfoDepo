@@ -139,9 +139,9 @@ Standalone page, no React. Opens in a new browser tab. Reads the EPUB from the `
 ---
 
 ### `Library.js`
-**Role:** Library overview — merged item grid, YouTube **channels** grid (owner mode), search/filters, owner vs shared mode, Drive sync/backup, **Shares** (owner editor + receiver viewer via `SharesListModal` / `SharesEditorModal`), and add flows (file, note, YouTube, channel, new share, link share).
+**Role:** Library overview — merged item grid, YouTube **channels** grid (owner mode), **shares** grid, search/filters, owner vs shared mode, Drive sync/backup, share editor (`SharesEditorModal`), and add flows (file, note, YouTube, channel, new share, link share). Clicking a receiver share activates a **share content filter** that narrows the library grid to only items referenced in the share's `explicitRefs`.
 
-**Layout:** Two sections use the **same responsive grid** (`grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6`): **channels** first (hidden in shared mode), then **items**. Both use [`DataTile.js`](DataTile.js).
+**Layout:** Three sections use the **same responsive grid** (`grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6`): **channels** first (hidden in shared mode), then **shares** (hidden in shared mode and when a share filter is active), then **items**. All use [`DataTile.js`](DataTile.js).
 
 **Props (representative):**
 | Prop | Type | Purpose |
@@ -171,14 +171,14 @@ Standalone page, no React. Opens in a new browser tab. Reads the EPUB from the `
 | `searchQuery`, `activeFilters` | Filter items and channels (e.g. by store type) |
 | `isDevBrowserOpen` | `DevDriveBrowser` modal — import files from the linked Drive folder |
 | `isNewNoteOpen`, `isYoutubeOpen`, `isChannelOpen` | Add modals |
-| `isSharesListOpen`, `activeShare` | Shares list and editor/viewer |
+| `activeShare`, `activeShareFilter` | `activeShare`: share being edited in `SharesEditorModal`; `activeShareFilter`: share whose `explicitRefs` restrict the library grid |
 | `isSystemSettingsOpen`, `isAddMenuOpen` | Menus (system settings: folder draft, OAuth, etc.) |
 | `uploadStatuses` | Per-tile Drive upload state; keys include `libraryItemKey(item)` and `channel-${id}` for channels |
 | `credentials`, `driveFolderId`, `driveFolderDraft` | From `getDriveCredentials()` / `getDriveFolderId()`; draft edits folder before save |
 | `isSyncing`, `syncResult`, `syncProgress` | Combined sync + backup |
 | `availableTags` | Union of tags from items and channels (for `DataTile` and share editor) |
 
-**Toolbar / actions (simplified):** Drive folder browser, **Sync** (owner backup + sync), **Shares**, **Mode: owner / shared**, search, filter chips (Books / Notes / Videos / Channels), add menu (file, note, YouTube, channel, new share, link share), system settings, clear library.
+**Toolbar / actions (simplified):** Drive folder browser, **Sync** (owner backup + sync), **Mode: owner / shared**, search, filter chips (Books / Notes / Videos / Channels / Shares), add menu (file, note, YouTube, channel, new share, link share), system settings, clear library.
 
 **File upload:** Hidden file input → `onAddItem(name, type, file)`.
 
@@ -186,13 +186,15 @@ Standalone page, no React. Opens in a new browser tab. Reads the EPUB from the `
 
 ---
 
-### `SharesListModal.js` / `SharesEditorModal.js`
-**Role:** **Shares list** — new share, link share by Drive file id, open row in editor or viewer. **Editor** — owner sets filename, recipient emails, include-by-tag and explicit items with `driveId`; **Save & upload** writes [`utils/sharesDriveJson.js`](../utils/sharesDriveJson.js) JSON to the linked folder via [`utils/sharesDriveFile.js`](../utils/sharesDriveFile.js) and runs [`applyShareRecordsToDriveFiles`](../utils/driveSharePermissions.js). **Receiver** — read-only with optional refresh from Drive.
+### `SharesEditorModal.js`
+**Role:** Editor modal for a single share. **Owner** sets filename, recipient emails, include-by-tag and explicit items with `driveId`; **Save & upload** writes [`utils/sharesDriveJson.js`](../utils/sharesDriveJson.js) JSON to the linked folder via [`utils/sharesDriveFile.js`](../utils/sharesDriveFile.js) and runs [`applyShareRecordsToDriveFiles`](../utils/driveSharePermissions.js). **Receiver** view is read-only with optional refresh from Drive.
+
+Shares are listed directly in the library grid as `DataTile` tiles (`tileType: 'share'`). Clicking a **receiver** share activates the share content filter (sets `activeShareFilter`), which restricts the library grid to only items whose `driveId` appears in the share's `explicitRefs`. An amber banner shows the active share name and lets the user clear the filter or open the editor. Clicking an **owner** share opens this editor directly.
 
 ---
 
 ### `DataTile.js`
-**Role:** Single component for library **items** (`tileType: 'item'`) and **YouTube channels** (`tileType: 'channel'`). Both use the same Tailwind shell (`DATA_TILE_SHELL` in source: rounded card, shadow, `w-full`, hover lift) so tile **width** matches whatever grid column `Library.js` assigns.
+**Role:** Single component for library **items** (`tileType: 'item'`), **YouTube channels** (`tileType: 'channel'`), and **Drive shares** (`tileType: 'share'`). All use the same Tailwind shell (`DATA_TILE_SHELL` in source: rounded card, shadow, `w-full`, hover lift) so tile **width** matches whatever grid column `Library.js` assigns.
 
 **Props (`tileType: 'item'`):**
 | Prop | Type | Purpose |
@@ -221,6 +223,16 @@ Standalone page, no React. Opens in a new browser tab. Reads the EPUB from the `
 **Item card layout:** `h-40` media (YouTube thumb from blob URL or `BookIcon`), type badge, upload/delete on hover (bottom-right), title, size, tag chips; add-tag **dropdown / new-tag input** are hidden until **hover** on the tag row or **focus-within** (keyboard). Optional IndexedDB hint line for Markdown notes.
 
 **Channel tile layout:** Same shell as items: `h-40` cover (channel avatar or YouTube logo fallback), red **Channel** badge, upload/delete on hover, title, video count, optional handle, tag row (same hover behaviour).
+
+**Props (`tileType: 'share'`):**
+| Prop | Type | Purpose |
+|------|------|---------|
+| `share` | `object` | Share config record from IndexedDB `shares` store |
+| `onSelect` | `function` | Receiver → activates share content filter; Owner → opens editor |
+| `onDelete` | `function` | `(rec) => void` — removes share from store |
+| `readOnly` | `boolean` | Hides delete (shared viewer) |
+
+**Share tile layout:** Same shell, amber-tinted header with share icon, amber **Share** badge, role label (owner/receiver), filename, recipient count, and `explicitRefs` count.
 
 YouTube thumbnails for **items** are resolved asynchronously via `FileReader` on the JSON blob.
 
@@ -447,14 +459,15 @@ Browser opens app
                  └── yes → main shell
        │
        ▼
-  Library (grid: channels section + items section) or Reader / YoutubeChannelViewer
+  Library (grid: channels + shares + items) or Reader / YoutubeChannelViewer
        │
-  ┌────┴────────────────────────────────────────────┐
-  │                                                  │
-Add flows (owner)                              Open from grid
-  ├── Add file / note / YouTube / channel        ├── Item card → Reader or reader.html (EPUB)
-  └── onAddItem / addChannel → IndexedDB         ├── Channel card → YoutubeChannelViewer
-       │                                           └── DataTile re-renders on state updates
+  ┌────┴────────────────────────────────────────────────┐
+  │                                                      │
+Add flows (owner)                                  Open from grid
+  ├── Add file / note / YouTube / channel            ├── Item card → Reader or reader.html (EPUB)
+  ├── New share / Link share                         ├── Channel card → YoutubeChannelViewer
+  └── onAddItem / addChannel / addShare → IndexedDB  ├── Share card (owner) → SharesEditorModal
+       │                                              └── Share card (receiver) → share content filter
        ▼
-  loadItems() / loadChannels() (inside hook)
+  loadItems() / loadChannels() / loadShares() (inside hook)
 ```

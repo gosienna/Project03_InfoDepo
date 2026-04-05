@@ -19,8 +19,9 @@ User
 ```
 App.js
 ├── Header.js               # Nav bar, back button
-├── Library.js              # Item grid, file upload, YouTube modal, Drive browser
-│   ├── DataTile.js         # Library grid tiles (items + channels; same column layout)
+├── Library.js              # Item grid, file upload, YouTube modal, Drive browser, share filter
+│   ├── DataTile.js         # Library grid tiles (items + channels + shares; same column layout)
+│   ├── SharesEditorModal.js # Owner share editor / receiver read-only view
 │   ├── NewNoteModal.js     # Create a new Markdown note
 │   ├── NewYoutubeModal.js  # Add a YouTube video or channel link
 │   └── DevDriveBrowser.js  # Dev/prod: OAuth + Drive API folder browser
@@ -51,6 +52,15 @@ Open item
     ├── PDF/TXT → Reader.js → inline viewer component
     ├── MD      → Reader.js → MarkdownEditor
     └── YouTube → Reader.js → YoutubeViewer (iframe embed)
+
+Share (owner)
+  New share → SharesEditorModal → addShare() → IndexedDB 'shares' store
+  Save & upload → serializeShareToDriveJson → Drive file + applyShareRecordsToDriveFiles (ACLs)
+
+Share (receiver)
+  Link share → paste Drive file ID/URL → fetchSharesJsonByFileId → addShare() → IndexedDB 'shares'
+  Click share tile → activeShareFilter → library grid filtered to explicitRefs driveIds
+                   → syncSharedFilesByDriveId downloads referenced files into IndexedDB
 ```
 
 ## Key Files
@@ -58,13 +68,16 @@ Open item
 | File | Role |
 |------|------|
 | `App.js` | Root — view state, item selection routing |
-| `hooks/useIndexedDB.js` | All IndexedDB CRUD. Three stores: `books` (files), `videos` (YouTube), `assets` (images). See [data-stores.md](data-stores.md) |
-| `components/DataTile.js` | Grid cards for items and channels — same shell; YouTube thumb or BookIcon; tags |
+| `hooks/useIndexedDB.js` | All IndexedDB CRUD. Six stores: `books`, `notes`, `videos`, `images`, `channels`, `shares`. See [data-stores.md](data-stores.md) |
+| `components/DataTile.js` | Grid cards for items, channels, and shares — same shell; YouTube thumb or BookIcon; tags |
 | `components/YoutubeViewer.js` | Embeds YouTube video via `youtube-nocookie.com/embed/{id}` iframe |
 | `components/NewYoutubeModal.js` | Modal to save a YouTube URL as a `application/x-youtube` JSON blob |
 | `reader.html` | Standalone EPUB reader page, no React |
 | `utils/fileUtils.js` | File extension extraction, byte size formatting |
-| `utils/driveSync.js` | Drive sync engine — quota management, metadata-only stubs |
+| `utils/driveSync.js` | Drive sync engine — quota management, metadata-only stubs, shared content download |
+| `utils/sharesDriveJson.js` | Share config serialization/deserialization for Drive JSON |
+| `utils/sharesDriveFile.js` | Upload/fetch share JSON files to/from Google Drive |
+| `utils/driveSharePermissions.js` | Reconcile Drive ACLs from owner share records |
 
 ## Supported Content Types
 
@@ -83,6 +96,6 @@ Open item
 | Framework | React 18.3.1 (no JSX — uses `React.createElement()`) |
 | Build | Vite 6.2.0 |
 | Styling | Tailwind CSS (CDN) |
-| Storage | IndexedDB (`InfoDepo` database, schema version 1, stores: `books`, `notes`, `videos`, `assets`) |
+| Storage | IndexedDB (`InfoDepo` database, schema version 2, stores: `books`, `notes`, `videos`, `images`, `channels`, `shares`) |
 | EPUB rendering | EPUB.js (CDN) |
 | Auth (dev only) | Google OAuth 2.0 via Google Identity Services |
