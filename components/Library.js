@@ -21,9 +21,12 @@ import { fetchGoogleUserEmail } from '../utils/googleUser.js';
 import { normalizeTag } from '../utils/tagUtils.js';
 import { OWNER_DRIVE_SCOPE, SHARED_DRIVE_SCOPE } from '../utils/driveScopes.js';
 import { SharesEditorModal } from './SharesEditorModal.js';
+import { DeleteContentModal } from './DeleteContentModal.js';
 import { uploadSharesJsonToDrive, fetchSharesJsonByFileId } from '../utils/sharesDriveFile.js';
 import { applyShareRecordsToDriveFiles } from '../utils/driveSharePermissions.js';
 import { payloadToClientRecord, normalizeExplicitRefs } from '../utils/sharesDriveJson.js';
+import { getOwnerDriveAccessToken, invalidateDriveAccessTokenCache } from '../utils/driveAccessToken.js';
+import { deleteDriveFilesForMergedItem, deleteDriveFilesForChannel } from '../utils/deleteLibraryContentOnDrive.js';
 
 const YT_API_KEY = import.meta.env.VITE_API_KEY || '';
 
@@ -35,7 +38,7 @@ const channelUploadKey = (ch) => `channel-${ch?.id}`;
 export const Library = ({
   items, channels, shares, libraryMode, onLibraryModeChange,
   onSelectItem, onSelectChannel, onAddItem, onDeleteItem, onClearLibrary,
-  onSetDriveId, onGetAllImages,
+  onSetDriveId, onGetAllImages, getImagesForNote,
   onAddChannel, onDeleteChannel,
   upsertDriveChannel,
   getBookByDriveId, getBookByName, upsertDriveBook,
@@ -67,6 +70,7 @@ export const Library = ({
   const [activeShare,      setActiveShare]      = useState(null);
   const [activeShareFilter, setActiveShareFilter] = useState(null);
   const [availableTags,    setAvailableTags]    = useState([]);
+  const [pendingDelete, setPendingDelete] = useState(null);
 
   const isSharedMode = libraryMode === 'shared';
 
@@ -84,6 +88,63 @@ export const Library = ({
     credentials.apiKey &&
     driveFolderId.trim()
   );
+
+  const recordHasDriveCopy = (rec) => !!(rec?.driveId && String(rec.driveId).trim());
+
+  const handleDeleteItemRequest = (video) => {
+    if (isSharedMode || !recordHasDriveCopy(video) || !hasCredentials) {
+      if (window.confirm(`Are you sure you want to delete "${video.name}"?`)) {
+        onDeleteItem(video.id, video.type);
+      }
+      return;
+    }
+    setPendingDelete({ kind: 'item', item: video });
+  };
+
+  const handleDeleteChannelRequest = (ch) => {
+    if (isSharedMode || !recordHasDriveCopy(ch) || !hasCredentials) {
+      if (window.confirm(`Remove channel "${ch.name}" from your library?`)) {
+        onDeleteChannel(ch.id);
+      }
+      return;
+    }
+    setPendingDelete({ kind: 'channel', channel: ch });
+  };
+
+  const closePendingDelete = () => setPendingDelete(null);
+
+  const runPendingDeleteLocal = async () => {
+    if (!pendingDelete) return;
+    try {
+      if (pendingDelete.kind === 'item') {
+        await onDeleteItem(pendingDelete.item.id, pendingDelete.item.type);
+      } else {
+        await onDeleteChannel(pendingDelete.channel.id);
+      }
+      closePendingDelete();
+    } catch (e) {
+      console.error(e);
+      window.alert(e?.message || 'Could not remove from library.');
+    }
+  };
+
+  const runPendingDeleteWithDrive = async () => {
+    if (!pendingDelete) return;
+    try {
+      const token = await getOwnerDriveAccessToken();
+      if (pendingDelete.kind === 'item') {
+        await deleteDriveFilesForMergedItem(token, pendingDelete.item, getImagesForNote);
+        await onDeleteItem(pendingDelete.item.id, pendingDelete.item.type);
+      } else {
+        await deleteDriveFilesForChannel(token, pendingDelete.channel);
+        await onDeleteChannel(pendingDelete.channel.id);
+      }
+      closePendingDelete();
+    } catch (e) {
+      console.error(e);
+      window.alert(e?.message || 'Could not delete on Google Drive or remove locally.');
+    }
+  };
 
   useEffect(() => {
     if (isSystemSettingsOpen) setDriveFolderDraft(getDriveFolderId());
@@ -384,6 +445,7 @@ export const Library = ({
     }
     uploadTokenRef.current = null;
     lastScopeRef.current = '';
+    invalidateDriveAccessTokenCache();
   }, [credentials.clientId, libraryMode]);
 
   const setStatus = (key, status) =>
@@ -621,6 +683,7 @@ export const Library = ({
     uploadTokenRef.current = null;
     lastScopeRef.current = '';
     clearAllStoredAccessTokens();
+    invalidateDriveAccessTokenCache();
     onGoogleUserEmail?.(null);
     if (typeof google !== 'undefined' && google.accounts?.oauth2) {
       tokens.forEach((token) => google.accounts.oauth2.revoke(token, () => {}));
@@ -1174,7 +1237,7 @@ export const Library = ({
             tileType: 'channel',
             channel: ch,
             onSelect: onSelectChannel,
-            onDelete: onDeleteChannel,
+            onDelete: handleDeleteChannelRequest,
             onUpload: handleChannelUpload,
             uploadStatus: uploadStatuses[channelUploadKey(ch)] ?? null,
             readOnly: isSharedMode,
@@ -1233,7 +1296,7 @@ export const Library = ({
               tileType: 'item',
               item: video,
               onSelect: onSelectItem,
-              onDelete: onDeleteItem,
+              onDelete: handleDeleteItemRequest,
               onUpload: handleUpload,
               uploadStatus: uploadStatuses[libraryItemKey(video)] ?? null,
               readOnly: isSharedMode,
@@ -1519,6 +1582,20 @@ export const Library = ({
           )
         )
       )
-    )
+    ),
+
+    pendingDelete &&
+      React.createElement(DeleteContentModal, {
+        title: pendingDelete.kind === 'item' ? 'Remove item' : 'Remove channel',
+        name:
+          pendingDelete.kind === 'item'
+            ? pendingDelete.item.name
+            : pendingDelete.channel.name || pendingDelete.channel.handle || 'Channel',
+        hasDriveCopy: true,
+        canDeleteFromDrive: hasCredentials,
+        onRemoveLocal: runPendingDeleteLocal,
+        onRemoveFromDrive: runPendingDeleteWithDrive,
+        onClose: closePendingDelete,
+      })
   );
 };

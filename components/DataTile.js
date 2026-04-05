@@ -352,9 +352,7 @@ export const DataTile = ({
     const handleChannelDelete = (e) => {
       e.stopPropagation();
       if (!onDelete) return;
-      if (window.confirm(`Remove channel "${ch.name}" from your library?`)) {
-        onDelete(ch.id);
-      }
+      onDelete(ch);
     };
 
     const handleChannelUpload = (e) => {
@@ -436,9 +434,8 @@ export const DataTile = ({
 
   const handleDelete = (e) => {
     e.stopPropagation();
-    if (window.confirm(`Are you sure you want to delete "${video.name}"?`)) {
-      onDelete(video.id, video.type);
-    }
+    if (!onDelete) return;
+    onDelete(video);
   };
 
   const handleUpload = (e) => {

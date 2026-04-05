@@ -36,7 +36,14 @@ function videoToLibraryItem(v) {
   };
 }
 
-export const YoutubeChannelViewer = ({ channel, onBack, onSelectItem, onDeleteChannel }) => {
+export const YoutubeChannelViewer = ({
+  channel,
+  onBack,
+  onSelectItem,
+  onDeleteChannel,
+  onRequestDeleteChannel,
+  readOnly,
+}) => {
   const [sortMode, setSortMode] = useState('newest');
 
   const sortedVideos = useMemo(() => {
@@ -55,6 +62,11 @@ export const YoutubeChannelViewer = ({ channel, onBack, onSelectItem, onDeleteCh
   };
 
   const handleDeleteChannel = () => {
+    if (readOnly) return;
+    if (onRequestDeleteChannel) {
+      onRequestDeleteChannel(channel);
+      return;
+    }
     if (window.confirm(`Remove channel "${channel.name}" from your library?`)) {
       onDeleteChannel(channel.id);
       onBack();
@@ -104,6 +116,7 @@ export const YoutubeChannelViewer = ({ channel, onBack, onSelectItem, onDeleteCh
         )
       ),
       // Delete channel button
+      !readOnly &&
       React.createElement(
         'button',
         {

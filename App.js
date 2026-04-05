@@ -9,6 +9,11 @@ import { useIndexedDB } from './hooks/useIndexedDB.js';
 import { libraryItemKey } from './utils/libraryItemKey.js';
 import { getLibraryMode as readLibraryMode, setLibraryMode as persistLibraryMode } from './utils/libraryMode.js';
 import { needsDriveOAuthLogin } from './utils/driveOAuthGateCheck.js';
+import { getDriveCredentials } from './utils/driveCredentials.js';
+import { getDriveFolderId } from './utils/driveFolderStorage.js';
+import { DeleteContentModal } from './components/DeleteContentModal.js';
+import { getOwnerDriveAccessToken } from './utils/driveAccessToken.js';
+import { deleteDriveFilesForChannel } from './utils/deleteLibraryContentOnDrive.js';
 
 const App = () => {
   const {
@@ -39,6 +44,7 @@ const App = () => {
   const [oauthGatePending, setOauthGatePending] = useState(true);
   /** When true, full-screen Google sign-in is shown (Drive configured but no valid token). */
   const [oauthGateActive, setOauthGateActive] = useState(false);
+  const [pendingChannelDelete, setPendingChannelDelete] = useState(null);
 
   const recheckDriveOAuthGate = useCallback(() => {
     setOauthGateActive(needsDriveOAuthLogin());
@@ -79,6 +85,55 @@ const App = () => {
   const handleSelectChannel = (channel) => {
     setCurrentChannel(channel);
     setView('channel');
+  };
+
+  const driveCreds = getDriveCredentials();
+  const driveFolderId = getDriveFolderId();
+  const hasDriveLibrarySetup = !!(
+    driveCreds.clientId &&
+    driveCreds.apiKey &&
+    String(driveFolderId || '').trim()
+  );
+
+  const recordHasDriveCopy = (rec) => !!(rec?.driveId && String(rec.driveId).trim());
+
+  const handleRequestDeleteChannel = (channel) => {
+    if (libraryMode === 'shared' || !recordHasDriveCopy(channel) || !hasDriveLibrarySetup) {
+      if (window.confirm(`Remove channel "${channel.name}" from your library?`)) {
+        deleteChannel(channel.id);
+        handleBackToLibrary();
+      }
+      return;
+    }
+    setPendingChannelDelete(channel);
+  };
+
+  const closeChannelDeleteModal = () => setPendingChannelDelete(null);
+
+  const runChannelDeleteLocal = async () => {
+    if (!pendingChannelDelete) return;
+    try {
+      await deleteChannel(pendingChannelDelete.id);
+      closeChannelDeleteModal();
+      handleBackToLibrary();
+    } catch (e) {
+      console.error(e);
+      window.alert(e?.message || 'Could not remove channel.');
+    }
+  };
+
+  const runChannelDeleteWithDrive = async () => {
+    if (!pendingChannelDelete) return;
+    try {
+      const token = await getOwnerDriveAccessToken();
+      await deleteDriveFilesForChannel(token, pendingChannelDelete);
+      await deleteChannel(pendingChannelDelete.id);
+      closeChannelDeleteModal();
+      handleBackToLibrary();
+    } catch (e) {
+      console.error(e);
+      window.alert(e?.message || 'Could not delete on Google Drive or remove locally.');
+    }
   };
 
   if (!isInitialized) {
@@ -139,6 +194,7 @@ const App = () => {
             onClearLibrary: clearAll,
             onSetDriveId: setItemDriveId,
             onGetAllImages: getAllImages,
+            getImagesForNote,
             onAddChannel: addChannel,
             onDeleteChannel: deleteChannel,
             getChannelByDriveId,
@@ -165,6 +221,8 @@ const App = () => {
             onBack: handleBackToLibrary,
             onSelectItem: handleSelectVideo,
             onDeleteChannel: deleteChannel,
+            onRequestDeleteChannel: handleRequestDeleteChannel,
+            readOnly: libraryMode === 'shared',
           })
         : currentVideo
         ? React.createElement(Reader, {
@@ -185,7 +243,17 @@ const App = () => {
               "Return to Library"
             )
           )
-    )
+    ),
+    pendingChannelDelete &&
+      React.createElement(DeleteContentModal, {
+        title: 'Remove channel',
+        name: pendingChannelDelete.name || pendingChannelDelete.handle || 'Channel',
+        hasDriveCopy: true,
+        canDeleteFromDrive: hasDriveLibrarySetup,
+        onRemoveLocal: runChannelDeleteLocal,
+        onRemoveFromDrive: runChannelDeleteWithDrive,
+        onClose: closeChannelDeleteModal,
+      })
   );
 };
 
