@@ -6,19 +6,35 @@ const SUPPORTED_MIME_TYPES = [
   'application/json', // YouTube URL entries backed up from the app
 ];
 
+const IMAGE_MIME_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
+  'image/svg+xml',
+];
+
+const ALL_SYNCABLE_MIME_TYPES = [...SUPPORTED_MIME_TYPES, ...IMAGE_MIME_TYPES];
+
 /**
  * Syncs the Google Drive folder to local IndexedDB.
- * Downloads all supported files from Drive that are new or updated since last sync.
+ * Downloads all supported files (documents + images) from Drive that are new or updated.
+ * Images are matched to their parent notes by scanning markdown content for ![...](filename).
  * Returns: { added, updated, skipped }
  */
 export async function syncDriveToLocal({
   accessToken,
   apiKey,
   folderId,
-  books,            // current items array (non-YouTube) for deduplication
+  books,
   getBookByDriveId,
   getBookByName,
   upsertDriveBook,
+  getImageByDriveId,
+  getImageByName,
+  upsertDriveImage,
+  getNotes,
   onProgress,
 }) {
   const progress = onProgress || (() => {});
@@ -35,8 +51,8 @@ export async function syncDriveToLocal({
     throw new Error(err.error?.message || res.statusText);
   }
   const data = await res.json();
-  const driveFiles = (data.files || [])
-    .filter(f => SUPPORTED_MIME_TYPES.includes(f.mimeType))
+  const allDriveFiles = (data.files || [])
+    .filter(f => ALL_SYNCABLE_MIME_TYPES.includes(f.mimeType))
     .map(f => ({
       driveId: f.id,
       name: f.name,
@@ -45,12 +61,16 @@ export async function syncDriveToLocal({
       modifiedTime: f.modifiedTime,
     }));
 
-  // Most recently modified first
-  driveFiles.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
+  const contentFiles = allDriveFiles.filter(f => SUPPORTED_MIME_TYPES.includes(f.mimeType));
+  const imageFiles   = allDriveFiles.filter(f => IMAGE_MIME_TYPES.includes(f.mimeType));
+
+  contentFiles.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
+  imageFiles.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
 
   const counts = { added: 0, updated: 0, skipped: 0 };
 
-  for (const driveFile of driveFiles) {
+  // Phase 1: sync content files (books, notes, videos)
+  for (const driveFile of contentFiles) {
     progress(`Processing ${driveFile.name}...`);
 
     let existing = await getBookByDriveId(driveFile.driveId);
@@ -60,14 +80,12 @@ export async function syncDriveToLocal({
       ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
       : true;
 
-    // Already up to date
     if (existing && !driveIsNewer) {
       if (!existing.driveId) await upsertDriveBook(driveFile, existing.data);
       counts.skipped++;
       continue;
     }
 
-    // Download full blob
     const blobRes = await fetch(
       `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -80,7 +98,6 @@ export async function syncDriveToLocal({
     let blob = await blobRes.blob();
     let effectiveFile = driveFile;
 
-    // Detect YouTube URL JSON files and re-type them before storing
     if (driveFile.mimeType === 'application/json') {
       try {
         const text = await blob.text();
@@ -96,6 +113,60 @@ export async function syncDriveToLocal({
     const action = await upsertDriveBook(effectiveFile, blob);
     if (action === 'added') counts.added++;
     else counts.updated++;
+  }
+
+  // Phase 2: sync image files
+  if (imageFiles.length > 0 && upsertDriveImage) {
+    const noteIdByImageName = new Map();
+    if (getNotes) {
+      try {
+        const notes = await getNotes();
+        for (const note of notes) {
+          if (!note.data) continue;
+          const text = typeof note.data === 'string' ? note.data : await note.data.text();
+          const imgRefs = text.match(/!\[[^\]]*\]\(([^)]+)\)/g) || [];
+          for (const ref of imgRefs) {
+            const m = ref.match(/!\[[^\]]*\]\(([^)]+)\)/);
+            if (m) noteIdByImageName.set(m[1], note.id);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to scan notes for image references:', err);
+      }
+    }
+
+    for (const driveFile of imageFiles) {
+      progress(`Processing image ${driveFile.name}...`);
+
+      let existing = getImageByDriveId ? await getImageByDriveId(driveFile.driveId) : undefined;
+      if (!existing && getImageByName) existing = await getImageByName(driveFile.name);
+
+      const driveIsNewer = existing
+        ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
+        : true;
+
+      if (existing && !driveIsNewer) {
+        counts.skipped++;
+        continue;
+      }
+
+      const blobRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (!blobRes.ok) {
+        console.warn(`Failed to download image ${driveFile.name}:`, blobRes.statusText);
+        counts.skipped++;
+        continue;
+      }
+      const blob = await blobRes.blob();
+
+      const noteId = noteIdByImageName.get(driveFile.name) || (existing ? existing.noteId : 0);
+      const action = await upsertDriveImage(driveFile, blob, noteId);
+      if (action === 'added') counts.added++;
+      else if (action === 'updated') counts.updated++;
+      else counts.skipped++;
+    }
   }
 
   progress('');

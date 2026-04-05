@@ -1,25 +1,26 @@
 # Data Stores
 
-InfoDepo uses **four** IndexedDB object stores inside the `InfoDepo` database (schema version: **1**).
+InfoDepo uses **five** IndexedDB object stores inside the `InfoDepo` database (schema version: **1**).
 
 ---
 
 ## Overview
 
-| Store    | Contents                              | Drive backup |
-|----------|---------------------------------------|--------------|
-| `books`  | File-based content (EPUB, PDF, TXT)   | Yes          |
-| `notes`  | Markdown notes (`.md`)                | Yes          |
-| `videos` | YouTube links (JSON blob)             | Yes — as `.json` |
-| `images` | Image attachments for Markdown notes  | Yes          |
+| Store      | Contents                              | Drive backup |
+|------------|---------------------------------------|--------------|
+| `books`    | File-based content (EPUB, PDF, TXT)   | Yes          |
+| `notes`    | Markdown notes (`.md`)                | Yes          |
+| `videos`   | YouTube links (JSON blob)             | Yes — as `.json` |
+| `images`   | Image attachments for Markdown notes  | Yes          |
+| `channels` | YouTube channel metadata + video list | No           |
 
-The hook `useIndexedDB` (`hooks/useIndexedDB.js`) manages all stores and exposes a unified `items` array (books + notes + videos combined, sorted newest-first by `modifiedTime`).
+The hook `useIndexedDB` (`hooks/useIndexedDB.js`) manages all stores and exposes a unified `items` array (books + notes + videos combined, sorted newest-first by `modifiedTime`) and a separate `channels` array.
 
 ---
 
 ## Unified Record Schema
 
-All four stores use the same base fields:
+The first four stores (`books`, `notes`, `videos`, `images`) use the same base fields:
 
 ```js
 {
@@ -141,6 +142,54 @@ Any browser-supported image type: `image/png`, `image/jpeg`, `image/gif`, `image
 
 ---
 
+## Store: `channels`
+
+### Purpose
+YouTube channel metadata and their video listings, fetched via YouTube Data API v3. Each record stores a channel's info and an array of all its non-Shorts videos.
+
+### Record schema
+```js
+{
+  id: number,              // autoIncrement PK
+  channelId: string,       // YouTube channel ID (UC...)
+  handle: string,          // e.g. "@stanfordonline"
+  name: string,            // channel display name
+  thumbnailUrl: string,    // channel avatar URL
+  videos: [                // array of video objects
+    {
+      videoId: string,     // 11-char YouTube video ID
+      title: string,
+      publishedAt: string, // ISO date
+      thumbnailUrl: string,
+      viewCount: number,
+      duration: string,    // ISO 8601 duration
+    }
+  ],
+  driveId: string,         // '' (reserved for future backup)
+  modifiedTime: Date,
+}
+```
+
+### Index
+- `channelId` — unique, prevents duplicate channel entries.
+
+### How a channel is created
+1. User clicks **"Add Channel"** → `NewChannelModal`
+2. URL validated (must be `youtube.com/@handle` or `youtube.com/channel/UC...`)
+3. `resolveChannelId()` resolves the handle to a channel ID via YouTube Data API v3
+4. `fetchChannelVideos()` fetches all videos, filtering out Shorts (< 61s)
+5. `addChannel(record)` → saved to `channels` store
+
+### Operations
+
+| Hook function                   | Description |
+|---------------------------------|-------------|
+| `addChannel(record)`            | Save a new channel record |
+| `deleteChannel(id)`             | Remove a channel |
+| `updateChannel(id, data)`       | Update channel fields (e.g. refresh video list) |
+
+---
+
 ## Store Routing
 
 ```js
@@ -176,6 +225,6 @@ See [google-drive-integration.md](google-drive-integration.md) for the full back
 
 ## Schema Version
 
-Current version: **1** — all four stores created in a single upgrade block with the final schema. No migration chain.
+Current version: **1** — all five stores created in a single upgrade block with the final schema. No migration chain.
 
 To reset the database (e.g. after a schema change during development): DevTools → Application → Storage → Clear site data, then reload.

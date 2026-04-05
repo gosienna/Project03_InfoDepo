@@ -19,6 +19,7 @@ A client-side e-book reader. Books are imported from local files or (in dev mode
 - **Vite 6.2.0** — dev server on port 3001
 - **Tailwind CSS** — loaded via CDN in `index.html`
 - **IndexedDB** (`InfoDepo`) — local book storage (blobs + metadata)
+- **YouTube Data API v3** — channel video listing (reuses `VITE_TEST_API_KEY`)
 - **Google OAuth 2.0 + Drive API v3** — dev-only, for loading test books from Drive folder
 - **EPUB.js** — EPUB rendering (CDN)
 - **Playwright** — headless browser testing
@@ -50,18 +51,22 @@ No backend or serverless functions. The dev-only Drive browser (`import.meta.env
 ## Architecture
 
 ```
-App.js                    # View switching (library ↔ reader), IndexedDB init
-├── Header.js             # Nav bar, back button
-├── Library.js            # Book grid, local file upload, Drive browser trigger
-│   ├── BookCard.js       # Individual book item + delete
-│   ├── DevDriveBrowser.js  # OAuth + Drive API v3 folder browser (dev & prod)
-│   └── DriveSettingsModal.js  # Production UI to enter/save Drive credentials
-└── Reader.js             # Dispatches to viewer by file extension / MIME type
+App.js                         # View switching (library ↔ reader ↔ channel), IndexedDB init
+├── Header.js                  # Nav bar, back button
+├── Library.js                 # Book grid, channel list, local file upload, Drive browser trigger
+│   ├── BookCard.js            # Individual book item + delete
+│   ├── DevDriveBrowser.js     # OAuth + Drive API v3 folder browser (dev & prod)
+│   ├── DriveSettingsModal.js  # Production UI to enter/save Drive credentials
+│   ├── NewChannelModal.js     # YouTube channel URL input + API fetch
+│   └── NewYoutubeModal.js     # Single YouTube video URL input
+├── YoutubeChannelViewer.js    # Sortable video grid for a channel (reuses VideoCard)
+└── Reader.js                  # Dispatches to viewer by file extension / MIME type
     ├── PdfViewer.js
     └── TxtViewer.js
 
-utils/driveCredentials.js # Credential source: .env in dev, localStorage in prod
-reader.html               # Standalone EPUB reader (opens in new tab, no iframe sandbox issues)
+utils/driveCredentials.js      # Credential source: .env in dev, localStorage in prod
+utils/youtubeApi.js            # resolveChannelId() + fetchChannelVideos() via YouTube Data API v3
+reader.html                    # Standalone EPUB reader (opens in new tab, no iframe sandbox issues)
 ```
 
 See [documents/architecture.md](documents/architecture.md) for full data flow.
@@ -74,6 +79,8 @@ See [documents/architecture.md](documents/architecture.md) for full data flow.
 
 **Google Drive (production):** Teal **"Drive Folder"** button → if no credentials saved, opens `DriveSettingsModal` first; otherwise opens `DevDriveBrowser` directly. Credentials are entered by the user and stored in `localStorage` under key `infodepo_drive_credentials`. A gear icon appears next to the button to edit credentials after they are saved.
 
+**YouTube channel:** "Add Channel" → `NewChannelModal`. Enter a channel URL (e.g. `youtube.com/@stanfordonline`), fetches all non-Shorts videos via YouTube Data API v3, stores in `channels` IndexedDB store. Uses `VITE_TEST_API_KEY`.
+
 See [documents/google-drive-integration.md](documents/google-drive-integration.md).
 
 ## .env (dev only, gitignored)
@@ -81,7 +88,7 @@ See [documents/google-drive-integration.md](documents/google-drive-integration.m
 ```
 VITE_TEST_DRIVE_FOLDER_ID=   # Google Drive folder ID
 VITE_TEST_CLIENT_ID=         # OAuth 2.0 Client ID
-VITE_TEST_API_KEY=            # Google API Key (AIza...)
+VITE_TEST_API_KEY=           # Google API Key (AIza...) — also used for YouTube Data API v3
 ```
 
 ## Key Conventions

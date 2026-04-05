@@ -4,22 +4,22 @@ overview: "Add YouTube channel support: a new `channels` IndexedDB store, a chan
 todos:
   - id: idb-schema
     content: Add 'channels' store with channelId index directly in the existing v1 onupgradeneeded block (no version bump needed)
-    status: pending
+    status: completed
   - id: youtube-api-util
     content: Create utils/youtubeApi.js with resolveChannelId() and fetchChannelVideos() using YouTube Data API v3
-    status: pending
+    status: completed
   - id: new-channel-modal
     content: Create components/NewChannelModal.js -- channel URL input modal with validation and API fetching
-    status: pending
+    status: completed
   - id: channel-viewer
     content: Create components/YoutubeChannelViewer.js -- sortable video grid reusing VideoCard
-    status: pending
+    status: completed
   - id: wire-app
     content: Wire channel state, view switching, and new buttons into App.js and Library.js
-    status: pending
+    status: completed
   - id: update-docs
     content: Update data-stores.md and CLAUDE.md to document the new channels store and components
-    status: pending
+    status: completed
 isProject: false
 ---
 

@@ -55,23 +55,35 @@ Drive is a **backup and import source** — not a streaming cache. All content i
 User clicks the **"Sync"** button in the Library toolbar (visible when credentials are set).
 
 ### What it syncs
-Books and notes only (`application/epub+zip`, `application/pdf`, `text/plain`, `text/markdown`). YouTube items are local-only and excluded from sync.
+Content files (`application/epub+zip`, `application/pdf`, `text/plain`, `text/markdown`, `application/json`) and image attachments (`image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/bmp`, `image/svg+xml`). YouTube channel records are local-only and excluded from sync.
 
 ### Algorithm (`utils/driveSync.js` → `syncDriveToLocal`)
 
 ```
 1. GET drive/v3/files?q='FOLDER_ID' in parents
-   → Filter to supported MIME types
-   → Sort by modifiedTime descending (most recent first)
+   → Filter to ALL_SYNCABLE_MIME_TYPES (content + image types)
+   → Split into contentFiles and imageFiles
+   → Sort each list by modifiedTime descending
 
-2. For each Drive file:
+Phase 1 — Content files (books, notes, videos):
+2. For each content file:
    a. Look up local record by driveId index
-   b. Fallback: look up by filename (links locally-imported files to Drive)
+   b. Fallback: look up by filename
    c. Compare modifiedTime — is Drive newer?
    d. If local exists + up to date → skip (backfill driveId if missing)
    e. If Drive is newer (or no local record) → download blob → upsertDriveBook(file, blob)
 
-3. Return { added, updated, skipped }
+Phase 2 — Image files:
+3. Scan all local notes' markdown content for ![...](filename) references
+   → Build Map<imageName, noteId> for noteId resolution
+4. For each image file:
+   a. Look up local image by driveId, then by name
+   b. Compare modifiedTime — is Drive newer?
+   c. If up to date → skip
+   d. If newer → download blob → upsertDriveImage(file, blob, noteId)
+      noteId comes from the Map, or from the existing record, or 0 if unresolved
+
+5. Return { added, updated, skipped }
 ```
 
 ### Result banner
@@ -83,6 +95,11 @@ Sync complete — 2 added, 1 updated, 5 unchanged
 - If record found by `driveId` or `name`: updates `driveId`, `modifiedTime`, `data`, `size`
 - If no record: inserts new record with `driveId` set and full blob
 - Always requires a blob — metadata-only stubs are not created
+
+### `upsertDriveImage(driveFile, blob, noteId)`
+- If record found by `driveId` or `name`: updates blob, `driveId`, `modifiedTime`, and optionally `noteId`
+- If no record: inserts new image record into the `images` store with the resolved `noteId`
+- `noteId` is resolved by scanning notes for `![...](filename)` markdown references
 
 ---
 

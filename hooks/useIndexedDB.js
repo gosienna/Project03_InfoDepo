@@ -2,10 +2,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { INFO_DEPO_DB_NAME as DB_NAME, INFO_DEPO_DB_VERSION as DB_VERSION } from '../utils/infodepoDb.js';
 
-const BOOKS_STORE  = 'books';
-const NOTES_STORE  = 'notes';
-const VIDEOS_STORE = 'videos';
-const IMAGES_STORE = 'images';
+const BOOKS_STORE    = 'books';
+const NOTES_STORE    = 'notes';
+const VIDEOS_STORE   = 'videos';
+const IMAGES_STORE   = 'images';
+const CHANNELS_STORE = 'channels';
 
 const isYoutubeType = (type) =>
   type != null && String(type).trim() === 'application/x-youtube';
@@ -48,6 +49,7 @@ const modifiedTimeSortKey = (rec) => {
 export const useIndexedDB = () => {
   const [db, setDb] = useState(null);
   const [items, setItems] = useState([]);
+  const [channels, setChannels] = useState([]);
   const [isInitialized, setIsInitialized] = useState(false);
 
   const initDB = useCallback(() => {
@@ -83,7 +85,8 @@ export const useIndexedDB = () => {
         addStore(BOOKS_STORE,  [{ key: 'driveId', path: 'driveId', unique: false }]);
         addStore(NOTES_STORE,  [{ key: 'driveId', path: 'driveId', unique: false }]);
         addStore(VIDEOS_STORE, [{ key: 'driveId', path: 'driveId', unique: false }]);
-        addStore(IMAGES_STORE, [{ key: 'noteId',  path: 'noteId',  unique: false }]);
+        addStore(IMAGES_STORE,   [{ key: 'noteId',    path: 'noteId',    unique: false }]);
+        addStore(CHANNELS_STORE, [{ key: 'channelId', path: 'channelId', unique: true  }]);
       }
     };
   }, []);
@@ -134,9 +137,21 @@ export const useIndexedDB = () => {
     videosReq.onerror   = (e) => { console.error('Error loading videos:', e.target.error); tryCombine(); };
   }, [db]);
 
+  const loadChannels = useCallback(() => {
+    if (!db) return;
+    let tx;
+    try { tx = db.transaction(CHANNELS_STORE, 'readonly'); }
+    catch { setChannels([]); return; }
+    const req = tx.objectStore(CHANNELS_STORE).getAll();
+    req.onsuccess = (e) => setChannels(e.target.result.sort(
+      (a, b) => modifiedTimeSortKey(b) - modifiedTimeSortKey(a)
+    ));
+    req.onerror = () => setChannels([]);
+  }, [db]);
+
   useEffect(() => {
-    if (isInitialized) loadItems();
-  }, [isInitialized, loadItems]);
+    if (isInitialized) { loadItems(); loadChannels(); }
+  }, [isInitialized, loadItems, loadChannels]);
 
   const addItem = useCallback(async (name, type, data) => {
     if (!db) { console.error('Database not initialized'); return Promise.reject(new Error('Database not initialized')); }
@@ -233,6 +248,72 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
+  const getImageByDriveId = useCallback((driveId) => {
+    if (!db || !driveId) return Promise.resolve(undefined);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IMAGES_STORE, 'readonly');
+      const req = tx.objectStore(IMAGES_STORE).getAll();
+      req.onsuccess = (e) => resolve(e.target.result.find(img => img.driveId === driveId));
+      req.onerror   = (e) => reject(e.target.error);
+    });
+  }, [db]);
+
+  const getImageByName = useCallback((name) => {
+    if (!db) return Promise.resolve(undefined);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IMAGES_STORE, 'readonly');
+      const req = tx.objectStore(IMAGES_STORE).getAll();
+      req.onsuccess = (e) => resolve(e.target.result.find(img => img.name === name));
+      req.onerror   = (e) => reject(e.target.error);
+    });
+  }, [db]);
+
+  const upsertDriveImage = useCallback(async (driveFile, blob, noteId) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    if (!blob) return Promise.resolve('skipped');
+    let existing = await getImageByDriveId(driveFile.driveId);
+    if (!existing) existing = await getImageByName(driveFile.name);
+
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IMAGES_STORE, 'readwrite');
+      const os = tx.objectStore(IMAGES_STORE);
+
+      if (existing) {
+        const updated = {
+          ...existing,
+          driveId: driveFile.driveId,
+          modifiedTime: driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date(),
+          data: blob, size: blob.size,
+          ...(noteId != null ? { noteId } : {}),
+        };
+        const putReq = os.put(updated);
+        putReq.onsuccess = () => resolve('updated');
+        putReq.onerror   = (e) => reject(e.target.error);
+      } else {
+        const record = {
+          noteId: noteId || 0,
+          name: driveFile.name, type: driveFile.mimeType,
+          data: blob, size: blob.size,
+          driveId: driveFile.driveId,
+          modifiedTime: driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date(),
+        };
+        const addReq = os.add(record);
+        addReq.onsuccess = () => resolve('added');
+        addReq.onerror   = (e) => reject(e.target.error);
+      }
+    });
+  }, [db, getImageByDriveId, getImageByName]);
+
+  const getNotes = useCallback(() => {
+    if (!db) return Promise.resolve([]);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(NOTES_STORE, 'readonly');
+      const req = tx.objectStore(NOTES_STORE).getAll();
+      req.onsuccess = (e) => resolve(e.target.result);
+      req.onerror   = (e) => reject(e.target.error);
+    });
+  }, [db]);
+
   const deleteImagesForNote = useCallback((noteId) => {
     if (!db) return Promise.resolve();
     return new Promise((resolve, reject) => {
@@ -259,12 +340,13 @@ export const useIndexedDB = () => {
 
   const clearAll = useCallback(() => {
     if (!db) return;
-    const tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, IMAGES_STORE], 'readwrite');
+    const tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, IMAGES_STORE, CHANNELS_STORE], 'readwrite');
     tx.objectStore(IMAGES_STORE).clear();
     tx.objectStore(VIDEOS_STORE).clear();
     tx.objectStore(NOTES_STORE).clear();
+    tx.objectStore(CHANNELS_STORE).clear();
     const clearReq = tx.objectStore(BOOKS_STORE).clear();
-    clearReq.onsuccess = () => setItems([]);
+    clearReq.onsuccess = () => { setItems([]); setChannels([]); };
     clearReq.onerror   = (e) => console.error('Error clearing library:', e.target.error);
   }, [db]);
 
@@ -375,12 +457,53 @@ export const useIndexedDB = () => {
     });
   }, [db, loadItems, getBookByDriveId, getBookByName]);
 
+  // --- Channel operations ---
+
+  const addChannel = useCallback((record) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(CHANNELS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
+      const addReq = tx.objectStore(CHANNELS_STORE).add({ ...record, driveId: '', modifiedTime: new Date() });
+      addReq.onsuccess = () => { loadChannels(); resolve(); };
+      addReq.onerror = (e) => reject(e.target.error);
+    });
+  }, [db, loadChannels]);
+
+  const deleteChannel = useCallback((id) => {
+    if (!db) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(CHANNELS_STORE, 'readwrite');
+      const req = tx.objectStore(CHANNELS_STORE).delete(id);
+      req.onsuccess = () => { loadChannels(); resolve(); };
+      req.onerror = (e) => reject(e.target.error);
+    });
+  }, [db, loadChannels]);
+
+  const updateChannel = useCallback((id, data) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(CHANNELS_STORE, 'readwrite');
+      const os = tx.objectStore(CHANNELS_STORE);
+      const getReq = os.get(id);
+      getReq.onsuccess = () => {
+        const existing = getReq.result;
+        if (!existing) { reject(new Error('Channel not found')); return; }
+        const putReq = os.put({ ...existing, ...data, modifiedTime: new Date() });
+        putReq.onsuccess = () => { loadChannels(); resolve(); };
+        putReq.onerror = (e) => reject(e.target.error);
+      };
+      getReq.onerror = (e) => reject(e.target.error);
+    });
+  }, [db, loadChannels]);
+
   return {
-    items, isInitialized,
+    items, channels, isInitialized,
     addItem, updateItem, deleteItem, clearAll,
     addImage, getImagesForNote, getAllImages,
+    getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
     setItemDriveId,
-    // Drive sync (books + notes)
+    addChannel, deleteChannel, updateChannel,
     getBookByDriveId, getBookByName, upsertDriveBook,
   };
 };

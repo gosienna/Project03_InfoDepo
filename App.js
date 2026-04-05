@@ -3,17 +3,21 @@ import React, { useState } from 'react';
 import { Header } from './components/Header.js';
 import { Library } from './components/Library.js';
 import { Reader } from './components/Reader.js';
+import { YoutubeChannelViewer } from './components/YoutubeChannelViewer.js';
 import { useIndexedDB } from './hooks/useIndexedDB.js';
 import { libraryItemKey } from './utils/libraryItemKey.js';
 
 const App = () => {
   const {
-    items, addItem, updateItem, deleteItem, clearAll, isInitialized,
+    items, channels, addItem, updateItem, deleteItem, clearAll, isInitialized,
     addImage, getImagesForNote, getAllImages,
+    getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
     setItemDriveId,
+    addChannel, deleteChannel, updateChannel,
     getBookByDriveId, getBookByName, upsertDriveBook,
   } = useIndexedDB();
   const [currentVideo, setCurrentVideo] = useState(null);
+  const [currentChannel, setCurrentChannel] = useState(null);
   const [view, setView] = useState('library');
 
   const openVideo = (video) => {
@@ -34,7 +38,13 @@ const App = () => {
 
   const handleBackToLibrary = () => {
     setCurrentVideo(null);
+    setCurrentChannel(null);
     setView('library');
+  };
+
+  const handleSelectChannel = (channel) => {
+    setCurrentChannel(channel);
+    setView('channel');
   };
 
   if (!isInitialized) {
@@ -54,7 +64,7 @@ const App = () => {
     "div",
     { className: "min-h-screen bg-gray-900 text-gray-100 font-sans flex flex-col" },
     React.createElement(Header, {
-      onBack: view === 'reader' ? handleBackToLibrary : undefined,
+      onBack: view !== 'library' ? handleBackToLibrary : undefined,
     }),
     React.createElement(
       "main",
@@ -62,15 +72,30 @@ const App = () => {
       view === 'library'
         ? React.createElement(Library, {
             items,
+            channels,
             onSelectItem: handleSelectVideo,
+            onSelectChannel: handleSelectChannel,
             onAddItem: addItem,
             onDeleteItem: deleteItem,
             onClearLibrary: clearAll,
             onSetDriveId: setItemDriveId,
             onGetAllImages: getAllImages,
+            onAddChannel: addChannel,
+            onDeleteChannel: deleteChannel,
             getBookByDriveId,
             getBookByName,
             upsertDriveBook,
+            getImageByDriveId,
+            getImageByName,
+            upsertDriveImage,
+            getNotes,
+          })
+        : view === 'channel' && currentChannel
+        ? React.createElement(YoutubeChannelViewer, {
+            channel: currentChannel,
+            onBack: handleBackToLibrary,
+            onSelectItem: handleSelectVideo,
+            onDeleteChannel: deleteChannel,
           })
         : currentVideo
         ? React.createElement(Reader, {
