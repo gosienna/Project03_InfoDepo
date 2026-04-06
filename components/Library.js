@@ -19,7 +19,7 @@ import { syncDriveToLocal, backupAllToGDrive, syncSharedFilesByDriveId } from '.
 import { libraryItemKey } from '../utils/libraryItemKey.js';
 import { fetchGoogleUserEmail } from '../utils/googleUser.js';
 import { normalizeTag } from '../utils/tagUtils.js';
-import { OWNER_DRIVE_SCOPE, SHARED_DRIVE_SCOPE } from '../utils/driveScopes.js';
+import { OWNER_DRIVE_SCOPE } from '../utils/driveScopes.js';
 import { SharesEditorModal } from './SharesEditorModal.js';
 import { DeleteContentModal } from './DeleteContentModal.js';
 import { uploadSharesJsonToDrive, fetchSharesJsonByFileId } from '../utils/sharesDriveFile.js';
@@ -36,9 +36,9 @@ const CHANNEL_JSON_MARKER = 'infodepo-channel';
 const channelUploadKey = (ch) => `channel-${ch?.id}`;
 
 export const Library = ({
-  items, channels, shares, libraryMode, onLibraryModeChange,
+  items, channels, shares,
   onSelectItem, onSelectChannel, onAddItem, onDeleteItem, onClearLibrary,
-  onSetDriveId, onGetAllImages, getImagesForNote,
+  onSetDriveId, onSetNoteFolderData, onGetAllImages, getImagesForNote,
   onAddChannel, onDeleteChannel,
   upsertDriveChannel,
   getBookByDriveId, getBookByName, upsertDriveBook,
@@ -72,8 +72,6 @@ export const Library = ({
   const [availableTags,    setAvailableTags]    = useState([]);
   const [pendingDelete, setPendingDelete] = useState(null);
 
-  const isSharedMode = libraryMode === 'shared';
-
   // Search state
   const [searchQuery,      setSearchQuery]      = useState('');
   const [activeFilters,    setActiveFilters]    = useState(new Set());
@@ -92,7 +90,7 @@ export const Library = ({
   const recordHasDriveCopy = (rec) => !!(rec?.driveId && String(rec.driveId).trim());
 
   const handleDeleteItemRequest = (video) => {
-    if (isSharedMode || !recordHasDriveCopy(video) || !hasCredentials) {
+    if (!recordHasDriveCopy(video) || !hasCredentials) {
       if (window.confirm(`Are you sure you want to delete "${video.name}"?`)) {
         onDeleteItem(video.id, video.type);
       }
@@ -102,7 +100,7 @@ export const Library = ({
   };
 
   const handleDeleteChannelRequest = (ch) => {
-    if (isSharedMode || !recordHasDriveCopy(ch) || !hasCredentials) {
+    if (!recordHasDriveCopy(ch) || !hasCredentials) {
       if (window.confirm(`Remove channel "${ch.name}" from your library?`)) {
         onDeleteChannel(ch.id);
       }
@@ -431,22 +429,19 @@ export const Library = ({
     }
   };
 
-  // Clear in-memory token when client ID or library mode changes; drop persisted tokens only when those values actually change (not on first mount).
+  // Clear in-memory token when client ID changes.
   useEffect(() => {
-    const next = { clientId: credentials.clientId, libraryMode };
+    const clientId = credentials.clientId;
     if (oauthClientModeRef.current === null) {
-      oauthClientModeRef.current = next;
-    } else {
-      const prev = oauthClientModeRef.current;
-      if (prev.clientId !== next.clientId || prev.libraryMode !== next.libraryMode) {
-        clearAllStoredAccessTokens();
-        oauthClientModeRef.current = next;
-      }
+      oauthClientModeRef.current = clientId;
+    } else if (oauthClientModeRef.current !== clientId) {
+      clearAllStoredAccessTokens();
+      oauthClientModeRef.current = clientId;
     }
     uploadTokenRef.current = null;
     lastScopeRef.current = '';
     invalidateDriveAccessTokenCache();
-  }, [credentials.clientId, libraryMode]);
+  }, [credentials.clientId]);
 
   const setStatus = (key, status) =>
     setUploadStatuses(prev => ({ ...prev, [key]: status }));
@@ -489,7 +484,7 @@ export const Library = ({
 
   /** Re-resolve tags → explicitRefs for all owner shares, persist, re-upload JSON, then reapply Drive ACLs. */
   const scheduleReapplyShareAclsAfterTagChange = () => {
-    if (!hasCredentials || isSharedMode) return;
+    if (!hasCredentials) return;
     if (reapplyShareAclTimerRef.current) clearTimeout(reapplyShareAclTimerRef.current);
     reapplyShareAclTimerRef.current = setTimeout(async () => {
       reapplyShareAclTimerRef.current = null;
@@ -556,10 +551,9 @@ export const Library = ({
       return;
     }
     let cancelled = false;
-    const scope = isSharedMode ? SHARED_DRIVE_SCOPE : OWNER_DRIVE_SCOPE;
     (async () => {
       try {
-        const token = await getDriveTokenForScope(scope);
+        const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
         const email = await fetchGoogleUserEmail(token);
         if (!cancelled) onGoogleUserEmail(email);
       } catch {
@@ -567,7 +561,7 @@ export const Library = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [hasCredentials, isSharedMode, credentials.clientId, libraryMode, onGoogleUserEmail]);
+  }, [hasCredentials, credentials.clientId, onGoogleUserEmail]);
 
   const handleUpload = async (video) => {
     const uKey = libraryItemKey(video);
@@ -701,14 +695,13 @@ export const Library = ({
       const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
 
       setSyncProgress('Backing up local items...');
-      const images = onGetAllImages ? await onGetAllImages() : [];
       const backupResult = await backupAllToGDrive({
         accessToken: token,
         folderId: driveFolderId,
         items,
-        images,
         channels,
         onSetDriveId,
+        onSetNoteFolderData,
         onProgress: setSyncProgress,
       });
       combined.backed = backupResult.backed;
@@ -746,54 +739,7 @@ export const Library = ({
     }
   };
 
-  const runSharedSync = async () => {
-    if (!hasCredentials || isSyncing) return;
-    setIsSyncing(true);
-    setSyncResult(null);
-    setSyncProgress('');
-    try {
-      const token = await getDriveTokenForScope(SHARED_DRIVE_SCOPE);
-      setSyncProgress('Reading Google account...');
-      const email = await fetchGoogleUserEmail(token);
-      setSyncProgress('Syncing shared folder...');
-      const syncResult = await syncDriveToLocal({
-        accessToken: token,
-        apiKey: credentials.apiKey,
-        folderId: driveFolderId,
-        books: items.filter(i => i.type !== 'application/x-youtube'),
-        getBookByDriveId,
-        getBookByName,
-        upsertDriveBook,
-        getImageByDriveId,
-        getImageByName,
-        upsertDriveImage,
-        getNotes,
-        upsertDriveChannel,
-        onProgress: setSyncProgress,
-      });
-      setSyncResult({
-        added: syncResult.added,
-        updated: syncResult.updated,
-        skipped: syncResult.skipped,
-        backed: 0,
-        backupFailed: 0,
-        sharedFor: email,
-      });
-    } catch (err) {
-      console.error('Shared sync failed:', err);
-      setSyncResult({ error: err.message });
-      uploadTokenRef.current = null;
-      removeStoredAccessToken(credentials.clientId, SHARED_DRIVE_SCOPE);
-    } finally {
-      setIsSyncing(false);
-      setSyncProgress('');
-    }
-  };
-
-  const runSync = () => {
-    if (isSharedMode) return runSharedSync();
-    return runOwnerSync();
-  };
+  const runSync = () => runOwnerSync();
 
   const toggleFilter = (filter) => {
     setActiveFilters(prev => {
@@ -865,9 +811,7 @@ export const Library = ({
       onClick: runSync,
       disabled: isSyncing,
       className: 'flex items-center gap-1.5 bg-teal-800 hover:bg-teal-700 disabled:opacity-50 text-white text-sm font-bold py-2 px-4 rounded-xl transition-all active:scale-95',
-      title: isSharedMode
-        ? 'Download supported files from the linked Drive folder (read-only). Folder must be shared with your Google account.'
-        : 'Back up local items to Drive, then sync Drive → local',
+      title: 'Back up local items to Drive, then sync Drive → local',
     },
     isSyncing
       ? React.createElement('div', { className: 'h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin' })
@@ -876,7 +820,7 @@ export const Library = ({
           { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
           React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' })
         ),
-    isSyncing ? (syncProgress || 'Syncing...') : (isSharedMode ? 'Sync shared' : 'Sync')
+    isSyncing ? (syncProgress || 'Syncing...') : 'Sync'
   );
 
   return React.createElement(
@@ -901,23 +845,6 @@ export const Library = ({
           hasActiveSearch ? `${filteredGridCount} / ${totalGridCount}` : totalGridCount,
           ' ',
           totalGridCount === 1 ? 'Item' : 'Items'
-        ),
-
-        React.createElement(
-          'button',
-          {
-            type: 'button',
-            onClick: () => onLibraryModeChange(isSharedMode ? 'owner' : 'shared'),
-            className:
-              'text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors ' +
-                (isSharedMode
-                ? 'border-amber-600 text-amber-200 bg-amber-900/40 hover:bg-amber-900/60'
-                : 'border-gray-600 text-gray-300 bg-gray-800 hover:bg-gray-700'),
-            title: isSharedMode
-              ? 'Switch to owner: full library with backup and editing.'
-              : 'Shared viewer: read-only; sync pulls from the linked Drive folder.',
-          },
-          isSharedMode ? 'Mode: shared' : 'Mode: owner'
         ),
 
         React.createElement(
@@ -951,7 +878,6 @@ export const Library = ({
         hasCredentials && syncButton,
 
         // Add Content dropdown
-        !isSharedMode &&
         React.createElement(
           'div',
           { className: 'relative' },
@@ -1055,7 +981,6 @@ export const Library = ({
             )
           )
         ),
-        !isSharedMode &&
         React.createElement('input', {
           ref: fileInputRef,
           type: 'file',
@@ -1081,18 +1006,6 @@ export const Library = ({
         )
       )
     ),
-
-    isSharedMode &&
-      React.createElement(
-        'div',
-        {
-          className:
-            'mb-4 px-4 py-3 rounded-xl text-sm border border-amber-800/50 bg-amber-950/40 text-amber-100/95 leading-relaxed',
-        },
-        'Shared viewer: sync downloads supported files from the linked folder that your Google account can access. The owner must share the Drive folder with you as ',
-        React.createElement('strong', null, 'Viewer'),
-        '. Upload, delete, and local import are turned off.'
-      ),
 
     // Search bar
     React.createElement(
@@ -1221,8 +1134,8 @@ export const Library = ({
       )
     ),
 
-    // Channels section (not backed up to Drive — hidden in shared viewer)
-    !isSharedMode && filteredChannels.length > 0 && React.createElement(
+    // Channels section
+    filteredChannels.length > 0 && React.createElement(
       'div',
       { className: 'mb-6' },
       React.createElement(
@@ -1240,19 +1153,16 @@ export const Library = ({
             onDelete: handleDeleteChannelRequest,
             onUpload: handleChannelUpload,
             uploadStatus: uploadStatuses[channelUploadKey(ch)] ?? null,
-            readOnly: isSharedMode,
-            onSetTags: isSharedMode
-              ? undefined
-              : (c, tags) => setRecordTagsAndReapplyShares(c.id, 'channels', tags),
+            readOnly: false,
+            onSetTags: (c, tags) => setRecordTagsAndReapplyShares(c.id, 'channels', tags),
             availableTags,
           })
         )
       )
     ),
 
-    // Shares (owner library — same grid shell as channels)
-    !isSharedMode &&
-      filteredShares.length > 0 &&
+    // Shares
+    filteredShares.length > 0 &&
       React.createElement(
         'div',
         { className: 'mb-6' },
@@ -1279,7 +1189,7 @@ export const Library = ({
                 if (activeShare?.id === rec.id) setActiveShare(null);
                 if (activeShareFilter?.id === rec.id) setActiveShareFilter(null);
               },
-              readOnly: isSharedMode,
+              readOnly: false,
             })
           )
         )
@@ -1299,10 +1209,8 @@ export const Library = ({
               onDelete: handleDeleteItemRequest,
               onUpload: handleUpload,
               uploadStatus: uploadStatuses[libraryItemKey(video)] ?? null,
-              readOnly: isSharedMode,
-              onSetTags: isSharedMode
-                ? undefined
-                : (v, tags) => setRecordTagsAndReapplyShares(v.id, v.idbStore, tags),
+              readOnly: false,
+              onSetTags: (v, tags) => setRecordTagsAndReapplyShares(v.id, v.idbStore, tags),
               availableTags,
             })
           )
@@ -1338,17 +1246,6 @@ export const Library = ({
           )
         : hasActiveSearch
           ? null
-          : isSharedMode
-          ? React.createElement(
-              'div',
-              { className: 'text-center py-20 px-6 border-2 border-dashed border-amber-900/40 rounded-2xl bg-amber-950/20' },
-              React.createElement('h3', { className: 'text-xl font-semibold text-amber-200/90' }, 'Nothing synced yet'),
-              React.createElement(
-                'p',
-                { className: 'text-amber-100/70 mt-2 max-w-md mx-auto text-sm' },
-                'Use the same VITE_CLIENT_ID and VITE_API_KEY as the owner, sign in with a Google account that can access the shared folder, then click Sync shared.'
-              )
-            )
           : React.createElement(
             'div',
             { className: 'text-center py-20 px-6 border-2 border-dashed border-gray-800 rounded-2xl bg-gray-800/20' },

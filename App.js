@@ -7,7 +7,6 @@ import { Reader } from './components/Reader.js';
 import { YoutubeChannelViewer } from './components/YoutubeChannelViewer.js';
 import { useIndexedDB } from './hooks/useIndexedDB.js';
 import { libraryItemKey } from './utils/libraryItemKey.js';
-import { getLibraryMode as readLibraryMode, setLibraryMode as persistLibraryMode } from './utils/libraryMode.js';
 import { needsDriveOAuthLogin } from './utils/driveOAuthGateCheck.js';
 import { getDriveCredentials } from './utils/driveCredentials.js';
 import { getDriveFolderId } from './utils/driveFolderStorage.js';
@@ -20,7 +19,7 @@ const App = () => {
     items, channels, shares, addItem, updateItem, deleteItem, clearAll, isInitialized,
     addImage, getImagesForNote, getAllImages,
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
-    setItemDriveId,
+    setItemDriveId, setNoteFolderData,
     addChannel, deleteChannel, updateChannel,
     getChannelByDriveId, upsertDriveChannel,
     getBookByDriveId, getBookByName, upsertDriveBook,
@@ -31,11 +30,6 @@ const App = () => {
     updateShare,
     deleteShare,
   } = useIndexedDB();
-  const [libraryMode, setLibraryModeState] = useState(() => readLibraryMode());
-  const setLibraryMode = (mode) => {
-    persistLibraryMode(mode);
-    setLibraryModeState(mode);
-  };
   const [googleUserEmail, setGoogleUserEmail] = useState(null);
   const [currentVideo, setCurrentVideo] = useState(null);
   const [currentChannel, setCurrentChannel] = useState(null);
@@ -54,7 +48,7 @@ const App = () => {
     if (!isInitialized) return;
     setOauthGateActive(needsDriveOAuthLogin());
     setOauthGatePending(false);
-  }, [isInitialized, libraryMode]);
+  }, [isInitialized]);
 
   const handleOAuthGateSuccess = useCallback(() => {
     setOauthGateActive(false);
@@ -98,7 +92,7 @@ const App = () => {
   const recordHasDriveCopy = (rec) => !!(rec?.driveId && String(rec.driveId).trim());
 
   const handleRequestDeleteChannel = (channel) => {
-    if (libraryMode === 'shared' || !recordHasDriveCopy(channel) || !hasDriveLibrarySetup) {
+    if (!recordHasDriveCopy(channel) || !hasDriveLibrarySetup) {
       if (window.confirm(`Remove channel "${channel.name}" from your library?`)) {
         deleteChannel(channel.id);
         handleBackToLibrary();
@@ -164,7 +158,6 @@ const App = () => {
 
   if (oauthGateActive) {
     return React.createElement(GoogleOAuthGate, {
-      libraryMode,
       onSuccess: handleOAuthGateSuccess,
       onGoogleUserEmail: setGoogleUserEmail,
     });
@@ -185,14 +178,13 @@ const App = () => {
             items,
             channels,
             shares,
-            libraryMode,
-            onLibraryModeChange: setLibraryMode,
             onSelectItem: handleSelectVideo,
             onSelectChannel: handleSelectChannel,
             onAddItem: addItem,
             onDeleteItem: deleteItem,
             onClearLibrary: clearAll,
             onSetDriveId: setItemDriveId,
+            onSetNoteFolderData: setNoteFolderData,
             onGetAllImages: getAllImages,
             getImagesForNote,
             onAddChannel: addChannel,
@@ -222,7 +214,7 @@ const App = () => {
             onSelectItem: handleSelectVideo,
             onDeleteChannel: deleteChannel,
             onRequestDeleteChannel: handleRequestDeleteChannel,
-            readOnly: libraryMode === 'shared',
+            readOnly: false,
           })
         : currentVideo
         ? React.createElement(Reader, {
@@ -231,7 +223,7 @@ const App = () => {
             onUpdateItem: updateItem,
             onAddImage: addImage,
             onGetImages: getImagesForNote,
-            readOnly: libraryMode === 'shared',
+            readOnly: false,
           })
         : React.createElement(
             "div",

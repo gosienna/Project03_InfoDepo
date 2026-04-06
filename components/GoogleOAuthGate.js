@@ -2,14 +2,14 @@ import React, { useState } from 'react';
 import { getDriveCredentials } from '../utils/driveCredentials.js';
 import { getDriveFolderId, setDriveFolderId, parseDriveFolderIdInput } from '../utils/driveFolderStorage.js';
 import { saveStoredAccessToken, getStoredAccessToken } from '../utils/driveOAuthStorage.js';
-import { getDriveScopeForLibraryMode } from '../utils/driveScopes.js';
+import { OWNER_DRIVE_SCOPE } from '../utils/driveScopes.js';
 import { waitForGoogleAccounts, requestDriveOauthToken } from '../utils/driveOAuthRequest.js';
 import { fetchGoogleUserEmail } from '../utils/googleUser.js';
 
 /**
  * Full-screen setup: Drive folder ID (localStorage) + Google sign-in when needed.
  */
-export const GoogleOAuthGate = ({ libraryMode, onSuccess, onGoogleUserEmail }) => {
+export const GoogleOAuthGate = ({ onSuccess, onGoogleUserEmail }) => {
   const [folderInput, setFolderInput] = useState(() => getDriveFolderId());
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -26,7 +26,7 @@ export const GoogleOAuthGate = ({ libraryMode, onSuccess, onGoogleUserEmail }) =
       setDriveFolderId(parsed);
       await waitForGoogleAccounts();
       const creds = getDriveCredentials();
-      const scope = getDriveScopeForLibraryMode(libraryMode);
+      const scope = OWNER_DRIVE_SCOPE;
       let accessToken = getStoredAccessToken(creds.clientId, scope);
       let expiresIn;
       if (!accessToken) {

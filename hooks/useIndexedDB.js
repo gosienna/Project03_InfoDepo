@@ -394,94 +394,155 @@ export const useIndexedDB = () => {
     return tryStore(preferred, true);
   }, [db, loadItems]);
 
+  // Store image inside the parent note's `assets` array instead of a separate images record.
   const addImage = useCallback((noteId, name, data, type) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(IMAGES_STORE, 'readwrite');
-      const record = { noteId, name, data, type, size: blobLikeSize(data), driveId: '', modifiedTime: new Date(), tags: [] };
-      const addRequest = tx.objectStore(IMAGES_STORE).add(record);
-      addRequest.onsuccess = (e) => resolve(e.target.result);
-      addRequest.onerror   = (e) => reject(e.target.error);
+      const tx = db.transaction(NOTES_STORE, 'readwrite');
+      const os = tx.objectStore(NOTES_STORE);
+      const req = os.get(noteId);
+      req.onsuccess = () => {
+        const note = req.result;
+        if (!note) { reject(new Error('Note not found')); return; }
+        const assets = Array.isArray(note.assets) ? [...note.assets] : [];
+        const idx = assets.findIndex(a => a.name === name);
+        const asset = { name, data, type, driveId: '' };
+        if (idx >= 0) assets[idx] = asset; else assets.push(asset);
+        const putReq = os.put({ ...note, assets });
+        putReq.onsuccess = (e) => resolve(e.target.result);
+        putReq.onerror   = (e) => reject(e.target.error);
+      };
+      req.onerror = (e) => reject(e.target.error);
     });
   }, [db]);
 
+  // Read assets from note.assets; fall back to legacy images store for old records.
   const getImagesForNote = useCallback((noteId) => {
     if (!db) return Promise.resolve([]);
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(IMAGES_STORE, 'readonly');
-      const request = tx.objectStore(IMAGES_STORE).index('noteId').getAll(IDBKeyRange.only(noteId));
-      request.onsuccess = (e) => resolve(e.target.result);
-      request.onerror   = (e) => reject(e.target.error);
+    return new Promise((resolve) => {
+      let noteAssets = [];
+      let legacyAssets = [];
+      let pending = 2;
+      const finish = () => {
+        pending--;
+        if (pending > 0) return;
+        // Merge: note.assets takes precedence; legacy entries not already present by name are appended.
+        const names = new Set(noteAssets.map(a => a.name));
+        resolve([...noteAssets, ...legacyAssets.filter(a => !names.has(a.name))]);
+      };
+      const noteTx = db.transaction(NOTES_STORE, 'readonly');
+      const noteReq = noteTx.objectStore(NOTES_STORE).get(noteId);
+      noteReq.onsuccess = (e) => { noteAssets = Array.isArray(e.target.result?.assets) ? e.target.result.assets : []; finish(); };
+      noteReq.onerror   = () => finish();
+      const imgTx = db.transaction(IMAGES_STORE, 'readonly');
+      const imgReq = imgTx.objectStore(IMAGES_STORE).index('noteId').getAll(IDBKeyRange.only(noteId));
+      imgReq.onsuccess = (e) => { legacyAssets = e.target.result || []; finish(); };
+      imgReq.onerror   = () => finish();
     });
   }, [db]);
 
+  // Flatten assets from all notes' assets arrays (new storage).
   const getAllImages = useCallback(() => {
     if (!db) return Promise.resolve([]);
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(IMAGES_STORE, 'readonly');
-      const request = tx.objectStore(IMAGES_STORE).getAll();
-      request.onsuccess = (e) => resolve(e.target.result);
-      request.onerror   = (e) => reject(e.target.error);
+      const tx = db.transaction(NOTES_STORE, 'readonly');
+      const req = tx.objectStore(NOTES_STORE).getAll();
+      req.onsuccess = (e) => {
+        const all = [];
+        for (const note of e.target.result) {
+          if (Array.isArray(note.assets)) {
+            all.push(...note.assets.map(a => ({ ...a, noteId: note.id })));
+          }
+        }
+        resolve(all);
+      };
+      req.onerror = (e) => reject(e.target.error);
     });
   }, [db]);
 
   const getImageByDriveId = useCallback((driveId) => {
     if (!db || !driveId) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(IMAGES_STORE, 'readonly');
-      const req = tx.objectStore(IMAGES_STORE).getAll();
-      req.onsuccess = (e) => resolve(e.target.result.find(img => img.driveId === driveId));
-      req.onerror   = (e) => reject(e.target.error);
+      const tx = db.transaction(NOTES_STORE, 'readonly');
+      const req = tx.objectStore(NOTES_STORE).getAll();
+      req.onsuccess = (e) => {
+        for (const note of e.target.result) {
+          if (Array.isArray(note.assets)) {
+            const found = note.assets.find(a => a.driveId === driveId);
+            if (found) { resolve({ ...found, noteId: note.id }); return; }
+          }
+        }
+        resolve(undefined);
+      };
+      req.onerror = (e) => reject(e.target.error);
     });
   }, [db]);
 
   const getImageByName = useCallback((name) => {
     if (!db) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(IMAGES_STORE, 'readonly');
-      const req = tx.objectStore(IMAGES_STORE).getAll();
-      req.onsuccess = (e) => resolve(e.target.result.find(img => img.name === name));
-      req.onerror   = (e) => reject(e.target.error);
+      const tx = db.transaction(NOTES_STORE, 'readonly');
+      const req = tx.objectStore(NOTES_STORE).getAll();
+      req.onsuccess = (e) => {
+        for (const note of e.target.result) {
+          if (Array.isArray(note.assets)) {
+            const found = note.assets.find(a => a.name === name);
+            if (found) { resolve({ ...found, noteId: note.id }); return; }
+          }
+        }
+        resolve(undefined);
+      };
+      req.onerror = (e) => reject(e.target.error);
     });
   }, [db]);
 
+  // Update or insert an asset inside the parent note's assets array.
   const upsertDriveImage = useCallback(async (driveFile, blob, noteId) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     if (!blob) return Promise.resolve('skipped');
-    let existing = await getImageByDriveId(driveFile.driveId);
-    if (!existing) existing = await getImageByName(driveFile.name);
+    if (!noteId) return Promise.resolve('skipped');
 
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(IMAGES_STORE, 'readwrite');
-      const os = tx.objectStore(IMAGES_STORE);
-
-      if (existing) {
-        const updated = {
-          ...existing,
-          driveId: driveFile.driveId,
-          modifiedTime: driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date(),
-          data: blob, size: blob.size,
-          tags: Array.isArray(existing.tags) ? existing.tags : [],
-          ...(noteId != null ? { noteId } : {}),
-        };
-        const putReq = os.put(updated);
-        putReq.onsuccess = () => resolve('updated');
+      const tx = db.transaction(NOTES_STORE, 'readwrite');
+      const os = tx.objectStore(NOTES_STORE);
+      const req = os.get(noteId);
+      req.onsuccess = () => {
+        const note = req.result;
+        if (!note) { resolve('skipped'); return; }
+        const assets = Array.isArray(note.assets) ? [...note.assets] : [];
+        const idx = assets.findIndex(a => a.driveId === driveFile.driveId || a.name === driveFile.name);
+        const updated = { name: driveFile.name, data: blob, type: driveFile.mimeType, driveId: driveFile.driveId };
+        const action = idx >= 0 ? 'updated' : 'added';
+        if (idx >= 0) assets[idx] = updated; else assets.push(updated);
+        const putReq = os.put({ ...note, assets });
+        putReq.onsuccess = () => resolve(action);
         putReq.onerror   = (e) => reject(e.target.error);
-      } else {
-        const record = {
-          noteId: noteId || 0,
-          name: driveFile.name, type: driveFile.mimeType,
-          data: blob, size: blob.size,
-          driveId: driveFile.driveId,
-          modifiedTime: driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date(),
-          tags: [],
-        };
-        const addReq = os.add(record);
-        addReq.onsuccess = () => resolve('added');
-        addReq.onerror   = (e) => reject(e.target.error);
-      }
+      };
+      req.onerror = (e) => reject(e.target.error);
     });
-  }, [db, getImageByDriveId, getImageByName]);
+  }, [db]);
+
+  /** Persist the Drive folder ID and per-asset Drive file IDs back onto the note record. */
+  const setNoteFolderData = useCallback((noteId, folderId, assetDriveIds) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(NOTES_STORE, 'readwrite');
+      const os = tx.objectStore(NOTES_STORE);
+      const req = os.get(noteId);
+      req.onsuccess = () => {
+        const note = req.result;
+        if (!note) { resolve(); return; }
+        const assets = Array.isArray(note.assets) ? note.assets.map(a => {
+          const match = (assetDriveIds || []).find(ad => ad.name === a.name);
+          return match ? { ...a, driveId: match.driveId } : a;
+        }) : [];
+        const putReq = os.put({ ...note, driveFolderId: folderId, assets });
+        putReq.onsuccess = () => { loadItems(); resolve(); };
+        putReq.onerror   = () => reject(putReq.error);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }, [db, loadItems]);
 
   const getNotes = useCallback(() => {
     if (!db) return Promise.resolve([]);
@@ -495,7 +556,8 @@ export const useIndexedDB = () => {
 
   const deleteImagesForNote = useCallback((noteId) => {
     if (!db) return Promise.resolve();
-    return new Promise((resolve, reject) => {
+    // Clear legacy images store records for this note.
+    const clearLegacy = () => new Promise((resolve, reject) => {
       const tx = db.transaction(IMAGES_STORE, 'readwrite');
       const request = tx.objectStore(IMAGES_STORE).index('noteId').openCursor(IDBKeyRange.only(noteId));
       request.onsuccess = (event) => {
@@ -504,6 +566,8 @@ export const useIndexedDB = () => {
       };
       request.onerror = (e) => reject(e.target.error);
     });
+    // assets embedded in the note record are removed when the note itself is deleted — no extra step needed.
+    return clearLegacy();
   }, [db]);
 
   const deleteItem = useCallback((id, type) => {
@@ -620,7 +684,9 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
-  const upsertDriveBook = useCallback(async (driveFile, blob) => {
+  // assets (optional): array of { name, data, type, driveId } to embed in the note record.
+  // driveFile may carry driveFolderId for note bundles synced from Drive subfolders.
+  const upsertDriveBook = useCallback(async (driveFile, blob, assets) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     if (!blob) return Promise.resolve('skipped'); // no-blob stubs no longer supported
     let existing = await getBookByDriveId(driveFile.driveId);
@@ -643,6 +709,8 @@ export const useIndexedDB = () => {
           modifiedTime: driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date(),
           data: blob, size: blob.size,
           tags: Array.isArray(existing.tags) ? existing.tags : [],
+          ...(driveFile.driveFolderId ? { driveFolderId: driveFile.driveFolderId } : {}),
+          ...(Array.isArray(assets) ? { assets } : {}),
         };
         const putRequest = os.put(updated);
         putRequest.onsuccess = () => { loadItems(); resolve('updated'); };
@@ -654,6 +722,8 @@ export const useIndexedDB = () => {
           driveId: driveFile.driveId,
           modifiedTime: driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date(),
           tags: [],
+          ...(driveFile.driveFolderId ? { driveFolderId: driveFile.driveFolderId } : {}),
+          ...(Array.isArray(assets) ? { assets } : {}),
         };
         const addRequest = os.add(record);
         addRequest.onsuccess = () => { loadItems(); resolve('added'); };
@@ -791,7 +861,7 @@ export const useIndexedDB = () => {
     addItem, updateItem, deleteItem, clearAll,
     addImage, getImagesForNote, getAllImages,
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
-    setItemDriveId,
+    setItemDriveId, setNoteFolderData,
     addChannel, deleteChannel, updateChannel,
     getChannelByDriveId, upsertDriveChannel,
     getBookByDriveId, getBookByName, upsertDriveBook,

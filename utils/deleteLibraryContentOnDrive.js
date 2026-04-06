@@ -20,14 +20,20 @@ export async function deleteDriveFilesForMergedItem(accessToken, item, getImages
     queue.push(s);
   };
 
-  push(item?.driveId);
+  if (isMarkdownType(item?.type) && item?.driveFolderId) {
+    // Deleting the folder cascades to the .md file and all asset files inside it.
+    push(item.driveFolderId);
+  } else {
+    push(item?.driveId);
 
-  if (isMarkdownType(item?.type) && item?.id != null && typeof getImagesForNote === 'function') {
-    try {
-      const imgs = await getImagesForNote(item.id);
-      for (const im of imgs || []) push(im?.driveId);
-    } catch (e) {
-      console.warn('[InfoDepo] getImagesForNote while deleting from Drive:', e);
+    // Legacy: notes without a folder — delete the .md file plus any individually-uploaded images.
+    if (isMarkdownType(item?.type) && item?.id != null && typeof getImagesForNote === 'function') {
+      try {
+        const imgs = await getImagesForNote(item.id);
+        for (const im of imgs || []) push(im?.driveId);
+      } catch (e) {
+        console.warn('[InfoDepo] getImagesForNote while deleting from Drive:', e);
+      }
     }
   }
 
