@@ -3,6 +3,7 @@ import React, { useMemo } from 'react';
 import { getFileExtension } from '../utils/fileUtils.js';
 import { EpubViewer } from './EpubViewer.js';
 import { PdfViewer } from './PdfViewer.js';
+import { PdfEditor } from './PdfEditor.js';
 import { TxtViewer } from './TxtViewer.js';
 import { MarkdownEditor } from './MarkdownEditor.js';
 import { YoutubeViewer } from './YoutubeViewer.js';
@@ -27,7 +28,9 @@ export const Reader = ({ video, onUpdateItem, onAddImage, onGetImages, readOnly 
       case 'epub':
         return React.createElement(EpubViewer, { data: video.data });
       case 'pdf':
-        return React.createElement(PdfViewer, { data: video.data });
+        return readOnly
+          ? React.createElement(PdfViewer, { data: video.data })
+          : React.createElement(PdfEditor, { video, onUpdateItem });
       case 'txt':
         return React.createElement(TxtViewer, { data: video.data });
       case 'md':
