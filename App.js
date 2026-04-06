@@ -172,7 +172,7 @@ const App = () => {
     }),
     React.createElement(
       "main",
-      { className: "flex-grow p-4 sm:p-6 md:p-8" },
+      { className: "flex-grow flex flex-col min-h-0 p-4 sm:p-6 md:p-8" },
       view === 'library'
         ? React.createElement(Library, {
             items,

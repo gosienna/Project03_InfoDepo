@@ -41,7 +41,7 @@ export const Reader = ({ video, onUpdateItem, onAddImage, onGetImages, readOnly 
 
   return React.createElement(
     "div",
-    { className: "w-full h-[calc(100vh-140px)] flex flex-col items-center justify-center" },
+    { className: "w-full flex-1 min-h-0 flex flex-col items-stretch" },
     renderContent()
   );
 };
