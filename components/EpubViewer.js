@@ -1,11 +1,106 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import ePub from 'epubjs';
+import Url from 'epubjs/src/utils/url.js';
 
 /** Margin fraction (each side) for prev/next tap — matches overlay intent. */
 const EDGE_FRAC = 0.28;
 const EDGE_MAX_PX = 220;
 const NAV_DEBOUNCE_MS = 420;
+
+/**
+ * Intercept <a href> inside the EPUB iframe. Without this, relative links resolve
+ * against <base> (often the app origin + path) and the iframe navigates to the
+ * SPA index instead of staying in the book.
+ */
+function registerInternalLinkInterception(rendition) {
+  rendition.hooks.content.register((contents) => {
+    const doc = contents.document;
+    let lastTouchLinkAt = 0;
+
+    const runLink = (href) => {
+      if (!href || href.startsWith('mailto:')) return;
+
+      if (/^javascript:/i.test(href) || /^data:/i.test(href)) return;
+
+      const trimmed = href.trim();
+      if (trimmed.startsWith('#')) {
+        try {
+          rendition.display(trimmed);
+        } catch (_) {
+          /* noop */
+        }
+        return;
+      }
+
+      if (/^https?:\/\//i.test(href)) {
+        window.open(href, '_blank', 'noopener,noreferrer');
+        return;
+      }
+
+      if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+        window.open(href, '_blank', 'noopener,noreferrer');
+        return;
+      }
+
+      const baseEl = doc.querySelector('base');
+      const location = baseEl ? baseEl.getAttribute('href') : undefined;
+
+      let linkUrl;
+      try {
+        linkUrl = new Url(trimmed, location);
+      } catch (err) {
+        try {
+          rendition.display(trimmed);
+        } catch (_) {
+          /* noop */
+        }
+        return;
+      }
+
+      let pathArg;
+      if (linkUrl && linkUrl.hash) {
+        pathArg = linkUrl.Path.path + linkUrl.hash;
+      } else if (linkUrl) {
+        pathArg = linkUrl.Path.path;
+      } else {
+        pathArg = trimmed;
+      }
+
+      const relative = rendition.book.path.relative(pathArg);
+      rendition.display(relative);
+    };
+
+    const onLinkPointer = (e) => {
+      const a = e.target && e.target.closest && e.target.closest('a[href]');
+      if (!a) return;
+      const href = a.getAttribute('href');
+      if (href == null || href === '') return;
+
+      if (e.type === 'click' && Date.now() - lastTouchLinkAt < 500) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
+
+      if (/^mailto:/i.test(href)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+
+      if (e.type === 'touchend') {
+        lastTouchLinkAt = Date.now();
+      }
+
+      runLink(href);
+    };
+
+    doc.addEventListener('click', onLinkPointer, true);
+    doc.addEventListener('touchend', onLinkPointer, { capture: true, passive: false });
+  });
+}
 
 function registerIframeEdgeNavigation(rendition) {
   let lastNav = 0;
@@ -131,6 +226,7 @@ export const EpubViewer = ({ data }) => {
           });
           renditionRef.current = rendition;
 
+          registerInternalLinkInterception(rendition);
           registerIframeEdgeNavigation(rendition);
 
           rendition.display().then(() => {

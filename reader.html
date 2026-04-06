@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Zenith Reader</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
@@ -25,10 +25,24 @@
   </div>
 
   <!-- EPUB Viewer — Shadow DOM renders book content here, isolated from page CSS -->
-  <div id="viewer" class="flex-1 min-h-0 bg-white overflow-y-auto"></div>
+  <!-- Relative wrapper lets the edge-tap buttons overlay the viewer -->
+  <div class="relative flex-1 min-h-0">
+    <div id="viewer" class="absolute inset-0 bg-white overflow-y-auto"></div>
+    <!-- Left edge tap zone — previous chapter -->
+    <button id="edge-prev" onclick="prevPage()"
+      class="absolute left-0 inset-y-0 w-[min(30%,160px)] border-0 bg-transparent p-0 select-none touch-manipulation z-10"
+      style="-webkit-tap-highlight-color:transparent;cursor:pointer"
+      disabled aria-label="Previous page"></button>
+    <!-- Right edge tap zone — next chapter -->
+    <button id="edge-next" onclick="nextPage()"
+      class="absolute right-0 inset-y-0 w-[min(30%,160px)] border-0 bg-transparent p-0 select-none touch-manipulation z-10"
+      style="-webkit-tap-highlight-color:transparent;cursor:pointer"
+      disabled aria-label="Next page"></button>
+  </div>
 
   <!-- Nav Bar -->
-  <div class="bg-gray-800 border-t border-gray-700 flex items-center justify-center gap-6 py-3 shrink-0">
+  <div class="bg-gray-800 border-t border-gray-700 flex items-center justify-center gap-6 py-3 shrink-0"
+    style="padding-bottom:max(0.75rem, env(safe-area-inset-bottom, 0px))">
     <button id="btn-prev" onclick="prevPage()"
       class="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
       disabled>← Previous</button>
@@ -72,6 +86,112 @@
     }
     function nextPage() {
       if (currentIndex < spine.length - 1) renderChapter(++currentIndex);
+    }
+
+    function normalizeZipPath(p) {
+      return String(p || '').replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\/+/, '');
+    }
+
+    /** Map a resolved zip path (e.g. OEBPS/chap.xhtml) to spine index, or -1 */
+    function findSpineIndexForZipPath(pathOnly) {
+      const target = normalizeZipPath(pathOnly);
+      if (!target) return -1;
+      for (let i = 0; i < spine.length; i++) {
+        const full = normalizeZipPath(opfDir ? opfDir + '/' + spine[i] : spine[i]);
+        const rel = normalizeZipPath(spine[i]);
+        if (target === full || target === rel) return i;
+        if (target.endsWith('/' + rel) || full.endsWith('/' + target) || target.endsWith('/' + full)) return i;
+      }
+      return -1;
+    }
+
+    /**
+     * Clicks on <a href> would resolve against the page URL (reader.html) and load the SPA.
+     * Intercept: in-book navigation uses spine + renderChapter; http(s) opens a new tab.
+     */
+    function attachLinkInterceptor(contentEl, chapterPath) {
+      contentEl.addEventListener(
+        'click',
+        (e) => {
+          const a = e.target && e.target.closest && e.target.closest('a[href]');
+          if (!a) return;
+          const href = a.getAttribute('href');
+          if (href == null || href === '' || href.startsWith('mailto:')) return;
+
+          if (/^https?:\/\//i.test(href)) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.open(href, '_blank', 'noopener,noreferrer');
+            return;
+          }
+
+          if (/^javascript:/i.test(href) || /^data:/i.test(href)) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
+
+          e.preventDefault();
+          e.stopPropagation();
+
+          const trimmed = href.trim();
+          if (trimmed.startsWith('#')) {
+            const id = decodeURIComponent(trimmed.slice(1));
+            const esc = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            let el = null;
+            try {
+              el = contentEl.querySelector('#' + esc);
+            } catch (err) {
+              /* ignore */
+            }
+            if (!el) el = contentEl.querySelector('[name="' + id.replace(/"/g, '\\"') + '"]');
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            return;
+          }
+
+          let pathPart = trimmed;
+          let inlineHash = '';
+          const pound = pathPart.indexOf('#');
+          if (pound >= 0) {
+            inlineHash = pathPart.slice(pound + 1);
+            pathPart = pathPart.slice(0, pound);
+          }
+
+          const resolved = resolveHref(chapterPath, pathPart);
+          const hashIdx = resolved.indexOf('#');
+          const pathOnly = hashIdx >= 0 ? resolved.slice(0, hashIdx) : resolved;
+          let hash = hashIdx >= 0 ? resolved.slice(hashIdx + 1) : '';
+          if (inlineHash) hash = inlineHash;
+
+          const idx = findSpineIndexForZipPath(pathOnly);
+          if (idx >= 0) {
+            currentIndex = idx;
+            renderChapter(idx).then(() => {
+              if (!hash) return;
+              requestAnimationFrame(() => {
+                const root = shadowRoot && shadowRoot.querySelector('.epub-content');
+                if (!root) return;
+                const esc = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(hash) : hash.replace(/\\/g, '\\\\');
+                let target = null;
+                try {
+                  target = root.querySelector('#' + esc);
+                } catch (err) {
+                  /* ignore */
+                }
+                if (!target) target = root.querySelector('[name="' + hash.replace(/"/g, '\\"') + '"]');
+                if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              });
+            });
+            return;
+          }
+
+          const file = zip && zip.file(normalizeZipPath(pathOnly));
+          if (file) {
+            console.warn('Link target not in spine (no navigation):', pathOnly);
+          }
+        },
+        true
+      );
     }
 
     // Resolve a relative URL against a base path within the zip
@@ -195,6 +315,8 @@
       content.innerHTML = doc.body.innerHTML;
       shadowRoot.appendChild(content);
 
+      attachLinkInterceptor(content, chapterPath);
+
       // Scroll to top
       document.getElementById('viewer').scrollTop = 0;
 
@@ -202,6 +324,8 @@
       document.getElementById('page-info').textContent = `${index + 1} / ${spine.length}`;
       document.getElementById('btn-prev').disabled = index === 0;
       document.getElementById('btn-next').disabled = index === spine.length - 1;
+      document.getElementById('edge-prev').disabled = index === 0;
+      document.getElementById('edge-next').disabled = index === spine.length - 1;
     }
 
     const bookId = parseInt(new URLSearchParams(location.search).get('id'));
