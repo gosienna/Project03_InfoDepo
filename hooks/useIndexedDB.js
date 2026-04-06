@@ -10,8 +10,6 @@ const IMAGES_STORE   = 'images';
 const CHANNELS_STORE = 'channels';
 const SHARES_STORE   = 'shares';
 
-/** Legacy localStorage key — migrated to `shares` store on DB v2 upgrade. */
-const LEGACY_SHARES_LS_KEY = 'infodepo_shares_v1';
 
 const isYoutubeType = (type) =>
   type != null && String(type).trim() === 'application/x-youtube';
@@ -69,9 +67,13 @@ export const useIndexedDB = () => {
       const err = event.target.error;
       console.error('Database error:', err);
       if (err?.name === 'VersionError') {
-        console.error(
-          '[InfoDepo] IndexedDB was already at a higher version. Clear site data (Application → Storage) for this origin or delete the "InfoDepo" database, then reload.'
-        );
+        // The browser has a DB at a higher version than the current code requests.
+        // Delete it and reinitialize from scratch.
+        console.warn('[InfoDepo] VersionError — deleting stale database and reinitializing.');
+        const del = indexedDB.deleteDatabase(DB_NAME);
+        del.onsuccess = () => initDB();
+        del.onerror   = () => setIsInitialized(true);
+        return;
       }
       setIsInitialized(true);
     };
@@ -84,33 +86,17 @@ export const useIndexedDB = () => {
     request.onupgradeneeded = (event) => {
       const dbInstance = event.target.result;
       if (event.oldVersion < 1) {
-        const addStore = (name, indexSpec) => {
-          const s = dbInstance.createObjectStore(name, { keyPath: 'id', autoIncrement: true });
+        const addStore = (name, indexSpec, opts = { keyPath: 'id', autoIncrement: true }) => {
+          const s = dbInstance.createObjectStore(name, opts);
           indexSpec.forEach(({ key, path, unique }) => s.createIndex(key, path, { unique }));
+          return s;
         };
-        addStore(BOOKS_STORE,  [{ key: 'driveId', path: 'driveId', unique: false }]);
-        addStore(NOTES_STORE,  [{ key: 'driveId', path: 'driveId', unique: false }]);
-        addStore(VIDEOS_STORE, [{ key: 'driveId', path: 'driveId', unique: false }]);
+        addStore(BOOKS_STORE,    [{ key: 'driveId',   path: 'driveId',   unique: false }]);
+        addStore(NOTES_STORE,    [{ key: 'driveId',   path: 'driveId',   unique: false }]);
+        addStore(VIDEOS_STORE,   [{ key: 'driveId',   path: 'driveId',   unique: false }]);
         addStore(IMAGES_STORE,   [{ key: 'noteId',    path: 'noteId',    unique: false }]);
         addStore(CHANNELS_STORE, [{ key: 'channelId', path: 'channelId', unique: true  }]);
-      }
-      if (event.oldVersion < 2 && !dbInstance.objectStoreNames.contains(SHARES_STORE)) {
-        const sharesOs = dbInstance.createObjectStore(SHARES_STORE, { keyPath: 'id' });
-        sharesOs.createIndex('driveFileId', 'driveFileId', { unique: false });
-        try {
-          const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(LEGACY_SHARES_LS_KEY) : null;
-          if (raw) {
-            const arr = JSON.parse(raw);
-            if (Array.isArray(arr)) {
-              for (const row of arr) {
-                if (row && row.id) sharesOs.put(row);
-              }
-            }
-          }
-          localStorage.removeItem(LEGACY_SHARES_LS_KEY);
-        } catch (e) {
-          console.warn('[InfoDepo] shares migration from localStorage:', e);
-        }
+        addStore(SHARES_STORE,   [{ key: 'driveFileId', path: 'driveFileId', unique: false }], { keyPath: 'id' });
       }
     };
   }, []);
@@ -586,32 +572,12 @@ export const useIndexedDB = () => {
 
   const clearAll = useCallback(() => {
     if (!db) return;
-    let tx;
-    try {
-      tx = db.transaction(
-        [BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, IMAGES_STORE, CHANNELS_STORE, SHARES_STORE],
-        'readwrite'
-      );
-    } catch (e) {
-      console.error('clearAll transaction failed:', e);
-      return;
-    }
-    try {
-      tx.objectStore(SHARES_STORE).clear();
-    } catch {
-      /* store missing on very old DB — ignore */
-    }
-    tx.objectStore(IMAGES_STORE).clear();
-    tx.objectStore(VIDEOS_STORE).clear();
-    tx.objectStore(NOTES_STORE).clear();
-    tx.objectStore(CHANNELS_STORE).clear();
-    const clearReq = tx.objectStore(BOOKS_STORE).clear();
-    clearReq.onsuccess = () => {
-      setItems([]);
-      setChannels([]);
-      setShares([]);
-    };
-    clearReq.onerror   = (e) => console.error('Error clearing library:', e.target.error);
+    // Close the active connection so the delete request isn't blocked.
+    db.close();
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = () => window.location.reload();
+    req.onerror   = (e) => console.error('Error deleting database:', e.target.error);
+    req.onblocked = () => console.warn('[InfoDepo] deleteDatabase blocked — close other tabs and reload.');
   }, [db]);
 
   /** Update the driveId on any store record after a successful Drive upload. */

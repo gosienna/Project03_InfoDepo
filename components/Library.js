@@ -660,7 +660,7 @@ export const Library = ({
   };
 
   const handleConfirmClear = () => {
-    if (window.confirm('Are you sure you want to delete all items from your library? This action cannot be undone.')) {
+    if (window.confirm('Delete the local database and reinitialize? All locally stored content will be removed. This cannot be undone.')) {
       onClearLibrary();
     }
   };
@@ -1469,9 +1469,8 @@ export const Library = ({
                     setIsSystemSettingsOpen(false);
                     handleConfirmClear();
                   },
-                  disabled: totalGridCount === 0,
-                  className: 'text-sm text-red-400 hover:text-red-300 px-3 py-1.5 rounded-lg hover:bg-red-900/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed',
-                  title: 'Delete all items from local storage',
+                  className: 'text-sm text-red-400 hover:text-red-300 px-3 py-1.5 rounded-lg hover:bg-red-900/20 transition-colors',
+                  title: 'Delete database and reinitialize',
                 },
                 'Clear All'
               )
