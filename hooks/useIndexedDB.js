@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { INFO_DEPO_DB_NAME as DB_NAME, INFO_DEPO_DB_VERSION as DB_VERSION } from '../utils/infodepoDb.js';
 import { normalizeTagsList } from '../utils/tagUtils.js';
+import { parseSharesDriveJsonText, payloadToClientRecord } from '../utils/sharesDriveJson.js';
 
 const BOOKS_STORE    = 'books';
 const NOTES_STORE    = 'notes';
@@ -201,6 +202,27 @@ export const useIndexedDB = () => {
       }),
     [db]
   );
+
+  const getShareById = useCallback((id) => {
+    if (!db || !id) return Promise.resolve(undefined);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(SHARES_STORE, 'readonly');
+      const req = tx.objectStore(SHARES_STORE).get(id);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }, [db]);
+
+  const getShareByDriveFileId = useCallback((driveFileId) => {
+    if (!db || !driveFileId) return Promise.resolve(undefined);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(SHARES_STORE, 'readonly');
+      const ix = tx.objectStore(SHARES_STORE).index('driveFileId');
+      const req = ix.get(driveFileId);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }, [db]);
 
   useEffect(() => {
     if (isInitialized) {
@@ -799,6 +821,43 @@ export const useIndexedDB = () => {
     });
   }, [db, loadChannels, getChannelByDriveId]);
 
+  /**
+   * Persist a share config from Drive (`*.share.json`) into the `shares` store.
+   * @returns {Promise<'added'|'updated'|'skipped'>}
+   */
+  const upsertDriveShare = useCallback(
+    async (driveFile, text, options = {}) => {
+      if (!db) return Promise.reject(new Error('Database not initialized'));
+      const payload = parseSharesDriveJsonText(text);
+      if (!payload) return 'skipped';
+
+      let existing = await getShareByDriveFileId(driveFile.driveId);
+      if (!existing && payload.localId) {
+        existing = await getShareById(payload.localId);
+      }
+
+      const role = existing?.role ?? options.role ?? 'owner';
+      const id =
+        existing?.id ||
+        payload.localId ||
+        (typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `share-${Date.now()}`);
+      const rec = payloadToClientRecord(id, payload, role, driveFile.driveId);
+
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(SHARES_STORE, 'readwrite');
+        const putReq = tx.objectStore(SHARES_STORE).put(rec);
+        putReq.onsuccess = () => {
+          loadShares();
+          resolve(existing ? 'updated' : 'added');
+        };
+        putReq.onerror = () => reject(putReq.error);
+      });
+    },
+    [db, loadShares, getShareByDriveFileId, getShareById]
+  );
+
   const setRecordTags = useCallback((id, storeName, tags) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     const normalized = normalizeTagsList(tags);
@@ -831,6 +890,7 @@ export const useIndexedDB = () => {
     addChannel, deleteChannel, updateChannel,
     getChannelByDriveId, upsertDriveChannel,
     getBookByDriveId, getBookByName, upsertDriveBook,
+    getShareById, getShareByDriveFileId, upsertDriveShare,
     setRecordTags,
     getMergedLibraryItems,
     loadShares,

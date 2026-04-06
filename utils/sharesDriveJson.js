@@ -2,6 +2,12 @@ import { normalizeTagsList } from './tagUtils.js';
 
 export const SHARES_JSON_VERSION = 1;
 
+/** Drive share config files: `*.share.json` (current) or legacy `*.infodepo-shares.json`. */
+export function isShareDriveJsonFilename(name) {
+  const n = String(name || '').toLowerCase();
+  return n.endsWith('.share.json') || n.endsWith('.infodepo-shares.json');
+}
+
 /** @typedef {'owner' | 'receiver'} ShareRole */
 
 /**
@@ -51,7 +57,7 @@ export function serializeShareToDriveJson(rec) {
   const updatedAt = rec.updatedAt || new Date().toISOString();
   return {
     version: SHARES_JSON_VERSION,
-    driveFileName: String(rec.driveFileName || 'share.infodepo-shares.json').trim() || 'share.infodepo-shares.json',
+    driveFileName: String(rec.driveFileName || 'share.share.json').trim() || 'share.share.json',
     recipients: normEmails(rec.recipients),
     includeTags: normalizeTagsList(rec.includeTags || []),
     explicitRefs: normalizeExplicitRefs(rec.explicitRefs),

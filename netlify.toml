@@ -1,5 +1,8 @@
 [dev]
   command = "npm run dev"
+  # URL you open in the browser (Netlify proxy + functions). Default 8888; set explicitly so CLI
+  # does not pick a random port when 8888 is busy or unset in some environments.
+  port = 8888
   # Must match vite.config.js server.port (default Vite is 5173; this project uses 3001).
   targetPort = 3001
 

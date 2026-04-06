@@ -1,5 +1,6 @@
 import { SHARE_MANIFEST_NAME } from './shareManifest.js';
 import { fetchGoogleApisGet } from './googleApisFetch.js';
+import { isShareDriveJsonFilename } from './sharesDriveJson.js';
 
 const CHANNEL_JSON_MARKER = 'infodepo-channel';
 
@@ -36,6 +37,8 @@ export async function syncDriveToLocal({
   getBookByDriveId,
   getBookByName,
   upsertDriveBook,
+  getShareByDriveFileId,
+  upsertDriveShare,
   getImageByDriveId,
   getImageByName,
   upsertDriveImage,
@@ -159,6 +162,40 @@ export async function syncDriveToLocal({
   for (const driveFile of contentFiles) {
     progress(`Processing ${driveFile.name}...`);
 
+    if (
+      driveFile.mimeType === 'application/json' &&
+      isShareDriveJsonFilename(driveFile.name) &&
+      upsertDriveShare &&
+      getShareByDriveFileId
+    ) {
+      let existingShare = await getShareByDriveFileId(driveFile.driveId);
+      const driveIsNewerShare = existingShare
+        ? !existingShare.updatedAt ||
+          new Date(driveFile.modifiedTime) > new Date(existingShare.updatedAt)
+        : true;
+
+      if (existingShare && !driveIsNewerShare) {
+        counts.skipped++;
+        continue;
+      }
+
+      const shareBlobRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (!shareBlobRes.ok) {
+        console.warn(`Failed to download ${driveFile.name}:`, shareBlobRes.statusText);
+        counts.skipped++;
+        continue;
+      }
+      const shareText = await shareBlobRes.text();
+      const shareAction = await upsertDriveShare(driveFile, shareText, { role: 'owner' });
+      if (shareAction === 'added') counts.added++;
+      else if (shareAction === 'updated') counts.updated++;
+      else counts.skipped++;
+      continue;
+    }
+
     let existing = await getBookByDriveId(driveFile.driveId);
     if (!existing) existing = await getBookByName(driveFile.name);
 
@@ -276,6 +313,8 @@ export async function syncSharedFilesByDriveId({
   getBookByDriveId,
   getBookByName,
   upsertDriveBook,
+  getShareByDriveFileId,
+  upsertDriveShare,
   getImageByDriveId,
   getImageByName,
   upsertDriveImage,
@@ -310,6 +349,43 @@ export async function syncSharedFilesByDriveId({
     const isImage = IMAGE_MIME_TYPES.includes(driveFile.mimeType);
     const isContent = SUPPORTED_MIME_TYPES.includes(driveFile.mimeType);
     if (!isImage && !isContent) { counts.skipped++; continue; }
+
+    const isShareJson =
+      !isImage &&
+      driveFile.mimeType === 'application/json' &&
+      isShareDriveJsonFilename(driveFile.name) &&
+      upsertDriveShare &&
+      getShareByDriveFileId;
+
+    if (isShareJson) {
+      let existingShare = await getShareByDriveFileId(driveFile.driveId);
+      const driveIsNewerShare = existingShare
+        ? !existingShare.updatedAt ||
+          new Date(driveFile.modifiedTime) > new Date(existingShare.updatedAt)
+        : true;
+
+      if (existingShare && !driveIsNewerShare) {
+        counts.skipped++;
+        continue;
+      }
+
+      progress(`Downloading ${driveFile.name}…`);
+      const shareBlobRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (!shareBlobRes.ok) {
+        console.warn(`[share sync] download failed for ${driveFile.name}:`, shareBlobRes.statusText);
+        counts.skipped++;
+        continue;
+      }
+      const shareText = await shareBlobRes.text();
+      const shareAction = await upsertDriveShare(driveFile, shareText, { role: 'receiver' });
+      if (shareAction === 'added') counts.added++;
+      else if (shareAction === 'updated') counts.updated++;
+      else counts.skipped++;
+      continue;
+    }
 
     let existing;
     if (isImage) {
