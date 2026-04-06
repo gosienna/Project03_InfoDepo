@@ -77,7 +77,7 @@ Node.js script — no browser needed.
 **What it does:**
 1. Loads `.env` from project root
 2. Validates credential format:
-   - API Key must start with `AIza...`
+   - API Key must match Google’s API key format (`secret…` here is a docs placeholder for the real prefix)
    - Client ID must have numeric prefix + `.apps.googleusercontent.com`
    - Detects common mistake of putting Client Secret (`GOCSPX-...`) in API Key field
 3. Calls Drive API v3 to list files in `VITE_TEST_DRIVE_FOLDER_ID`

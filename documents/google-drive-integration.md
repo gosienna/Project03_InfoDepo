@@ -21,7 +21,7 @@ Drive is a **backup and import source** — not a streaming cache. All content i
 - Stored in `.env` as `VITE_TEST_CLIENT_ID` (dev) or `localStorage` (prod)
 - Safe to embed in browser code (public by design)
 
-### API Key (`AIza...`)
+### API Key (`secret…`)
 - Identifies the **application** — no user login required
 - Used only to **list folder contents** (public Drive API calls)
 - Stored in `.env` as `VITE_TEST_API_KEY` (dev) or `localStorage` (prod)

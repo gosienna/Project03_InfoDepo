@@ -23,7 +23,7 @@ VITE_TEST_DRIVE_FOLDER_ID=<folder ID from Drive URL>
 
 # Google credentials for dev Drive access
 VITE_TEST_CLIENT_ID=<OAuth 2.0 Client ID>
-VITE_TEST_API_KEY=<API Key starting with AIza...>
+VITE_TEST_API_KEY=<Google API Key — docs use secret… as placeholder for the real prefix>
 ```
 
 These are only active in dev mode (`import.meta.env.DEV`). Vite strips them from production builds.
