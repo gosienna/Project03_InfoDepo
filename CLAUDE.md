@@ -116,7 +116,7 @@ Mode is persisted via `utils/libraryMode.js`. Switching modes may re-trigger the
 
 ```
 VITE_CLIENT_ID=         # OAuth 2.0 Client ID
-VITE_API_KEY=           # Google API Key (AIza...) — also used for YouTube Data API v3
+VITE_API_KEY=           # Google API Key (...) — also used for YouTube Data API v3
 ```
 
 The Drive **folder ID** is collected at runtime via `GoogleOAuthGate` and stored in `localStorage`.

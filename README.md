@@ -49,7 +49,7 @@ Set these at build time (`.env` locally, [Netlify environment variables](https:/
 
 ```
 VITE_CLIENT_ID=   # OAuth 2.0 Web client ID (...apps.googleusercontent.com)
-VITE_API_KEY=     # Google API key (AIza...) — Drive listing + YouTube channel search
+VITE_API_KEY=     # Google API key (...) — Drive listing + YouTube channel search
 ```
 
 After first load, you **enter a Google Drive folder** (ID or URL); it is saved in the browser as `infodepo_drive_folder_id`. OAuth access tokens are stored separately in `localStorage` after you sign in.
