@@ -53,6 +53,11 @@ export const EpubViewer = ({ data }) => {
     }
   };
 
+  const viewerShellStyle = { height: "calc(100% - 4rem)" };
+
+  const edgeNavClass =
+    "pointer-events-auto z-10 h-full min-w-[44px] w-[28%] max-w-[200px] shrink-0 border-0 p-0 cursor-pointer select-none touch-manipulation [-webkit-tap-highlight-color:transparent] bg-transparent active:bg-black/5 sm:hover:bg-black/[0.03]";
+
   return React.createElement(
     "div",
     { className: "w-full h-full flex flex-col relative bg-gray-900" },
@@ -65,10 +70,41 @@ export const EpubViewer = ({ data }) => {
         "Loading E-book..."
       )
     ),
-    React.createElement("div", { ref: viewerRef, className: "flex-grow w-full h-full bg-white text-black overflow-hidden", style: { height: 'calc(100% - 4rem)' } }),
     React.createElement(
       "div",
-      { className: "flex justify-center items-center h-16 bg-gray-800 gap-4" },
+      { className: "relative flex-grow w-full overflow-hidden", style: viewerShellStyle },
+      React.createElement("div", {
+        ref: viewerRef,
+        className: "absolute inset-0 bg-white text-black overflow-hidden",
+      }),
+      !isLoading &&
+        React.createElement(
+          "div",
+          {
+            className:
+              "absolute inset-0 z-10 flex pointer-events-none",
+            "aria-hidden": true,
+          },
+          React.createElement("button", {
+            type: "button",
+            onClick: goToPrevPage,
+            className: edgeNavClass,
+            "aria-label": "Previous page",
+            title: "Previous page",
+          }),
+          React.createElement("div", { className: "flex-1 min-w-0 pointer-events-none" }),
+          React.createElement("button", {
+            type: "button",
+            onClick: goToNextPage,
+            className: edgeNavClass,
+            "aria-label": "Next page",
+            title: "Next page",
+          })
+        )
+    ),
+    React.createElement(
+      "div",
+      { className: "flex justify-center items-center h-16 bg-gray-800 gap-4 shrink-0" },
       React.createElement(
         "button",
         { onClick: goToPrevPage, className: "px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors" },
