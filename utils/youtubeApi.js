@@ -40,15 +40,50 @@ export async function resolveChannelId(urlOrHandle) {
 }
 
 /**
- * Fetches all non-Shorts videos for a channel.
- * Uses search.list to paginate through all uploads, then videos.list to get
- * duration + view counts, filtering out videos shorter than 60s (Shorts).
+ * Fetches video IDs from a channel's uploads playlist (complete list). Falls back to
+ * search.list only if the uploads playlist is unavailable — search is incomplete for many channels.
  */
-export async function fetchChannelVideos(channelId, onProgress) {
+async function collectVideoIdsFromUploadsPlaylist(channelId, onProgress) {
+  const chPath = `/youtube/v3/channels?id=${encodeURIComponent(channelId)}&part=contentDetails`;
+  const chRes = await fetchGoogleApisGet(chPath);
+  if (!chRes.ok) {
+    const err = await chRes.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Channels API error: ${chRes.status}`);
+  }
+  const chData = await chRes.json();
+  const uploadsId = chData.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+  if (!uploadsId) return null;
+
   const allVideoIds = [];
   let pageToken = '';
   let page = 0;
+  do {
+    const path =
+      `/youtube/v3/playlistItems?playlistId=${encodeURIComponent(uploadsId)}&maxResults=50&part=contentDetails` +
+      (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '');
+    const res = await fetchGoogleApisGet(path);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `PlaylistItems API error: ${res.status}`);
+    }
+    const data = await res.json();
+    for (const item of (data.items || [])) {
+      const vid = item.contentDetails?.videoId;
+      if (vid) allVideoIds.push(vid);
+    }
+    page++;
+    if (onProgress) onProgress(`Scanning uploads... page ${page} (${allVideoIds.length} found)`);
+    pageToken = data.nextPageToken || '';
+  } while (pageToken);
 
+  return allVideoIds;
+}
+
+/** search.list — can miss most uploads; only used as fallback. */
+async function collectVideoIdsFromSearch(channelId, onProgress) {
+  const allVideoIds = [];
+  let pageToken = '';
+  let page = 0;
   do {
     const path =
       `/youtube/v3/search?channelId=${encodeURIComponent(channelId)}&type=video&order=date&maxResults=50&part=id` +
@@ -66,6 +101,20 @@ export async function fetchChannelVideos(channelId, onProgress) {
     if (onProgress) onProgress(`Scanning videos... page ${page} (${allVideoIds.length} found)`);
     pageToken = data.nextPageToken || '';
   } while (pageToken);
+  return allVideoIds;
+}
+
+/**
+ * Fetches all non-Shorts videos for a channel.
+ * Uses the uploads playlist + playlistItems (full catalog), then videos.list for
+ * duration + view counts, filtering out videos shorter than 60s (Shorts).
+ */
+export async function fetchChannelVideos(channelId, onProgress) {
+  let allVideoIds = await collectVideoIdsFromUploadsPlaylist(channelId, onProgress);
+  if (allVideoIds === null) {
+    if (onProgress) onProgress('Falling back to search (may be incomplete)...');
+    allVideoIds = await collectVideoIdsFromSearch(channelId, onProgress);
+  }
 
   if (!allVideoIds.length) return [];
 
