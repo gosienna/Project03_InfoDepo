@@ -25,6 +25,7 @@ App.js
 │   ├── NewNoteModal.js     # Create a new Markdown note
 │   ├── NewYoutubeModal.js  # Add a YouTube video or channel link
 │   └── DevDriveBrowser.js  # Dev/prod: OAuth + Drive API folder browser
+├── YoutubeChannelViewer.js # Sortable video grid for a channel; auto-refreshes new videos on mount
 └── Reader.js               # Dispatches to viewer by file extension / MIME type
     ├── PdfViewer.js        # PDF via iframe + object URL
     ├── TxtViewer.js        # Plain text via FileReader
@@ -78,6 +79,7 @@ Share (receiver)
 | `utils/sharesDriveJson.js` | Share config serialization/deserialization for Drive JSON |
 | `utils/sharesDriveFile.js` | Upload/fetch share JSON files to/from Google Drive |
 | `utils/driveSharePermissions.js` | Reconcile Drive ACLs from owner share records |
+| `utils/youtubeApi.js` | `resolveChannelId()`, `fetchChannelVideos()`, `fetchNewChannelVideos()` via YouTube Data API v3 |
 
 ## Supported Content Types
 

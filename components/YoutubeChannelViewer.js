@@ -1,6 +1,8 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { DataTile } from './DataTile.js';
+import { fetchNewChannelVideos } from '../utils/youtubeApi.js';
+import { getDriveCredentials, hasGoogleApiKeyOrProxy } from '../utils/driveCredentials.js';
 
 const SORT_MODES = [
   { key: 'newest',      label: 'Newest First' },
@@ -32,17 +34,55 @@ function videoToLibraryItem(v) {
   };
 }
 
+// 'idle' | 'checking' | 'found' | 'error'
+const REFRESH_STATUS_LABELS = {
+  checking: 'Checking for new videos…',
+  found: 'New videos added!',
+  error: 'Could not check for new videos.',
+};
+
 export const YoutubeChannelViewer = ({
   channel,
   onBack,
   onSelectItem,
   onDeleteChannel,
   onRequestDeleteChannel,
+  onUpdateChannel,
   readOnly,
 }) => {
   const [sortMode, setSortMode] = useState('newest');
   const [pageIndex, setPageIndex] = useState(0);
   const [titleSearch, setTitleSearch] = useState('');
+  const [refreshStatus, setRefreshStatus] = useState('idle');
+  const refreshedChannelIdRef = useRef(null);
+
+  // On mount (or when the channel changes), check for new videos.
+  useEffect(() => {
+    if (!onUpdateChannel) return;
+    if (!hasGoogleApiKeyOrProxy(getDriveCredentials())) return;
+    // Avoid re-checking the same channel if it was already refreshed this session.
+    if (refreshedChannelIdRef.current === channel.id) return;
+    refreshedChannelIdRef.current = channel.id;
+
+    setRefreshStatus('checking');
+    fetchNewChannelVideos(channel)
+      .then((newVideos) => {
+        if (newVideos.length > 0) {
+          const merged = [...newVideos, ...(channel.videos || [])];
+          onUpdateChannel(channel.id, { videos: merged, lastRefreshedAt: new Date() });
+          setRefreshStatus('found');
+        } else {
+          onUpdateChannel(channel.id, { lastRefreshedAt: new Date() });
+          setRefreshStatus('idle');
+        }
+        setTimeout(() => setRefreshStatus('idle'), 4000);
+      })
+      .catch((err) => {
+        console.warn('[InfoDepo] Channel viewer refresh failed:', err);
+        setRefreshStatus('error');
+        setTimeout(() => setRefreshStatus('idle'), 4000);
+      });
+  }, [channel.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rawCount = (channel.videos || []).length;
 
@@ -142,6 +182,20 @@ export const YoutubeChannelViewer = ({
             ` \u00B7 ${sortedVideos.length} match${sortedVideos.length === 1 ? '' : 'es'}`
         )
       ),
+      // Refresh status badge
+      refreshStatus !== 'idle' &&
+        React.createElement(
+          'span',
+          {
+            className:
+              refreshStatus === 'checking'
+                ? 'text-xs text-gray-400 animate-pulse'
+                : refreshStatus === 'found'
+                ? 'text-xs text-green-400 font-medium'
+                : 'text-xs text-red-400',
+          },
+          REFRESH_STATUS_LABELS[refreshStatus]
+        ),
       // Delete channel button
       !readOnly &&
       React.createElement(

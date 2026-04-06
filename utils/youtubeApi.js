@@ -105,6 +105,60 @@ async function collectVideoIdsFromSearch(channelId, onProgress) {
 }
 
 /**
+ * Checks for new videos (not already in channel.videos) by fetching the first page
+ * of the uploads playlist. If new IDs are found their details are fetched and
+ * returned as video objects ready to be prepended to channel.videos.
+ * Returns an empty array when there is nothing new or when the API is unavailable.
+ */
+export async function fetchNewChannelVideos(channel) {
+  const existingIds = new Set((channel.videos || []).map((v) => v.videoId));
+
+  // Get uploads playlist ID
+  const chPath = `/youtube/v3/channels?id=${encodeURIComponent(channel.channelId)}&part=contentDetails`;
+  const chRes = await fetchGoogleApisGet(chPath);
+  if (!chRes.ok) return [];
+  const chData = await chRes.json();
+  const uploadsId = chData.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+  if (!uploadsId) return [];
+
+  // First page of uploads (newest first, max 50)
+  const plPath =
+    `/youtube/v3/playlistItems?playlistId=${encodeURIComponent(uploadsId)}&maxResults=50&part=contentDetails`;
+  const plRes = await fetchGoogleApisGet(plPath);
+  if (!plRes.ok) return [];
+  const plData = await plRes.json();
+
+  const newIds = (plData.items || [])
+    .map((item) => item.contentDetails?.videoId)
+    .filter((id) => id && !existingIds.has(id));
+
+  if (!newIds.length) return [];
+
+  // Fetch details for new IDs
+  const detailPath =
+    `/youtube/v3/videos?id=${newIds.join(',')}&part=snippet,contentDetails,statistics`;
+  const detailRes = await fetchGoogleApisGet(detailPath);
+  if (!detailRes.ok) return [];
+  const detailData = await detailRes.json();
+
+  const newVideos = [];
+  for (const v of (detailData.items || [])) {
+    const durationSec = parseISO8601Duration(v.contentDetails?.duration || '');
+    if (durationSec < 61) continue; // exclude Shorts
+    newVideos.push({
+      videoId: v.id,
+      title: v.snippet?.title || '',
+      publishedAt: v.snippet?.publishedAt || '',
+      thumbnailUrl:
+        v.snippet?.thumbnails?.medium?.url || v.snippet?.thumbnails?.default?.url || '',
+      viewCount: parseInt(v.statistics?.viewCount || '0', 10),
+      duration: v.contentDetails?.duration || '',
+    });
+  }
+  return newVideos;
+}
+
+/**
  * Fetches all non-Shorts videos for a channel.
  * Uses the uploads playlist + playlistItems (full catalog), then videos.list for
  * duration + view counts, filtering out videos shorter than 60s (Shorts).

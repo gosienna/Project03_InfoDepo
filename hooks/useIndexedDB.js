@@ -40,7 +40,7 @@ const storeForNewItem = (name, type) => {
 };
 
 const modifiedTimeSortKey = (rec) => {
-  const t = rec?.modifiedTime;
+  const t = rec?.localModifiedAt ?? rec?.modifiedTime;
   if (t instanceof Date && !Number.isNaN(t.getTime())) return t.getTime();
   if (typeof t === 'string' || typeof t === 'number') {
     const ms = new Date(t).getTime();
@@ -356,7 +356,13 @@ export const useIndexedDB = () => {
         reject(err);
         return;
       }
-      const record = { name, type: storedType, data, size, driveId: '', modifiedTime: new Date(), tags: [] };
+      const now = new Date();
+      const record = {
+        name, type: storedType, data, size, driveId: '',
+        modifiedTime: now,
+        localModifiedAt: now,
+        tags: [],
+      };
       const addRequest = tx.objectStore(store).add(record);
       addRequest.onsuccess = () => { loadItems(); resolve(); };
       addRequest.onerror   = (e) => { console.error('Error adding item:', store, e.target.error); reject(e.target.error); };
@@ -384,13 +390,14 @@ export const useIndexedDB = () => {
             return;
           }
           const nextType = store === NOTES_STORE && !isNoteType(existing.type) ? 'text/markdown' : existing.type;
-          // Do NOT update modifiedTime here — it tracks the Drive sync version, not local edit time.
-          // Advancing it on local saves would make Drive appear "older" and block future syncs.
+          // Do NOT update modifiedTime here — it tracks the last known Drive revision.
+          // localModifiedAt marks local edits for backup upload (local newer than Drive).
           const putRequest = os.put({
             ...existing,
             type: nextType,
             data: content,
             size,
+            localModifiedAt: new Date(),
             tags: Array.isArray(existing.tags) ? existing.tags : [],
           });
           putRequest.onsuccess = () => { loadItems(); resolve(); };
@@ -416,7 +423,7 @@ export const useIndexedDB = () => {
         const idx = assets.findIndex(a => a.name === name);
         const asset = { name, data, type, driveId: '' };
         if (idx >= 0) assets[idx] = asset; else assets.push(asset);
-        const putReq = os.put({ ...note, assets });
+        const putReq = os.put({ ...note, assets, localModifiedAt: new Date() });
         putReq.onsuccess = (e) => resolve(e.target.result);
         putReq.onerror   = (e) => reject(e.target.error);
       };
@@ -602,8 +609,11 @@ export const useIndexedDB = () => {
     req.onblocked = () => console.warn('[InfoDepo] deleteDatabase blocked — close other tabs and reload.');
   }, [db]);
 
-  /** Update the driveId on any store record after a successful Drive upload. */
-  const setItemDriveId = useCallback((id, storeName, driveId) => {
+  /**
+   * Update driveId and optional sync times after a successful Drive upload or PATCH.
+   * @param {object} [syncMeta] - If `modifiedTime` is set (ISO string from Drive), sets both modifiedTime and localModifiedAt to match Drive.
+   */
+  const setItemDriveId = useCallback((id, storeName, driveId, syncMeta = null) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
       let tx;
@@ -613,7 +623,14 @@ export const useIndexedDB = () => {
       getRequest.onsuccess = () => {
         const existing = getRequest.result;
         if (!existing) { reject(new Error('Record not found')); return; }
-        const putRequest = os.put({ ...existing, driveId });
+        const mt = syncMeta?.modifiedTime != null ? new Date(syncMeta.modifiedTime) : undefined;
+        const putRequest = os.put({
+          ...existing,
+          driveId,
+          ...(mt
+            ? { modifiedTime: mt, localModifiedAt: mt }
+            : {}),
+        });
         putRequest.onsuccess = () => {
           if (storeName === CHANNELS_STORE) loadChannels(); else loadItems();
           resolve();
@@ -691,10 +708,12 @@ export const useIndexedDB = () => {
       const os = tx.objectStore(targetStore);
 
       if (existing) {
+        const mt = driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date();
         const updated = {
           ...existing,
           driveId: driveFile.driveId,
-          modifiedTime: driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date(),
+          modifiedTime: mt,
+          localModifiedAt: mt,
           data: blob, size: blob.size,
           tags: Array.isArray(existing.tags) ? existing.tags : [],
           ...(driveFile.driveFolderId ? { driveFolderId: driveFile.driveFolderId } : {}),
@@ -704,11 +723,13 @@ export const useIndexedDB = () => {
         putRequest.onsuccess = () => { loadItems(); resolve('updated'); };
         putRequest.onerror   = (e) => reject(e.target.error);
       } else {
+        const mtNew = driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date();
         const record = {
           name: driveFile.name, type: driveFile.mimeType,
           data: blob, size: blob.size,
           driveId: driveFile.driveId,
-          modifiedTime: driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date(),
+          modifiedTime: mtNew,
+          localModifiedAt: mtNew,
           tags: [],
           ...(driveFile.driveFolderId ? { driveFolderId: driveFile.driveFolderId } : {}),
           ...(Array.isArray(assets) ? { assets } : {}),
@@ -727,11 +748,13 @@ export const useIndexedDB = () => {
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(CHANNELS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
+      const now = new Date();
       const addReq = tx.objectStore(CHANNELS_STORE).add({
         ...record,
         tags: normalizeTagsList(record.tags),
         driveId: '',
-        modifiedTime: new Date(),
+        modifiedTime: now,
+        localModifiedAt: now,
       });
       addReq.onsuccess = () => { loadChannels(); resolve(); };
       addReq.onerror = (e) => reject(e.target.error);
@@ -760,7 +783,7 @@ export const useIndexedDB = () => {
       getReq.onsuccess = () => {
         const existing = getReq.result;
         if (!existing) { reject(new Error('Channel not found')); return; }
-        const putReq = os.put({ ...existing, ...data, modifiedTime: new Date() });
+        const putReq = os.put({ ...existing, ...data, localModifiedAt: new Date() });
         putReq.onsuccess = () => { loadChannels(); resolve(); };
         putReq.onerror = (e) => reject(e.target.error);
       };
@@ -797,6 +820,7 @@ export const useIndexedDB = () => {
         const driveIsNewer = !existing.modifiedTime ||
           new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime);
         if (!driveIsNewer) { resolve('skipped'); return; }
+        const mtCh = new Date(driveFile.modifiedTime);
         const putReq = os.put({
           ...existing,
           ...channelData,
@@ -804,16 +828,19 @@ export const useIndexedDB = () => {
             ? normalizeTagsList(channelData.tags)
             : (Array.isArray(existing.tags) ? existing.tags : []),
           driveId: driveFile.driveId,
-          modifiedTime: new Date(driveFile.modifiedTime),
+          modifiedTime: mtCh,
+          localModifiedAt: mtCh,
         });
         putReq.onsuccess = () => { loadChannels(); resolve('updated'); };
         putReq.onerror = (e) => reject(e.target.error);
       } else {
+        const mtAdd = new Date(driveFile.modifiedTime);
         const addReq = os.add({
           ...channelData,
           tags: normalizeTagsList(channelData.tags),
           driveId: driveFile.driveId,
-          modifiedTime: new Date(driveFile.modifiedTime),
+          modifiedTime: mtAdd,
+          localModifiedAt: mtAdd,
         });
         addReq.onsuccess = () => { loadChannels(); resolve('added'); };
         addReq.onerror = (e) => reject(e.target.error);
@@ -869,7 +896,7 @@ export const useIndexedDB = () => {
       getReq.onsuccess = () => {
         const existing = getReq.result;
         if (!existing) { reject(new Error('Record not found')); return; }
-        const putReq = os.put({ ...existing, tags: normalized });
+        const putReq = os.put({ ...existing, tags: normalized, localModifiedAt: new Date() });
         putReq.onsuccess = () => {
           if (storeName === CHANNELS_STORE) loadChannels();
           else if (storeName !== IMAGES_STORE) loadItems();

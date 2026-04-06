@@ -35,6 +35,13 @@ export const SharesEditorModal = ({
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  const shareFileViewUrl = useMemo(() => {
+    const id = String(share?.driveFileId || '').trim();
+    if (!id) return '';
+    return `https://drive.google.com/file/d/${id}/view`;
+  }, [share?.driveFileId]);
 
   useEffect(() => {
     if (!share) return;
@@ -43,6 +50,7 @@ export const SharesEditorModal = ({
     setIncludeTags([...(share.includeTags || [])]);
     setExplicitRefs(normalizeExplicitRefs(share.explicitRefs));
     setError(null);
+    setLinkCopied(false);
   }, [share?.id, share?.updatedAt, share?.driveFileId]);
 
   if (!share) return null;
@@ -141,6 +149,17 @@ export const SharesEditorModal = ({
     }
   };
 
+  const handleCopyShareLink = async () => {
+    if (!shareFileViewUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareFileViewUrl);
+      setLinkCopied(true);
+      window.setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      setError('Could not copy to the clipboard.');
+    }
+  };
+
   return React.createElement(
     'div',
     {
@@ -213,6 +232,53 @@ export const SharesEditorModal = ({
               'Add at least one recipient so Drive can grant readers access to your tagged files and picks below. You can still save; ACLs apply once recipients are set.'
             )
         ),
+        !readOnly &&
+          !shareFileViewUrl &&
+          React.createElement(
+            'p',
+            { className: 'text-xs text-gray-500' },
+            'After the first Save & upload, reopen this share from the library to copy the link below. Receivers use Library → Link share… and paste that URL or the file ID.'
+          ),
+        shareFileViewUrl &&
+          React.createElement(
+            'div',
+            { className: 'flex flex-col gap-2' },
+            React.createElement(
+              'span',
+              { className: 'text-sm text-gray-400' },
+              readOnly ? 'Share file (Google Drive)' : 'Link to send receivers'
+            ),
+            React.createElement(
+              'p',
+              { className: 'text-xs text-gray-500 leading-relaxed' },
+              readOnly
+                ? 'Receivers open this file in InfoDepo via Library → Link share…'
+                : 'They paste this URL (or the file ID from it) in Library → Link share… after you have granted them access in Drive or via recipients above.'
+            ),
+            React.createElement(
+              'div',
+              { className: 'flex gap-2' },
+              React.createElement('input', {
+                type: 'text',
+                readOnly: true,
+                value: shareFileViewUrl,
+                onFocus: (e) => e.target.select(),
+                className:
+                  'flex-1 min-w-0 bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-gray-100 text-xs font-mono',
+              }),
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  onClick: handleCopyShareLink,
+                  className:
+                    'shrink-0 px-3 py-2 rounded-lg text-sm font-medium ' +
+                    (linkCopied ? 'bg-teal-900 text-teal-200 border border-teal-600' : 'bg-gray-700 hover:bg-gray-600 text-gray-200'),
+                },
+                linkCopied ? 'Copied' : 'Copy'
+              )
+            )
+          ),
         React.createElement(
           'div',
           { className: 'flex flex-col gap-2' },

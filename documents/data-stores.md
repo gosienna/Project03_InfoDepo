@@ -166,7 +166,7 @@ YouTube channel metadata and their video listings, fetched via YouTube Data API 
   handle: string,          // e.g. "@stanfordonline"
   name: string,            // channel display name
   thumbnailUrl: string,    // channel avatar URL
-  videos: [                // array of video objects
+  videos: [                // array of video objects, newest-first after refresh
     {
       videoId: string,     // 11-char YouTube video ID
       title: string,
@@ -176,9 +176,10 @@ YouTube channel metadata and their video listings, fetched via YouTube Data API 
       duration: string,    // ISO 8601 duration
     }
   ],
-  tags: string[],         // same tag system as books/notes/videos
+  tags: string[],          // same tag system as books/notes/videos
   driveId: string,         // '' (reserved for future backup)
   modifiedTime: Date,
+  lastRefreshedAt: Date,   // set after each auto-refresh check; absent on records created before this feature
 }
 ```
 
@@ -198,7 +199,17 @@ YouTube channel metadata and their video listings, fetched via YouTube Data API 
 |---------------------------------|-------------|
 | `addChannel(record)`            | Save a new channel record |
 | `deleteChannel(id)`             | Remove a channel |
-| `updateChannel(id, data)`       | Update channel fields (e.g. refresh video list) |
+| `updateChannel(id, data)`       | Update channel fields; used by the auto-refresh to write `{ videos, lastRefreshedAt }` |
+
+### Auto-refresh
+
+On app startup (`isInitialized` + YouTube API key present), `App.js` calls `fetchNewChannelVideos(channel)` from `utils/youtubeApi.js` for every channel whose `lastRefreshedAt` is absent or older than 1 hour. `fetchNewChannelVideos`:
+1. Fetches the uploads playlist first page (≤ 50 items, newest first) — 2 API calls.
+2. Compares video IDs against `channel.videos`; if any are new, fetches their details in one batched `videos.list` call.
+3. Shorts (< 61 s) are filtered out, matching the behaviour of the initial `fetchChannelVideos` fetch.
+4. Returns new video objects (empty array if nothing changed).
+
+The caller prepends new videos to `channel.videos` and writes the merged array + `lastRefreshedAt: new Date()` back via `updateChannel`. `YoutubeChannelViewer` performs the same check on mount (once per channel per session) and shows a transient status badge.
 
 ### UI
 

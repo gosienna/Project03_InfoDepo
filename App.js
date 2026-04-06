@@ -13,6 +13,7 @@ import { getDriveFolderId } from './utils/driveFolderStorage.js';
 import { DeleteContentModal } from './components/DeleteContentModal.js';
 import { getOwnerDriveAccessToken } from './utils/driveAccessToken.js';
 import { deleteDriveFilesForChannel } from './utils/deleteLibraryContentOnDrive.js';
+import { fetchNewChannelVideos } from './utils/youtubeApi.js';
 
 const App = () => {
   const {
@@ -54,6 +55,41 @@ const App = () => {
   const handleOAuthGateSuccess = useCallback(() => {
     setOauthGateActive(false);
   }, []);
+
+  // Keep currentChannel in sync with IndexedDB (so video list updates after a refresh).
+  useEffect(() => {
+    if (!currentChannel) return;
+    const updated = channels.find((c) => c.id === currentChannel.id);
+    if (updated) setCurrentChannel(updated);
+  }, [channels]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // On startup, silently check every channel for new videos and update IndexedDB.
+  useEffect(() => {
+    if (!isInitialized || !channels.length) return;
+    if (!hasGoogleApiKeyOrProxy(getDriveCredentials())) return;
+
+    const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+    const now = Date.now();
+
+    channels.forEach((ch) => {
+      const lastRefreshed = ch.lastRefreshedAt ? new Date(ch.lastRefreshedAt).getTime() : 0;
+      if (now - lastRefreshed < REFRESH_INTERVAL_MS) return;
+
+      fetchNewChannelVideos(ch)
+        .then((newVideos) => {
+          if (!newVideos.length) {
+            // No new videos — still update lastRefreshedAt so we don't recheck for an hour.
+            updateChannel(ch.id, { lastRefreshedAt: new Date() });
+            return;
+          }
+          const merged = [...newVideos, ...(ch.videos || [])];
+          updateChannel(ch.id, { videos: merged, lastRefreshedAt: new Date() });
+        })
+        .catch((err) => {
+          console.warn(`[InfoDepo] Channel refresh failed for "${ch.name}":`, err);
+        });
+    });
+  }, [isInitialized]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openVideo = (video) => {
     const ext = video.name?.split('.').pop()?.toLowerCase() ?? '';
@@ -217,6 +253,7 @@ const App = () => {
             onSelectItem: handleSelectVideo,
             onDeleteChannel: deleteChannel,
             onRequestDeleteChannel: handleRequestDeleteChannel,
+            onUpdateChannel: updateChannel,
             readOnly: false,
           })
         : currentVideo

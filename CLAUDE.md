@@ -12,6 +12,7 @@ A client-side media library and reader. Content (books, notes, YouTube links, ch
 > - [Testing](documents/testing.md)
 > - [Dev Setup](documents/dev-setup.md)
 > - [Data Stores](documents/data-stores.md)
+> - [Drive synchronization](documents/drive-synchronization.md)
 
 ## Tech Stack
 
@@ -61,7 +62,7 @@ App.js                            # View switching (library ↔ reader ↔ chann
 │   ├── NewNoteModal.js           # Create a new Markdown note
 │   ├── NewChannelModal.js        # YouTube channel URL input + API fetch
 │   └── NewYoutubeModal.js        # Single YouTube video URL input
-├── YoutubeChannelViewer.js       # Sortable video grid for a channel (reuses DataTile)
+├── YoutubeChannelViewer.js       # Sortable video grid for a channel (reuses DataTile); auto-refreshes for new videos on mount
 └── Reader.js                     # Dispatches to viewer by file extension / MIME type
     ├── PdfViewer.js
     ├── TxtViewer.js
@@ -72,10 +73,11 @@ App.js                            # View switching (library ↔ reader ↔ chann
 hooks/useIndexedDB.js             # All IndexedDB CRUD (six stores), merged items, shares, channels
 utils/driveCredentials.js         # Credential source: .env vars (VITE_CLIENT_ID, VITE_API_KEY)
 utils/driveSync.js                # Drive sync engine — backup, folder sync, shared content download
+utils/libraryDriveSync.js         # Owner backup+pull pipeline; receiver share download wrapper for Library
 utils/driveSharePermissions.js    # Reconcile Drive ACLs from owner share records
 utils/sharesDriveJson.js          # Share config serialization/deserialization for Drive JSON
 utils/sharesDriveFile.js          # Upload/fetch share JSON files to/from Google Drive
-utils/youtubeApi.js               # resolveChannelId() + fetchChannelVideos() via YouTube Data API v3
+utils/youtubeApi.js               # resolveChannelId() + fetchChannelVideos() + fetchNewChannelVideos() via YouTube Data API v3
 reader.html                       # Standalone EPUB reader (opens in new tab, no iframe sandbox issues)
 ```
 

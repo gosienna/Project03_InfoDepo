@@ -14,7 +14,8 @@ import {
 import { NewNoteModal } from './NewNoteModal.js';
 import { NewYoutubeModal } from './NewYoutubeModal.js';
 import { NewChannelModal } from './NewChannelModal.js';
-import { syncDriveToLocal, backupAllToGDrive, syncSharedFilesByDriveId } from '../utils/driveSync.js';
+import { CHANNEL_JSON_MARKER } from '../utils/driveSync.js';
+import { runOwnerSyncPipeline, syncReceiverShareContent } from '../utils/libraryDriveSync.js';
 import { libraryItemKey } from '../utils/libraryItemKey.js';
 import { fetchGoogleUserEmail } from '../utils/googleUser.js';
 import { normalizeTag } from '../utils/tagUtils.js';
@@ -27,12 +28,25 @@ import { payloadToClientRecord, normalizeExplicitRefs } from '../utils/sharesDri
 import { getOwnerDriveAccessToken, invalidateDriveAccessTokenCache } from '../utils/driveAccessToken.js';
 import { deleteDriveFilesForMergedItem, deleteDriveFilesForChannel } from '../utils/deleteLibraryContentOnDrive.js';
 
-/** Must match `CHANNEL_JSON_MARKER` in `utils/driveSync.js` for Drive backup/sync. */
-const CHANNEL_JSON_MARKER = 'infodepo-channel';
+/** Ensures startup background sync runs once per page load (survives React Strict Mode remount). */
+let ownerBackgroundSyncScheduled = false;
 
 const channelUploadKey = (ch) => `channel-${ch?.id}`;
 
 const SEARCH_SUGGEST_MAX = 15;
+
+const LIBRARY_PAGE_SIZE = 20;
+
+/** Newest first; items/channels use `localModifiedAt` / `modifiedTime`, shares use `updatedAt` or `modifiedTime`. */
+function modifiedTimeSortMs(rec) {
+  const t = rec?.localModifiedAt ?? rec?.modifiedTime ?? rec?.updatedAt;
+  if (t instanceof Date && !Number.isNaN(t.getTime())) return t.getTime();
+  if (typeof t === 'string' || typeof t === 'number') {
+    const ms = new Date(t).getTime();
+    return Number.isNaN(ms) ? 0 : ms;
+  }
+  return 0;
+}
 
 export const Library = ({
   items, channels, shares,
@@ -58,6 +72,8 @@ export const Library = ({
   const lastScopeRef      = useRef('');
   const oauthClientModeRef = useRef(null);
   const reapplyShareAclTimerRef = useRef(null);
+  const syncInFlightRef = useRef(false);
+  const runOwnerSyncRef = useRef(() => {});
   const [uploadStatuses,   setUploadStatuses]   = useState({});
   const credentials = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
@@ -76,6 +92,7 @@ export const Library = ({
   const [searchQuery,      setSearchQuery]      = useState('');
   const [searchSuggestIndex, setSearchSuggestIndex] = useState(-1);
   const [searchInputFocused, setSearchInputFocused] = useState(false);
+  const [libraryPageIndex, setLibraryPageIndex] = useState(0);
   const [activeFilters,    setActiveFilters]    = useState(new Set());
 
   // Sync + Backup state (combined operation)
@@ -257,7 +274,7 @@ export const Library = ({
         setIsSyncing(true);
         setSyncProgress('Downloading shared content…');
         try {
-          const result = await syncSharedFilesByDriveId({
+          const result = await syncReceiverShareContent({
             accessToken: token,
             driveIds,
             getBookByDriveId,
@@ -399,7 +416,7 @@ export const Library = ({
         if (driveIds.size > 0) {
           setIsSyncing(true);
           setSyncProgress('Downloading shared content…');
-          const result = await syncSharedFilesByDriveId({
+          const result = await syncReceiverShareContent({
             accessToken: token,
             driveIds,
             getBookByDriveId,
@@ -588,7 +605,7 @@ export const Library = ({
       form.append('file', video.data);
 
       const res = await fetch(
-        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime',
         { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form }
       );
 
@@ -598,8 +615,7 @@ export const Library = ({
       }
 
       const driveFile = await res.json();
-      // Persist the Drive file ID back to IndexedDB
-      await onSetDriveId(video.id, video.idbStore, driveFile.id);
+      await onSetDriveId(video.id, video.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
       setStatus(uKey, 'success');
       scheduleReapplyShareAclsAfterTagChange();
     } catch (err) {
@@ -635,7 +651,7 @@ export const Library = ({
       form.append('file', blob);
 
       const res = await fetch(
-        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime',
         { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form }
       );
 
@@ -645,7 +661,7 @@ export const Library = ({
       }
 
       const driveFile = await res.json();
-      await onSetDriveId(ch.id, 'channels', driveFile.id);
+      await onSetDriveId(ch.id, 'channels', driveFile.id, { modifiedTime: driveFile.modifiedTime });
       setStatus(uKey, 'success');
       scheduleReapplyShareAclsAfterTagChange();
     } catch (err) {
@@ -685,16 +701,16 @@ export const Library = ({
   };
 
   const runOwnerSync = async () => {
-    if (!hasCredentials || isSyncing) return;
+    if (!hasCredentials || syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
     setIsSyncing(true);
     setSyncResult(null);
     setSyncProgress('');
-    const combined = {};
     try {
       const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
 
       setSyncProgress('Backing up local items...');
-      const backupResult = await backupAllToGDrive({
+      const combined = await runOwnerSyncPipeline({
         accessToken: token,
         folderId: driveFolderId,
         items,
@@ -702,15 +718,6 @@ export const Library = ({
         onSetDriveId,
         onSetNoteFolderData,
         onProgress: setSyncProgress,
-      });
-      combined.backed = backupResult.backed;
-      combined.backupFailed = backupResult.failed;
-
-      setSyncProgress('Syncing from Drive...');
-      const syncResult = await syncDriveToLocal({
-        accessToken: token,
-        folderId: driveFolderId,
-        books: items.filter(i => i.type !== 'application/x-youtube'),
         getBookByDriveId,
         getBookByName,
         upsertDriveBook,
@@ -721,11 +728,7 @@ export const Library = ({
         upsertDriveImage,
         getNotes,
         upsertDriveChannel,
-        onProgress: setSyncProgress,
       });
-      combined.added = syncResult.added;
-      combined.updated = syncResult.updated;
-      combined.skipped = syncResult.skipped;
 
       setSyncResult(combined);
     } catch (err) {
@@ -734,12 +737,23 @@ export const Library = ({
       uploadTokenRef.current = null;
       removeStoredAccessToken(credentials.clientId, OWNER_DRIVE_SCOPE);
     } finally {
+      syncInFlightRef.current = false;
       setIsSyncing(false);
       setSyncProgress('');
     }
   };
 
   const runSync = () => runOwnerSync();
+
+  runOwnerSyncRef.current = runOwnerSync;
+
+  useEffect(() => {
+    if (!hasCredentials || !String(driveFolderId || '').trim()) return;
+    if (ownerBackgroundSyncScheduled) return;
+    ownerBackgroundSyncScheduled = true;
+    const t = setTimeout(() => runOwnerSyncRef.current(), 0);
+    return () => clearTimeout(t);
+  }, [hasCredentials, driveFolderId]);
 
   const toggleFilter = (filter) => {
     setActiveFilters(prev => {
@@ -813,6 +827,40 @@ export const Library = ({
 
   const totalGridCount = items.length + (channels || []).length + (shares || []).length;
   const filteredGridCount = filteredItems.length + filteredChannels.length + filteredShares.length;
+
+  const sortedLibraryRows = useMemo(() => {
+    const rows = [];
+    for (const video of filteredItems) {
+      rows.push({ kind: 'item', data: video, sortMs: modifiedTimeSortMs(video) });
+    }
+    for (const ch of filteredChannels) {
+      rows.push({ kind: 'channel', data: ch, sortMs: modifiedTimeSortMs(ch) });
+    }
+    for (const s of filteredShares) {
+      rows.push({ kind: 'share', data: s, sortMs: modifiedTimeSortMs(s) });
+    }
+    rows.sort((a, b) => b.sortMs - a.sortMs);
+    return rows;
+  }, [filteredItems, filteredChannels, filteredShares]);
+
+  const libraryPageRows = useMemo(() => {
+    const start = libraryPageIndex * LIBRARY_PAGE_SIZE;
+    return sortedLibraryRows.slice(start, start + LIBRARY_PAGE_SIZE);
+  }, [sortedLibraryRows, libraryPageIndex]);
+
+  const libraryTotalPages = Math.max(1, Math.ceil(sortedLibraryRows.length / LIBRARY_PAGE_SIZE) || 1);
+
+  const activeFiltersKey = useMemo(() => [...activeFilters].sort().join('\0'), [activeFilters]);
+
+  useEffect(() => {
+    setLibraryPageIndex(0);
+  }, [searchQuery, activeShareFilter?.id, activeFiltersKey]);
+
+  useEffect(() => {
+    const tp = Math.max(1, Math.ceil(sortedLibraryRows.length / LIBRARY_PAGE_SIZE) || 1);
+    const maxIdx = Math.max(0, tp - 1);
+    if (libraryPageIndex > maxIdx) setLibraryPageIndex(maxIdx);
+  }, [sortedLibraryRows.length, libraryPageIndex]);
 
   const hasActiveSearch = query || activeFilters.size > 0 || !!activeShareFilter;
 
@@ -1309,91 +1357,126 @@ export const Library = ({
       )
     ),
 
-    // Channels section
-    filteredChannels.length > 0 && React.createElement(
-      'div',
-      { className: 'mb-6' },
-      React.createElement(
-        'div',
-        {
-          className:
-            'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6',
-        },
-        filteredChannels.map((ch) =>
-          React.createElement(DataTile, {
-            key: ch.id,
-            tileType: 'channel',
-            channel: ch,
-            onSelect: onSelectChannel,
-            onDelete: handleDeleteChannelRequest,
-            onUpload: handleChannelUpload,
-            uploadStatus: uploadStatuses[channelUploadKey(ch)] ?? null,
-            readOnly: false,
-            onSetTags: (c, tags) => setRecordTagsAndReapplyShares(c.id, 'channels', tags),
-            availableTags,
-          })
-        )
-      )
-    ),
-
-    // Shares
-    filteredShares.length > 0 &&
-      React.createElement(
-        'div',
-        { className: 'mb-6' },
-        React.createElement(
-          'div',
-          {
-            className:
-              'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6',
-          },
-          filteredShares.map((s) =>
-            React.createElement(DataTile, {
-              key: `share-${s.id}`,
-              tileType: 'share',
-              share: s,
-              onSelect: (rec) => {
-                if (rec.role === 'receiver') {
-                  handleOpenReceiverShare(rec);
-                } else {
-                  setActiveShare(rec);
-                }
-              },
-              onDelete: (rec) => {
-                deleteShare(rec.id);
-                if (activeShare?.id === rec.id) setActiveShare(null);
-                if (activeShareFilter?.id === rec.id) setActiveShareFilter(null);
-              },
-              readOnly: false,
-            })
-          )
-        )
-      ),
-
-    // Item grid or empty state
-    filteredItems.length > 0
+    // Unified grid: newest first by modifiedTime (updatedAt for shares), 20 per page
+    sortedLibraryRows.length > 0
       ? React.createElement(
-          'div',
-          { className: 'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6' },
-          filteredItems.map((video) =>
-            React.createElement(DataTile, {
-              key: libraryItemKey(video),
-              tileType: 'item',
-              item: video,
-              onSelect: onSelectItem,
-              onDelete: handleDeleteItemRequest,
-              onUpload: handleUpload,
-              uploadStatus: uploadStatuses[libraryItemKey(video)] ?? null,
-              readOnly: false,
-              onSetTags: (v, tags) => setRecordTagsAndReapplyShares(v.id, v.idbStore, tags),
-              availableTags,
+          React.Fragment,
+          null,
+          React.createElement(
+            'div',
+            {
+              className:
+                'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6',
+            },
+            libraryPageRows.map((row) => {
+              if (row.kind === 'item') {
+                const video = row.data;
+                return React.createElement(DataTile, {
+                  key: libraryItemKey(video),
+                  tileType: 'item',
+                  item: video,
+                  onSelect: onSelectItem,
+                  onDelete: handleDeleteItemRequest,
+                  onUpload: handleUpload,
+                  uploadStatus: uploadStatuses[libraryItemKey(video)] ?? null,
+                  readOnly: false,
+                  onSetTags: (v, tags) => setRecordTagsAndReapplyShares(v.id, v.idbStore, tags),
+                  availableTags,
+                });
+              }
+              if (row.kind === 'channel') {
+                const ch = row.data;
+                return React.createElement(DataTile, {
+                  key: `ch-${ch.id}`,
+                  tileType: 'channel',
+                  channel: ch,
+                  onSelect: onSelectChannel,
+                  onDelete: handleDeleteChannelRequest,
+                  onUpload: handleChannelUpload,
+                  uploadStatus: uploadStatuses[channelUploadKey(ch)] ?? null,
+                  readOnly: false,
+                  onSetTags: (c, tags) => setRecordTagsAndReapplyShares(c.id, 'channels', tags),
+                  availableTags,
+                });
+              }
+              const s = row.data;
+              return React.createElement(DataTile, {
+                key: `share-${s.id}`,
+                tileType: 'share',
+                share: s,
+                onSelect: (rec) => {
+                  if (rec.role === 'receiver') {
+                    handleOpenReceiverShare(rec);
+                  } else {
+                    setActiveShare(rec);
+                  }
+                },
+                onDelete: (rec) => {
+                  deleteShare(rec.id);
+                  if (activeShare?.id === rec.id) setActiveShare(null);
+                  if (activeShareFilter?.id === rec.id) setActiveShareFilter(null);
+                },
+                readOnly: false,
+              });
             })
-          )
+          ),
+          libraryTotalPages > 1 &&
+            React.createElement(
+              'div',
+              { className: 'flex flex-col sm:flex-row items-center justify-center gap-4 mt-10 pt-6 border-t border-gray-800' },
+              React.createElement(
+                'p',
+                { className: 'text-sm text-gray-400 order-2 sm:order-1' },
+                'Showing ',
+                libraryPageIndex * LIBRARY_PAGE_SIZE + 1,
+                '\u2013',
+                Math.min((libraryPageIndex + 1) * LIBRARY_PAGE_SIZE, sortedLibraryRows.length),
+                ' of ',
+                sortedLibraryRows.length
+              ),
+              React.createElement(
+                'div',
+                { className: 'flex items-center gap-2 order-1 sm:order-2' },
+                React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    onClick: () => setLibraryPageIndex((p) => Math.max(0, p - 1)),
+                    disabled: libraryPageIndex <= 0,
+                    className:
+                      'px-4 py-2 rounded-lg text-sm font-medium border transition-colors ' +
+                      (libraryPageIndex <= 0
+                        ? 'border-gray-800 text-gray-600 cursor-not-allowed'
+                        : 'border-gray-600 text-gray-200 hover:bg-gray-800'),
+                  },
+                  'Previous'
+                ),
+                React.createElement(
+                  'span',
+                  { className: 'text-sm text-gray-500 px-2 min-w-[5rem] text-center' },
+                  'Page ',
+                  libraryPageIndex + 1,
+                  ' / ',
+                  libraryTotalPages
+                ),
+                React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    onClick: () => setLibraryPageIndex((p) => Math.min(libraryTotalPages - 1, p + 1)),
+                    disabled: libraryPageIndex >= libraryTotalPages - 1,
+                    className:
+                      'px-4 py-2 rounded-lg text-sm font-medium border transition-colors ' +
+                      (libraryPageIndex >= libraryTotalPages - 1
+                        ? 'border-gray-800 text-gray-600 cursor-not-allowed'
+                        : 'border-gray-600 text-gray-200 hover:bg-gray-800'),
+                  },
+                  'Next'
+                )
+              )
+            )
         )
-      : hasActiveSearch &&
-          filteredItems.length === 0 &&
-          filteredChannels.length === 0 &&
-          filteredShares.length === 0
+      : hasActiveSearch
         ? React.createElement(
             'div',
             { className: 'text-center py-16 px-6 border-2 border-dashed border-gray-800 rounded-2xl bg-gray-800/20' },
@@ -1419,32 +1502,32 @@ export const Library = ({
               activeShareFilter ? 'Clear share filter' : 'Clear search'
             )
           )
-        : hasActiveSearch
-          ? null
-          : React.createElement(
-            'div',
-            { className: 'text-center py-20 px-6 border-2 border-dashed border-gray-800 rounded-2xl bg-gray-800/20' },
-            React.createElement(
+        : totalGridCount === 0
+          ? React.createElement(
               'div',
-              { className: 'bg-gray-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 border border-gray-700' },
-              React.createElement(BookIcon, { className: 'h-8 w-8 text-gray-600' })
-            ),
-            React.createElement('h3', { className: 'text-xl font-semibold text-gray-400' }, 'Library is Empty'),
-            React.createElement(
-              'p',
-              { className: 'text-gray-500 mt-2 max-w-sm mx-auto' },
-              'Click "Add File" to import an EPUB, PDF, TXT, or Markdown file, or "Add YouTube" to save a video link.'
-            ),
-            React.createElement(
-              'button',
-              {
-                onClick: () => fileInputRef.current?.click(),
-                className: 'mt-6 inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-6 rounded-xl transition-all'
-              },
-              React.createElement(BookIcon, { className: 'h-5 w-5' }),
-              'Add Your First File'
+              { className: 'text-center py-20 px-6 border-2 border-dashed border-gray-800 rounded-2xl bg-gray-800/20' },
+              React.createElement(
+                'div',
+                { className: 'bg-gray-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 border border-gray-700' },
+                React.createElement(BookIcon, { className: 'h-8 w-8 text-gray-600' })
+              ),
+              React.createElement('h3', { className: 'text-xl font-semibold text-gray-400' }, 'Library is Empty'),
+              React.createElement(
+                'p',
+                { className: 'text-gray-500 mt-2 max-w-sm mx-auto' },
+                'Click "Add File" to import an EPUB, PDF, TXT, or Markdown file, or "Add YouTube" to save a video link.'
+              ),
+              React.createElement(
+                'button',
+                {
+                  onClick: () => fileInputRef.current?.click(),
+                  className: 'mt-6 inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-6 rounded-xl transition-all'
+                },
+                React.createElement(BookIcon, { className: 'h-5 w-5' }),
+                'Add Your First File'
+              )
             )
-          ),
+          : null,
 
     // New note modal
     isNewNoteOpen && React.createElement(NewNoteModal, {

@@ -109,6 +109,8 @@ Standalone page, no React. Opens in a new browser tab. Reads the EPUB from the `
 - After `isInitialized`, `needsDriveOAuthLogin()` (depends on `libraryMode`) controls whether `GoogleOAuthGate` is shown; `recheckDriveOAuthGate` is passed to `Library` so credential/folder changes can re-open the gate if needed.
 - `handleSelectVideo` / `openVideo` — EPUB opens `reader.html?id=` in a new tab; other types set `currentVideo` and show `Reader`.
 - `handleSelectChannel` — sets `currentChannel` and `view` to `'channel'` for `YoutubeChannelViewer`.
+- **Channel auto-refresh** — on `isInitialized`, iterates all channels; any channel whose `lastRefreshedAt` is absent or older than 1 hour is passed to `fetchNewChannelVideos()`. If new videos are returned they are prepended to `channel.videos` and `updateChannel()` writes the merged list + updated `lastRefreshedAt` back to IndexedDB. Errors are silently logged. Requires `VITE_API_KEY` (or proxy) to be configured.
+- **`currentChannel` sync** — a `useEffect` on `channels` keeps `currentChannel` in sync with the IDB state so `YoutubeChannelViewer` immediately reflects any video-list update without requiring re-navigation.
 - Delegates IndexedDB to `useIndexedDB` (`items`, `channels`, `shares`, CRUD, tags, share registry, Drive sync helpers).
 
 ---
@@ -239,11 +241,33 @@ YouTube thumbnails for **items** are resolved asynchronously via `FileReader` on
 ---
 
 ### `YoutubeChannelViewer.js`
-**Role:** Full-page view for a saved YouTube channel — sortable list of non-Shorts videos from the `channels` record.
+**Role:** Full-page view for a saved YouTube channel — sortable, searchable list of non-Shorts videos from the `channels` record. Auto-checks for new uploads on mount and updates IndexedDB if found.
 
-**Props:** `channel`, `onBack`, `onSelectItem` (opens a video in `Reader` via parent), `onDeleteChannel`.
+**Props:**
+| Prop | Type | Purpose |
+|------|------|---------|
+| `channel` | `object` | `channels` store record |
+| `onBack` | `function` | Navigate back to Library |
+| `onSelectItem` | `function` | Opens a video in `Reader` via parent |
+| `onDeleteChannel` | `function` | Removes the channel from IDB |
+| `onRequestDeleteChannel` | `function \| undefined` | Preferred delete path (shows confirmation modal in parent) |
+| `onUpdateChannel` | `function \| undefined` | `(id, data) => void` — writes updated fields (e.g. `videos`, `lastRefreshedAt`) to IDB |
+| `readOnly` | `boolean` | Hides delete button |
 
-**UI:** Header with back, avatar, title, delete channel; sort buttons; grid of `DataTile` (`tileType: 'item'`) with synthetic `application/x-youtube` items built from each `videoId` (plus metadata row under each card).
+**Auto-refresh behaviour:**
+On mount (or when `channel.id` changes), if `onUpdateChannel` is provided and the YouTube API key is configured, the component calls `fetchNewChannelVideos(channel)`:
+- Fetches the first page (up to 50) of the channel's uploads playlist.
+- Compares video IDs against `channel.videos`; fetches details only for genuinely new IDs, filtering out Shorts (< 61 s).
+- If new videos are found, prepends them to `channel.videos` and calls `onUpdateChannel(id, { videos, lastRefreshedAt })`.
+- Writes `lastRefreshedAt` even when there are no new videos so the App.js startup check can skip re-fetching within 1 hour.
+- Each channel is refreshed at most once per session (guarded by a ref) to avoid duplicate API calls on re-renders.
+
+**Refresh status badge** (transient, auto-clears after 4 s):
+- `"Checking for new videos…"` — pulse grey, while the API call is in flight.
+- `"New videos added!"` — green, when new videos were written to IDB.
+- `"Could not check for new videos."` — red, on API error.
+
+**UI:** Header with back arrow, channel avatar, title/handle/count line, optional refresh badge, delete button; title search input with clear button; sort mode buttons (Newest / Oldest / Most Viewed / Least Viewed); paginated grid of `DataTile` (`tileType: 'item'`) with synthetic `application/x-youtube` items built from each video record.
 
 ---
 

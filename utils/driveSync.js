@@ -2,7 +2,7 @@ import { SHARE_MANIFEST_NAME } from './shareManifest.js';
 import { fetchGoogleApisGet } from './googleApisFetch.js';
 import { isShareDriveJsonFilename } from './sharesDriveJson.js';
 
-const CHANNEL_JSON_MARKER = 'infodepo-channel';
+export const CHANNEL_JSON_MARKER = 'infodepo-channel';
 
 const SUPPORTED_MIME_TYPES = [
   'application/epub+zip',
@@ -455,15 +455,58 @@ export async function syncSharedFilesByDriveId({
   return counts;
 }
 
+function timeMs(t) {
+  if (t == null) return null;
+  if (t instanceof Date) {
+    const x = t.getTime();
+    return Number.isNaN(x) ? null : x;
+  }
+  const ms = new Date(t).getTime();
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/** True when local edits are newer than the last known Drive revision, or no Drive id yet. */
+export function itemNeedsBackupUpload(item) {
+  if (!item?.data) return false;
+  const d = String(item.driveId || '').trim();
+  if (!d) return true;
+  const lm = timeMs(item.localModifiedAt);
+  const mt = timeMs(item.modifiedTime);
+  if (lm == null) return false;
+  if (mt == null) return true;
+  return lm > mt;
+}
+
+function noteBundleNeedsBackup(item) {
+  if (!item?.data) return false;
+  const isNote = item.type === 'text/markdown' || item.idbStore === 'notes';
+  const hasAssets = isNote && Array.isArray(item.assets) && item.assets.length > 0;
+  if (hasAssets) {
+    const anyNew = item.assets.some((a) => a?.data && !String(a.driveId || '').trim());
+    if (anyNew) return true;
+  }
+  return itemNeedsBackupUpload(item);
+}
+
+function channelNeedsBackupUpload(ch) {
+  const d = String(ch?.driveId || '').trim();
+  if (!d) return true;
+  const lm = timeMs(ch.localModifiedAt);
+  const mt = timeMs(ch.modifiedTime);
+  if (lm == null) return false;
+  if (mt == null) return true;
+  return lm > mt;
+}
+
 /**
- * Uploads all local items that have no driveId to Google Drive (backup).
- * After each successful upload, calls onSetDriveId to persist the Drive file ID.
+ * Uploads local items to Google Drive (backup): new files, or PATCH when local edits are newer than Drive.
+ * After each successful upload, calls onSetDriveId to persist the Drive file ID and optional sync times.
  *
  * @param {object} options
  * @param {string}   options.accessToken         - OAuth2 Bearer token with drive.file scope
  * @param {string}   options.folderId            - Target Drive folder ID
  * @param {Array}    options.items               - All library items (books, notes, videos); notes carry their assets inline
- * @param {Function} options.onSetDriveId        - (id, storeName, driveId) => Promise
+ * @param {Function} options.onSetDriveId        - (id, storeName, driveId, syncMeta?) => Promise; syncMeta = { modifiedTime?: string }
  * @param {Function} options.onSetNoteFolderData - (noteId, folderId, assetDriveIds) => Promise
  * @param {Function} options.onProgress          - (message: string) => void
  * @returns {Promise<{ backed: number, failed: number }>}
@@ -481,7 +524,7 @@ export async function backupAllToGDrive({
   let backed = 0;
   let failed = 0;
 
-  const uploadBlob = async (blob, name, mimeType, targetParentId) => {
+  const postMultipart = async (blob, name, mimeType, targetParentId) => {
     const parentId = targetParentId || folderId;
     const metadata = {
       name,
@@ -492,14 +535,33 @@ export async function backupAllToGDrive({
     form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
     form.append('file', blob);
     const res = await fetch(
-      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime',
       { method: 'POST', headers: { Authorization: `Bearer ${accessToken}` }, body: form }
     );
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error?.message || res.statusText);
     }
-    return res.json(); // { id, name }
+    return res.json();
+  };
+
+  const patchMultipart = async (fileId, blob, name, mimeType) => {
+    const metadata = {
+      name,
+      mimeType: mimeType || 'application/octet-stream',
+    };
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', blob);
+    const res = await fetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=multipart&fields=id,name,modifiedTime`,
+      { method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}` }, body: form }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || res.statusText);
+    }
+    return res.json();
   };
 
   const createFolder = async (name, parentId) => {
@@ -516,63 +578,108 @@ export async function backupAllToGDrive({
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error?.message || res.statusText);
     }
-    return res.json(); // { id, name }
+    return res.json();
   };
 
-  // Back up main content items (books, notes, videos)
-  const pending = (items || []).filter(item => item.driveId === '' && item.data);
-  for (const item of pending) {
+  const itemsList = items || [];
+  for (const item of itemsList) {
+    if (!item.data || !noteBundleNeedsBackup(item)) continue;
+
     progress(`Backing up "${item.name}"...`);
     try {
       const isNote = item.type === 'text/markdown' || item.idbStore === 'notes';
       const hasAssets = isNote && Array.isArray(item.assets) && item.assets.length > 0;
 
       if (isNote && hasAssets) {
-        // Create a Drive folder to hold the .md file + its assets together.
         const folderName = item.name.replace(/\.(md|markdown|mdown|mkd)$/i, '');
-        const folder = await createFolder(folderName, folderId);
-        const driveFile = await uploadBlob(item.data, item.name, item.type, folder.id);
-        await onSetDriveId(item.id, item.idbStore, driveFile.id);
+        const existingFolderId = String(item.driveFolderId || '').trim();
+        const existingMdId = String(item.driveId || '').trim();
 
-        const assetDriveIds = [];
-        for (const asset of item.assets) {
-          if (asset.driveId) {
-            assetDriveIds.push({ name: asset.name, driveId: asset.driveId });
-            continue;
+        if (!existingFolderId || !existingMdId) {
+          const folder = await createFolder(folderName, folderId);
+          const driveFile = await postMultipart(item.data, item.name, item.type, folder.id);
+          await onSetDriveId(item.id, item.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
+
+          const assetDriveIds = [];
+          for (const asset of item.assets) {
+            if (asset.driveId) {
+              assetDriveIds.push({ name: asset.name, driveId: asset.driveId });
+              continue;
+            }
+            progress(`Backing up asset "${asset.name}" for "${item.name}"...`);
+            const af = await postMultipart(asset.data, asset.name, asset.type, folder.id);
+            assetDriveIds.push({ name: asset.name, driveId: af.id });
+            backed++;
           }
-          progress(`Backing up asset "${asset.name}" for "${item.name}"...`);
-          const af = await uploadBlob(asset.data, asset.name, asset.type, folder.id);
-          assetDriveIds.push({ name: asset.name, driveId: af.id });
+          if (onSetNoteFolderData) await onSetNoteFolderData(item.id, folder.id, assetDriveIds);
           backed++;
+        } else {
+          let lastMdTime = item.modifiedTime;
+          if (itemNeedsBackupUpload(item)) {
+            const mdRes = await patchMultipart(existingMdId, item.data, item.name, item.type);
+            lastMdTime = mdRes.modifiedTime;
+            await onSetDriveId(item.id, item.idbStore, existingMdId, { modifiedTime: mdRes.modifiedTime });
+            backed++;
+          }
+          const assetDriveIds = [];
+          let anyNewAsset = false;
+          for (const asset of item.assets) {
+            if (String(asset.driveId || '').trim()) {
+              assetDriveIds.push({ name: asset.name, driveId: asset.driveId });
+              continue;
+            }
+            progress(`Backing up asset "${asset.name}" for "${item.name}"...`);
+            const af = await postMultipart(asset.data, asset.name, asset.type, existingFolderId);
+            assetDriveIds.push({ name: asset.name, driveId: af.id });
+            anyNewAsset = true;
+            backed++;
+          }
+          if (anyNewAsset && onSetNoteFolderData) {
+            await onSetNoteFolderData(item.id, existingFolderId, assetDriveIds);
+            const mdMeta = lastMdTime;
+            await onSetDriveId(item.id, item.idbStore, existingMdId, {
+              modifiedTime: typeof mdMeta === 'string' ? mdMeta : (mdMeta?.toISOString?.() || new Date().toISOString()),
+            });
+          }
         }
-        if (onSetNoteFolderData) await onSetNoteFolderData(item.id, folder.id, assetDriveIds);
       } else {
-        // YouTube links are stored locally as .youtube blobs; upload to Drive as .json
         const isYoutube = item.type === 'application/x-youtube';
         const driveName = isYoutube ? item.name.replace(/\.youtube$/i, '.json') : item.name;
         const driveMime = isYoutube ? 'application/json' : item.type;
-        const driveFile = await uploadBlob(item.data, driveName, driveMime);
-        await onSetDriveId(item.id, item.idbStore, driveFile.id);
+        const did = String(item.driveId || '').trim();
+        let driveFile;
+        if (did) {
+          driveFile = await patchMultipart(did, item.data, driveName, driveMime);
+        } else {
+          driveFile = await postMultipart(item.data, driveName, driveMime);
+        }
+        await onSetDriveId(item.id, item.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
+        backed++;
       }
-      backed++;
     } catch (err) {
       console.warn(`Backup failed for "${item.name}":`, err.message);
       failed++;
     }
   }
 
-  // Back up channels
-  const pendingChannels = (channels || []).filter(ch => ch.driveId === '');
-  for (const ch of pendingChannels) {
+  for (const ch of channels || []) {
+    if (!channelNeedsBackupUpload(ch)) continue;
     const label = ch.name || ch.handle || ch.channelId;
     progress(`Backing up channel "${label}"...`);
     try {
-      const { id, driveId, ...rest } = ch;
+      const { id, driveId: _d, ...rest } = ch;
       const payload = JSON.stringify({ _type: CHANNEL_JSON_MARKER, ...rest });
       const blob = new Blob([payload], { type: 'application/json' });
-      const safeName = label.replace(/[/\\?%*:|"<>]/g, '-');
-      const driveFile = await uploadBlob(blob, `${safeName}.channel.json`, 'application/json');
-      await onSetDriveId(id, 'channels', driveFile.id);
+      const safeName = String(label).replace(/[/\\?%*:|"<>]/g, '-');
+      const fileName = `${safeName}.channel.json`;
+      const did = String(ch.driveId || '').trim();
+      let driveFile;
+      if (did) {
+        driveFile = await patchMultipart(did, blob, fileName, 'application/json');
+      } else {
+        driveFile = await postMultipart(blob, fileName, 'application/json');
+      }
+      await onSetDriveId(id, 'channels', driveFile.id, { modifiedTime: driveFile.modifiedTime });
       backed++;
     } catch (err) {
       console.warn(`Backup failed for channel "${label}":`, err.message);
