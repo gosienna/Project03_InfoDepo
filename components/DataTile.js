@@ -10,6 +10,13 @@ const YT_VIDEO_ID_RE = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|
 
 const NEW_TAG_OPTION = '__infodepo_new_tag__';
 
+function formatViewCount(n) {
+  const x = typeof n === 'number' && !Number.isNaN(n) ? n : 0;
+  if (x >= 1_000_000) return (x / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (x >= 1_000) return (x / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
+  return String(x);
+}
+
 /** Shared by `item` and `channel` tiles so width/height track the same layout (grid column + `h-40` hero). */
 const DATA_TILE_SHELL =
   'bg-gray-800 rounded-lg shadow-lg overflow-hidden cursor-pointer w-full group transition-all duration-300 transform hover:-translate-y-1 hover:shadow-indigo-500/30';
@@ -509,7 +516,17 @@ export const DataTile = ({
         { className: 'font-bold text-md text-gray-100 truncate', title: video.name },
         isYoutube ? video.name.replace(/\.youtube$/i, '') : video.name
       ),
-      React.createElement('p', { className: 'text-sm text-gray-400' }, formatBytes(video.size)),
+      isYoutube && video._channelVideo
+        ? React.createElement(
+            'p',
+            { className: 'text-xs text-gray-500 mt-0.5' },
+            formatViewCount(video._channelVideo.viewCount),
+            ' views',
+            video._channelVideo.publishedAt
+              ? ` · ${new Date(video._channelVideo.publishedAt).toLocaleDateString()}`
+              : ''
+          )
+        : React.createElement('p', { className: 'text-sm text-gray-400' }, formatBytes(video.size)),
       tagRow,
       (() => {
         const mdLike =

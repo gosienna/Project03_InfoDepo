@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { DataTile } from './DataTile.js';
 
 const SORT_MODES = [
@@ -16,11 +16,7 @@ const sortFns = {
   least_viewed:(a, b) => a.viewCount - b.viewCount,
 };
 
-function formatViewCount(n) {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
-  if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
-  return String(n);
-}
+const VIDEOS_PER_PAGE = 20;
 
 function videoToLibraryItem(v) {
   const json = JSON.stringify({ url: `https://www.youtube.com/watch?v=${v.videoId}`, title: v.title });
@@ -45,16 +41,44 @@ export const YoutubeChannelViewer = ({
   readOnly,
 }) => {
   const [sortMode, setSortMode] = useState('newest');
+  const [pageIndex, setPageIndex] = useState(0);
+  const [titleSearch, setTitleSearch] = useState('');
+
+  const rawCount = (channel.videos || []).length;
+
+  const filteredByTitle = useMemo(() => {
+    const list = channel.videos || [];
+    const q = titleSearch.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((v) => (v.title || '').toLowerCase().includes(q));
+  }, [channel.videos, titleSearch]);
 
   const sortedVideos = useMemo(() => {
-    const vids = [...(channel.videos || [])];
+    const vids = [...filteredByTitle];
     vids.sort(sortFns[sortMode] || sortFns.newest);
     return vids;
-  }, [channel.videos, sortMode]);
+  }, [filteredByTitle, sortMode]);
+
+  const totalVideos = sortedVideos.length;
+  const totalPages = Math.max(1, Math.ceil(totalVideos / VIDEOS_PER_PAGE));
+
+  useEffect(() => {
+    setPageIndex(0);
+  }, [sortMode, channel.id, titleSearch]);
+
+  useEffect(() => {
+    const maxIdx = Math.max(0, totalPages - 1);
+    if (pageIndex > maxIdx) setPageIndex(maxIdx);
+  }, [totalPages, pageIndex]);
+
+  const pageVideos = useMemo(() => {
+    const start = pageIndex * VIDEOS_PER_PAGE;
+    return sortedVideos.slice(start, start + VIDEOS_PER_PAGE);
+  }, [sortedVideos, pageIndex]);
 
   const libraryItems = useMemo(
-    () => sortedVideos.map(videoToLibraryItem),
-    [sortedVideos]
+    () => pageVideos.map(videoToLibraryItem),
+    [pageVideos]
   );
 
   const handleSelect = (item) => {
@@ -111,8 +135,11 @@ export const YoutubeChannelViewer = ({
           { className: 'text-sm text-gray-400' },
           channel.handle,
           ' \u00B7 ',
-          (channel.videos || []).length,
-          ' videos'
+          rawCount,
+          ' videos',
+          titleSearch.trim() &&
+            sortedVideos.length !== rawCount &&
+            ` \u00B7 ${sortedVideos.length} match${sortedVideos.length === 1 ? '' : 'es'}`
         )
       ),
       // Delete channel button
@@ -132,58 +159,158 @@ export const YoutubeChannelViewer = ({
       )
     ),
 
-    // Sort bar
-    React.createElement(
-      'div',
-      { className: 'flex items-center gap-2 mb-4 flex-wrap' },
-      React.createElement('span', { className: 'text-sm text-gray-500 font-medium' }, 'Sort by:'),
-      ...SORT_MODES.map(({ key, label }) =>
+    // Search + sort
+    rawCount > 0 &&
+      React.createElement(
+        'div',
+        { className: 'mb-4 flex flex-col gap-3' },
         React.createElement(
-          'button',
-          {
-            key,
-            onClick: () => setSortMode(key),
-            className: sortMode === key
-              ? 'px-3 py-1.5 rounded-lg text-sm font-medium bg-red-700 text-white transition-colors'
-              : 'px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-800 text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors border border-gray-700',
-          },
-          label
-        )
-      )
-    ),
-
-    // Video grid
-    sortedVideos.length > 0
-      ? React.createElement(
           'div',
-          { className: 'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6' },
-          libraryItems.map((item) => {
-            const cv = item._channelVideo;
-            return React.createElement(
-              'div',
-              { key: cv.videoId, className: 'relative' },
-              React.createElement(DataTile, {
-                tileType: 'item',
-                item,
-                onSelect: handleSelect,
-                onDelete: () => {},
-                onUpload: () => {},
-                uploadStatus: null,
-              }),
-              // Overlay: view count + date
+          { className: 'relative max-w-xl' },
+          React.createElement(
+            'svg',
+            {
+              xmlns: 'http://www.w3.org/2000/svg',
+              className: 'absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 pointer-events-none',
+              fill: 'none',
+              viewBox: '0 0 24 24',
+              stroke: 'currentColor',
+            },
+            React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' })
+          ),
+          React.createElement('input', {
+            type: 'search',
+            value: titleSearch,
+            onChange: (e) => setTitleSearch(e.target.value),
+            placeholder: 'Search by video title...',
+            'aria-label': 'Filter videos by title',
+            className:
+              'w-full bg-gray-800 border border-gray-700 rounded-xl pl-10 pr-10 py-2.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-red-600 focus:ring-1 focus:ring-red-600 transition-colors',
+          }),
+          titleSearch &&
+            React.createElement(
+              'button',
+              {
+                type: 'button',
+                onClick: () => setTitleSearch(''),
+                className: 'absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors',
+                'aria-label': 'Clear search',
+              },
               React.createElement(
-                'div',
-                { className: 'flex items-center justify-between px-4 pb-2 -mt-2 text-xs text-gray-500' },
-                React.createElement('span', null, formatViewCount(cv.viewCount), ' views'),
-                React.createElement('span', null, new Date(cv.publishedAt).toLocaleDateString())
+                'svg',
+                { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M6 18L18 6M6 6l12 12' })
               )
-            );
-          })
+            )
+        ),
+        React.createElement(
+          'div',
+          { className: 'flex items-center gap-2 flex-wrap' },
+          React.createElement('span', { className: 'text-sm text-gray-500 font-medium' }, 'Sort by:'),
+          ...SORT_MODES.map(({ key, label }) =>
+            React.createElement(
+              'button',
+              {
+                key,
+                onClick: () => setSortMode(key),
+                className: sortMode === key
+                  ? 'px-3 py-1.5 rounded-lg text-sm font-medium bg-red-700 text-white transition-colors'
+                  : 'px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-800 text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors border border-gray-700',
+              },
+              label
+            )
+          )
         )
-      : React.createElement(
+      ),
+
+    // Video grid + pagination
+    rawCount === 0
+      ? React.createElement(
           'div',
           { className: 'text-center py-20 text-gray-500' },
           'No videos found for this channel (Shorts are excluded).'
         )
+      : sortedVideos.length === 0
+        ? React.createElement(
+            'div',
+            { className: 'text-center py-20 text-gray-500' },
+            titleSearch.trim()
+              ? `No videos matching "${titleSearch.trim()}"`
+              : 'No videos found for this channel (Shorts are excluded).'
+          )
+        : React.createElement(
+            React.Fragment,
+            null,
+            React.createElement(
+              'div',
+              { className: 'grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6' },
+              libraryItems.map((item) =>
+                React.createElement(DataTile, {
+                  key: item.id,
+                  tileType: 'item',
+                  item,
+                  onSelect: handleSelect,
+                  onDelete: () => {},
+                  onUpload: () => {},
+                  uploadStatus: null,
+                })
+              )
+            ),
+            totalPages > 1 &&
+              React.createElement(
+                'div',
+                { className: 'flex flex-col sm:flex-row items-center justify-center gap-4 mt-10 pt-6 border-t border-gray-800' },
+                React.createElement(
+                  'p',
+                  { className: 'text-sm text-gray-400 order-2 sm:order-1' },
+                  'Showing ',
+                  pageIndex * VIDEOS_PER_PAGE + 1,
+                  '\u2013',
+                  Math.min((pageIndex + 1) * VIDEOS_PER_PAGE, totalVideos),
+                  ' of ',
+                  totalVideos
+                ),
+                React.createElement(
+                  'div',
+                  { className: 'flex items-center gap-2 order-1 sm:order-2' },
+                  React.createElement(
+                    'button',
+                    {
+                      type: 'button',
+                      onClick: () => setPageIndex((p) => Math.max(0, p - 1)),
+                      disabled: pageIndex <= 0,
+                      className:
+                        'px-4 py-2 rounded-lg text-sm font-medium border transition-colors ' +
+                        (pageIndex <= 0
+                          ? 'border-gray-800 text-gray-600 cursor-not-allowed'
+                          : 'border-gray-600 text-gray-200 hover:bg-gray-800'),
+                    },
+                    'Previous'
+                  ),
+                  React.createElement(
+                    'span',
+                    { className: 'text-sm text-gray-500 px-2 min-w-[5rem] text-center' },
+                    'Page ',
+                    pageIndex + 1,
+                    ' / ',
+                    totalPages
+                  ),
+                  React.createElement(
+                    'button',
+                    {
+                      type: 'button',
+                      onClick: () => setPageIndex((p) => Math.min(totalPages - 1, p + 1)),
+                      disabled: pageIndex >= totalPages - 1,
+                      className:
+                        'px-4 py-2 rounded-lg text-sm font-medium border transition-colors ' +
+                        (pageIndex >= totalPages - 1
+                          ? 'border-gray-800 text-gray-600 cursor-not-allowed'
+                          : 'border-gray-600 text-gray-200 hover:bg-gray-800'),
+                    },
+                    'Next'
+                  )
+                )
+              )
+          )
   );
 };

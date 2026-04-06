@@ -2,7 +2,6 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { DataTile } from './DataTile.js';
 import { BookIcon } from './icons/BookIcon.js';
-import { DevDriveBrowser } from './DevDriveBrowser.js';
 import { getDriveCredentials, hasGoogleApiKeyOrProxy } from '../utils/driveCredentials.js';
 import { getDriveFolderId, setDriveFolderId, parseDriveFolderIdInput } from '../utils/driveFolderStorage.js';
 import {
@@ -33,6 +32,8 @@ const CHANNEL_JSON_MARKER = 'infodepo-channel';
 
 const channelUploadKey = (ch) => `channel-${ch?.id}`;
 
+const SEARCH_SUGGEST_MAX = 15;
+
 export const Library = ({
   items, channels, shares,
   onSelectItem, onSelectChannel, onAddItem, onDeleteItem, onClearLibrary,
@@ -52,11 +53,11 @@ export const Library = ({
   onDriveCredentialsChanged,
 }) => {
   const fileInputRef      = useRef(null);
+  const searchInputRef    = useRef(null);
   const uploadTokenRef    = useRef(null);
   const lastScopeRef      = useRef('');
   const oauthClientModeRef = useRef(null);
   const reapplyShareAclTimerRef = useRef(null);
-  const [isDevBrowserOpen, setIsDevBrowserOpen] = useState(false);
   const [uploadStatuses,   setUploadStatuses]   = useState({});
   const credentials = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
@@ -73,6 +74,8 @@ export const Library = ({
 
   // Search state
   const [searchQuery,      setSearchQuery]      = useState('');
+  const [searchSuggestIndex, setSearchSuggestIndex] = useState(-1);
+  const [searchInputFocused, setSearchInputFocused] = useState(false);
   const [activeFilters,    setActiveFilters]    = useState(new Set());
 
   // Sync + Backup state (combined operation)
@@ -666,11 +669,6 @@ export const Library = ({
     }
   };
 
-  const handleDriveButtonClick = () => {
-    if (!hasCredentials) return;
-    setIsDevBrowserOpen(true);
-  };
-
   const handleSignOutGoogle = () => {
     const tokens = new Set();
     if (uploadTokenRef.current) tokens.add(uploadTokenRef.current);
@@ -754,6 +752,31 @@ export const Library = ({
 
   const query = searchQuery.trim().toLowerCase();
 
+  /** Name substring (case-insensitive) or any tag whose normalized form contains the normalized query. */
+  const matchesNameOrTags = (name, tags) => {
+    if (!query) return true;
+    if ((name || '').toLowerCase().includes(query)) return true;
+    const nq = normalizeTag(query);
+    if (!nq) return false;
+    for (const t of tags || []) {
+      const nt = normalizeTag(t);
+      if (nt && nt.includes(nq)) return true;
+    }
+    return false;
+  };
+
+  const matchesShareNameOrIncludeTags = (share) => {
+    if (!query) return true;
+    if ((share.driveFileName || '').toLowerCase().includes(query)) return true;
+    const nq = normalizeTag(query);
+    if (!nq) return false;
+    for (const t of share.includeTags || []) {
+      const nt = normalizeTag(t);
+      if (nt && nt.includes(nq)) return true;
+    }
+    return false;
+  };
+
   const shareRefDriveIds = useMemo(() => {
     if (!activeShareFilter) return null;
     return new Set(
@@ -768,7 +791,7 @@ export const Library = ({
       if (!item.driveId || !shareRefDriveIds.has(String(item.driveId))) return false;
     }
     if (activeFilters.size > 0 && !activeFilters.has(item.idbStore)) return false;
-    if (query && !(item.name || '').toLowerCase().includes(query)) return false;
+    if (query && !matchesNameOrTags(item.name, item.tags)) return false;
     return true;
   });
 
@@ -777,14 +800,14 @@ export const Library = ({
       if (!ch.driveId || !shareRefDriveIds.has(String(ch.driveId))) return false;
     }
     if (activeFilters.size > 0 && !activeFilters.has('channels')) return false;
-    if (query && !(ch.name || '').toLowerCase().includes(query)) return false;
+    if (query && !matchesNameOrTags(ch.name || ch.handle, ch.tags)) return false;
     return true;
   });
 
   const filteredShares = (shares || []).filter((s) => {
     if (shareRefDriveIds) return false;
     if (activeFilters.size > 0 && !activeFilters.has('shares')) return false;
-    if (query && !(s.driveFileName || '').toLowerCase().includes(query)) return false;
+    if (query && !matchesShareNameOrIncludeTags(s)) return false;
     return true;
   });
 
@@ -792,6 +815,109 @@ export const Library = ({
   const filteredGridCount = filteredItems.length + filteredChannels.length + filteredShares.length;
 
   const hasActiveSearch = query || activeFilters.size > 0 || !!activeShareFilter;
+
+  const searchSuggestionPool = useMemo(() => {
+    const rows = [];
+    const seenName = new Set();
+
+    const addName = (raw, category, labelOverride) => {
+      const trimmed = (raw || '').trim();
+      if (!trimmed) return;
+      const key = trimmed.toLowerCase();
+      if (seenName.has(key)) return;
+      seenName.add(key);
+      const label = labelOverride != null ? labelOverride : trimmed;
+      rows.push({ kind: 'name', category, label, value: trimmed });
+    };
+
+    for (const it of items) {
+      const raw = it.name || '';
+      if (it.type === 'application/x-youtube') {
+        addName(raw, 'item', raw.replace(/\.youtube$/i, ''));
+      } else {
+        addName(raw, 'item');
+      }
+    }
+    for (const ch of channels || []) {
+      addName(ch.name || ch.handle || '', 'channel');
+    }
+    for (const sh of shares || []) {
+      addName(sh.driveFileName || '', 'share');
+    }
+
+    const tagSeen = new Set();
+    for (const t of availableTags) {
+      const n = normalizeTag(t);
+      if (!n || tagSeen.has(n)) continue;
+      tagSeen.add(n);
+      rows.push({ kind: 'tag', category: 'tag', label: n, value: n });
+    }
+    for (const sh of shares || []) {
+      for (const t of sh.includeTags || []) {
+        const n = normalizeTag(t);
+        if (!n || tagSeen.has(n)) continue;
+        tagSeen.add(n);
+        rows.push({ kind: 'tag', category: 'share-tag', label: n, value: n });
+      }
+    }
+
+    return rows;
+  }, [items, channels, shares, availableTags]);
+
+  const searchSuggestions = useMemo(() => {
+    const raw = searchQuery.trim();
+    const q = raw.toLowerCase();
+    if (!q) return [];
+
+    const out = [];
+    for (const row of searchSuggestionPool) {
+      if (row.kind === 'tag') {
+        const nt = normalizeTag(row.value);
+        const nq = normalizeTag(raw);
+        if (nt && nq && nt.includes(nq)) out.push(row);
+      } else if ((row.value || '').toLowerCase().includes(q)) {
+        out.push(row);
+      }
+    }
+
+    out.sort((a, b) => {
+      const va = (a.value || '').toLowerCase();
+      const vb = (b.value || '').toLowerCase();
+      const rank = (v) => (v.startsWith(q) ? 0 : v.includes(q) ? 1 : 2);
+      const ra = rank(va);
+      const rb = rank(vb);
+      if (ra !== rb) return ra - rb;
+      return (a.label || '').localeCompare(b.label || '', undefined, { sensitivity: 'base' });
+    });
+
+    return out.slice(0, SEARCH_SUGGEST_MAX);
+  }, [searchSuggestionPool, searchQuery]);
+
+  useEffect(() => {
+    setSearchSuggestIndex(-1);
+  }, [searchQuery]);
+
+  const applySearchSuggestion = (row) => {
+    setSearchQuery(row.value);
+    setSearchSuggestIndex(-1);
+  };
+
+  const handleSearchKeyDown = (e) => {
+    if (!searchSuggestions.length) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSearchSuggestIndex((i) => Math.min(searchSuggestions.length - 1, i + 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSearchSuggestIndex((i) => Math.max(-1, i - 1));
+    } else if (e.key === 'Enter' && searchSuggestIndex >= 0) {
+      e.preventDefault();
+      const row = searchSuggestions[searchSuggestIndex];
+      if (row) applySearchSuggestion(row);
+    } else if (e.key === 'Escape') {
+      setSearchSuggestIndex(-1);
+    }
+  };
 
   const folderBadge = hasCredentials && React.createElement(
     'span',
@@ -849,32 +975,7 @@ export const Library = ({
           totalGridCount === 1 ? 'Item' : 'Items'
         ),
 
-        React.createElement(
-          'div',
-          { className: 'flex items-center gap-1.5' },
-          React.createElement(
-            'button',
-            {
-              onClick: handleDriveButtonClick,
-              disabled: !hasCredentials,
-              className:
-                'flex items-center gap-2 font-bold py-2 px-5 rounded-xl transition-all active:scale-95 ' +
-                (hasCredentials
-                  ? 'bg-teal-700 hover:bg-teal-600 text-white'
-                  : 'bg-gray-700 text-gray-500 cursor-not-allowed'),
-              title: hasCredentials
-                ? 'Browse supported files in your linked Drive folder'
-                : 'Set VITE_CLIENT_ID and Google API access (VITE_API_KEY or Netlify proxy) and choose a Drive folder (setup screen or System settings)',
-            },
-            React.createElement(
-              'svg',
-              { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
-              React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M3 7a2 2 0 012-2h3.586a1 1 0 01.707.293L11 7h10a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z' })
-            ),
-            'Drive',
-          ),
-          folderBadge,
-        ),
+        folderBadge,
 
         // Sync button (backup local → Drive, then sync Drive → local)
         hasCredentials && syncButton,
@@ -1009,37 +1110,109 @@ export const Library = ({
       )
     ),
 
-    // Search bar
+    // Search bar (with name + tag suggestions)
     React.createElement(
       'div',
       { className: 'mb-4 flex flex-col gap-2' },
       React.createElement(
         'div',
-        { className: 'relative' },
+        { className: 'relative z-30' },
         React.createElement(
           'svg',
-          { xmlns: 'http://www.w3.org/2000/svg', className: 'absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 pointer-events-none', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+          { xmlns: 'http://www.w3.org/2000/svg', className: 'absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 pointer-events-none z-10', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
           React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' })
         ),
         React.createElement('input', {
-          type: 'text',
+          ref: searchInputRef,
+          type: 'search',
+          autoComplete: 'off',
+          'aria-autocomplete': 'list',
+          'aria-expanded': searchInputFocused && searchSuggestions.length > 0,
+          'aria-controls': 'library-search-suggestions',
+          role: 'combobox',
           value: searchQuery,
           onChange: (e) => setSearchQuery(e.target.value),
-          placeholder: 'Search library...',
+          onFocus: () => setSearchInputFocused(true),
+          onBlur: () => setSearchInputFocused(false),
+          onKeyDown: handleSearchKeyDown,
+          placeholder: 'Search name, filename, or tags...',
           className: 'w-full bg-gray-800 border border-gray-700 rounded-xl pl-10 pr-10 py-2.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors',
         }),
         searchQuery && React.createElement(
           'button',
           {
-            onClick: () => setSearchQuery(''),
-            className: 'absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors',
+            type: 'button',
+            onClick: () => { setSearchQuery(''); setSearchSuggestIndex(-1); },
+            className: 'absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors z-10',
           },
           React.createElement(
             'svg',
             { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
             React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M6 18L18 6M6 6l12 12' })
           )
-        )
+        ),
+        searchInputFocused && searchSuggestions.length > 0 &&
+          React.createElement(
+            'ul',
+            {
+              id: 'library-search-suggestions',
+              role: 'listbox',
+              className:
+                'absolute left-0 right-0 top-full mt-1 max-h-60 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 shadow-xl shadow-black/40 py-1 z-50',
+            },
+            searchSuggestions.map((row, idx) => {
+              const catLabel =
+                row.category === 'item'
+                  ? 'Item'
+                  : row.category === 'channel'
+                    ? 'Channel'
+                    : row.category === 'share'
+                      ? 'Share'
+                      : row.category === 'share-tag'
+                        ? 'Share tag'
+                        : 'Tag';
+              const active = searchSuggestIndex === idx;
+              return React.createElement(
+                'li',
+                {
+                  key: `suggest-${row.kind}-${row.category}-${row.value}-${idx}`,
+                  role: 'option',
+                  'aria-selected': active,
+                },
+                React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    id: `library-search-opt-${idx}`,
+                    className:
+                      'w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ' +
+                      (active ? 'bg-indigo-900/50 text-indigo-100' : 'text-gray-200 hover:bg-gray-700/80'),
+                    onMouseDown: (e) => {
+                      e.preventDefault();
+                      applySearchSuggestion(row);
+                    },
+                    onMouseEnter: () => setSearchSuggestIndex(idx),
+                  },
+                  React.createElement(
+                    'span',
+                    {
+                      className:
+                        'shrink-0 text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ' +
+                        (row.kind === 'tag'
+                          ? 'bg-amber-900/50 text-amber-200/90'
+                          : 'bg-gray-600/80 text-gray-300'),
+                    },
+                    catLabel
+                  ),
+                  React.createElement(
+                    'span',
+                    { className: 'min-w-0 flex-1 truncate', title: row.value },
+                    row.label
+                  )
+                )
+              );
+            })
+          )
       ),
       React.createElement(
         'div',
@@ -1272,13 +1445,6 @@ export const Library = ({
               'Add Your First File'
             )
           ),
-
-    // Drive browser modal
-    isDevBrowserOpen && React.createElement(DevDriveBrowser, {
-      onFileSelect: onAddItem,
-      onClose: () => setIsDevBrowserOpen(false),
-      clientId: credentials.clientId,
-    }),
 
     // New note modal
     isNewNoteOpen && React.createElement(NewNoteModal, {
