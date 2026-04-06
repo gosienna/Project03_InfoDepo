@@ -45,8 +45,6 @@
 
   <script>
     const DB_NAME = 'InfoDepo';
-    // Keep in sync with utils/infodepoDb.js — EPUB blobs live in `books`.
-    const DB_VERSION = 1;
     const BOOKS_STORE = 'books';
 
     let zip = null;
@@ -216,7 +214,7 @@
     async function loadAndRender(id) {
       setLoading('Opening database...');
       const db = await new Promise((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        const req = indexedDB.open(DB_NAME);
         req.onsuccess = e => resolve(e.target.result);
         req.onerror = e => reject(e.target.error);
       }).catch(err => { showError(`DB error: ${err.message}`); return null; });
