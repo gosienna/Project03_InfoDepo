@@ -1,0 +1,15 @@
+[dev]
+  command = "npm run dev"
+  # Must match vite.config.js server.port (default Vite is 5173; this project uses 3001).
+  targetPort = 3001
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  # Vite inlines VITE_* into dist/; smart scan flags that (false positive for SPA).
+  SECRETS_SCAN_SMART_DETECTION_ENABLED = "false"
+
+[functions]
+  directory = "netlify/functions"

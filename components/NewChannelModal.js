@@ -1,10 +1,11 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { resolveChannelId, fetchChannelVideos } from '../utils/youtubeApi.js';
+import { getDriveCredentials, hasGoogleApiKeyOrProxy } from '../utils/driveCredentials.js';
 
 const CHANNEL_URL_RE = /youtube\.com\/(@[a-zA-Z0-9_.-]+|channel\/UC[a-zA-Z0-9_-]{22})/;
 
-export const NewChannelModal = ({ onSave, onClose, apiKey }) => {
+export const NewChannelModal = ({ onSave, onClose }) => {
   const [url, setUrl] = useState('');
   const [error, setError] = useState(null);
   const [isFetching, setIsFetching] = useState(false);
@@ -20,8 +21,8 @@ export const NewChannelModal = ({ onSave, onClose, apiKey }) => {
       setError('Please enter a valid YouTube channel URL (e.g. https://www.youtube.com/@stanfordonline)');
       return;
     }
-    if (!apiKey) {
-      setError('YouTube API key not configured. Set VITE_API_KEY in your environment.');
+    if (!hasGoogleApiKeyOrProxy(getDriveCredentials())) {
+      setError('YouTube API not configured. Set VITE_API_KEY locally or GOOGLE_API_KEY + VITE_GOOGLE_API_PROXY on Netlify.');
       return;
     }
 
@@ -29,9 +30,9 @@ export const NewChannelModal = ({ onSave, onClose, apiKey }) => {
     setError(null);
     setProgress('Resolving channel...');
     try {
-      const channelInfo = await resolveChannelId(trimmed, apiKey);
+      const channelInfo = await resolveChannelId(trimmed);
       setProgress('Fetching videos...');
-      const videos = await fetchChannelVideos(channelInfo.channelId, apiKey, setProgress);
+      const videos = await fetchChannelVideos(channelInfo.channelId, setProgress);
       await onSave({
         channelId: channelInfo.channelId,
         handle: channelInfo.handle,

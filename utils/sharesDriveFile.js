@@ -3,16 +3,19 @@
  */
 
 import { serializeShareToDriveJson, parseSharesDriveJsonText } from './sharesDriveJson.js';
+import { fetchGoogleApisGet } from './googleApisFetch.js';
 
 /**
  * Find a file by exact name in folder.
  * @returns {Promise<string|null>} file id
  */
-export async function findSharesFileIdByName(accessToken, apiKey, folderId, fileName) {
+export async function findSharesFileIdByName(accessToken, folderId, fileName) {
   const safeName = String(fileName || '').replace(/'/g, "\\'");
   const q = encodeURIComponent(`'${folderId}' in parents and name = '${safeName}' and trashed = false`);
-  const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&key=${encodeURIComponent(apiKey)}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const res = await fetchGoogleApisGet(
+    `/drive/v3/files?q=${q}&fields=files(id,name)`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
   if (!res.ok) return null;
   const data = await res.json();
   const f = (data.files || [])[0];
@@ -22,12 +25,11 @@ export async function findSharesFileIdByName(accessToken, apiKey, folderId, file
 /**
  * @param {object} opts
  * @param {string} opts.accessToken
- * @param {string} opts.apiKey
  * @param {string} opts.folderId
  * @param {import('./sharesDriveJson.js').ShareClientRecord} opts.record — owner record fields
  * @param {string} [opts.existingFileId] — prefer PATCH on this id
  */
-export async function uploadSharesJsonToDrive({ accessToken, apiKey, folderId, record, existingFileId }) {
+export async function uploadSharesJsonToDrive({ accessToken, folderId, record, existingFileId }) {
   const payload = serializeShareToDriveJson(record);
   const body = JSON.stringify(payload, null, 0);
   const blob = new Blob([body], { type: 'application/json' });
@@ -35,7 +37,7 @@ export async function uploadSharesJsonToDrive({ accessToken, apiKey, folderId, r
 
   let fileId = (existingFileId && String(existingFileId).trim()) || '';
   if (!fileId) {
-    fileId = (await findSharesFileIdByName(accessToken, apiKey, folderId, name)) || '';
+    fileId = (await findSharesFileIdByName(accessToken, folderId, name)) || '';
   }
 
   const form = new FormData();

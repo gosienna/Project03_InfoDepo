@@ -8,7 +8,7 @@ import { YoutubeChannelViewer } from './components/YoutubeChannelViewer.js';
 import { useIndexedDB } from './hooks/useIndexedDB.js';
 import { libraryItemKey } from './utils/libraryItemKey.js';
 import { needsDriveOAuthLogin } from './utils/driveOAuthGateCheck.js';
-import { getDriveCredentials } from './utils/driveCredentials.js';
+import { getDriveCredentials, hasGoogleApiKeyOrProxy } from './utils/driveCredentials.js';
 import { getDriveFolderId } from './utils/driveFolderStorage.js';
 import { DeleteContentModal } from './components/DeleteContentModal.js';
 import { getOwnerDriveAccessToken } from './utils/driveAccessToken.js';
@@ -85,7 +85,7 @@ const App = () => {
   const driveFolderId = getDriveFolderId();
   const hasDriveLibrarySetup = !!(
     driveCreds.clientId &&
-    driveCreds.apiKey &&
+    hasGoogleApiKeyOrProxy(driveCreds) &&
     String(driveFolderId || '').trim()
   );
 

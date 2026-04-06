@@ -3,7 +3,7 @@ import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { DataTile } from './DataTile.js';
 import { BookIcon } from './icons/BookIcon.js';
 import { DevDriveBrowser } from './DevDriveBrowser.js';
-import { getDriveCredentials } from '../utils/driveCredentials.js';
+import { getDriveCredentials, hasGoogleApiKeyOrProxy } from '../utils/driveCredentials.js';
 import { getDriveFolderId, setDriveFolderId, parseDriveFolderIdInput } from '../utils/driveFolderStorage.js';
 import {
   getStoredAccessToken,
@@ -27,8 +27,6 @@ import { applyShareRecordsToDriveFiles } from '../utils/driveSharePermissions.js
 import { payloadToClientRecord, normalizeExplicitRefs } from '../utils/sharesDriveJson.js';
 import { getOwnerDriveAccessToken, invalidateDriveAccessTokenCache } from '../utils/driveAccessToken.js';
 import { deleteDriveFilesForMergedItem, deleteDriveFilesForChannel } from '../utils/deleteLibraryContentOnDrive.js';
-
-const YT_API_KEY = import.meta.env.VITE_API_KEY || '';
 
 /** Must match `CHANNEL_JSON_MARKER` in `utils/driveSync.js` for Drive backup/sync. */
 const CHANNEL_JSON_MARKER = 'infodepo-channel';
@@ -83,7 +81,7 @@ export const Library = ({
 
   const hasCredentials = !!(
     credentials.clientId &&
-    credentials.apiKey &&
+    hasGoogleApiKeyOrProxy(credentials) &&
     driveFolderId.trim()
   );
 
@@ -331,7 +329,6 @@ export const Library = ({
     const enrichedRec = { ...rec, explicitRefs: resolvedExplicitRefs };
     const result = await uploadSharesJsonToDrive({
       accessToken: token,
-      apiKey: credentials.apiKey,
       folderId: driveFolderId,
       record: enrichedRec,
       existingFileId: rec.driveFileId || undefined,
@@ -503,7 +500,6 @@ export const Library = ({
           if (o.driveFileId) {
             await uploadSharesJsonToDrive({
               accessToken: token,
-              apiKey: credentials.apiKey,
               folderId: driveFolderId,
               record: { ...o, explicitRefs: resolved },
               existingFileId: o.driveFileId,
@@ -710,7 +706,6 @@ export const Library = ({
       setSyncProgress('Syncing from Drive...');
       const syncResult = await syncDriveToLocal({
         accessToken: token,
-        apiKey: credentials.apiKey,
         folderId: driveFolderId,
         books: items.filter(i => i.type !== 'application/x-youtube'),
         getBookByDriveId,
@@ -862,7 +857,7 @@ export const Library = ({
                   : 'bg-gray-700 text-gray-500 cursor-not-allowed'),
               title: hasCredentials
                 ? 'Browse supported files in your linked Drive folder'
-                : 'Set VITE_CLIENT_ID and VITE_API_KEY in the environment and choose a Drive folder (setup screen or System settings)',
+                : 'Set VITE_CLIENT_ID and Google API access (VITE_API_KEY or Netlify proxy) and choose a Drive folder (setup screen or System settings)',
             },
             React.createElement(
               'svg',
@@ -1276,7 +1271,6 @@ export const Library = ({
       onFileSelect: onAddItem,
       onClose: () => setIsDevBrowserOpen(false),
       clientId: credentials.clientId,
-      apiKey:   credentials.apiKey,
     }),
 
     // New note modal
@@ -1295,7 +1289,6 @@ export const Library = ({
     isChannelOpen && React.createElement(NewChannelModal, {
       onSave:  onAddChannel,
       onClose: () => setIsChannelOpen(false),
-      apiKey:  YT_API_KEY,
     }),
 
     activeShare &&
@@ -1362,9 +1355,9 @@ export const Library = ({
                 { className: 'text-xs text-gray-500 mt-1 leading-relaxed' },
                 'Set ',
                 React.createElement('code', { className: 'text-gray-400' }, 'VITE_CLIENT_ID'),
-                ' and ',
+                ' and Google API access (',
                 React.createElement('code', { className: 'text-gray-400' }, 'VITE_API_KEY'),
-                ' in your environment (',
+                ' or Netlify proxy; see README) in your environment (',
                 React.createElement('code', { className: 'text-gray-400' }, '.env'),
                 ' locally, Netlify site settings in production).',
               ),

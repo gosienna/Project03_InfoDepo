@@ -52,6 +52,8 @@ VITE_CLIENT_ID=   # OAuth 2.0 Web client ID (...apps.googleusercontent.com)
 VITE_API_KEY=     # Google API key (...) — Drive listing + YouTube channel search
 ```
 
+**Netlify (optional):** To keep the API key off the client bundle, set **`GOOGLE_API_KEY`** in Netlify (server-only for `netlify/functions/google-api-proxy.js`), set **`VITE_GOOGLE_API_PROXY=true`** for builds, and **omit `VITE_API_KEY`** locally in production. Local development keeps using **`VITE_API_KEY`** in `.env` without the proxy.
+
 After first load, you **enter a Google Drive folder** (ID or URL); it is saved in the browser as `infodepo_drive_folder_id`. OAuth access tokens are stored separately in `localStorage` after you sign in.
 
 ### Scripts

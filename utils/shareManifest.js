@@ -1,4 +1,5 @@
 import { normalizeTag, normalizeTagsList } from './tagUtils.js';
+import { fetchGoogleApisGet } from './googleApisFetch.js';
 
 export const SHARE_MANIFEST_NAME = 'InfoDepo.share.json';
 
@@ -323,12 +324,14 @@ export function getDriveIdsForRecipientEmail(manifest, email) {
   return ids;
 }
 
-async function findManifestFileId(accessToken, apiKey, folderId) {
+async function findManifestFileId(accessToken, folderId) {
   const q = encodeURIComponent(
     `'${folderId}' in parents and name = '${SHARE_MANIFEST_NAME}' and trashed = false`
   );
-  const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&key=${encodeURIComponent(apiKey)}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const res = await fetchGoogleApisGet(
+    `/drive/v3/files?q=${q}&fields=files(id,name)`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
   if (!res.ok) return null;
   const data = await res.json();
   const f = (data.files || [])[0];
@@ -338,10 +341,10 @@ async function findManifestFileId(accessToken, apiKey, folderId) {
 /**
  * Create or replace InfoDepo.share.json in the folder.
  */
-export async function uploadShareManifest({ accessToken, apiKey, folderId, manifest }) {
+export async function uploadShareManifest({ accessToken, folderId, manifest }) {
   const body = JSON.stringify(manifest, null, 0);
   const blob = new Blob([body], { type: 'application/json' });
-  const existingId = await findManifestFileId(accessToken, apiKey, folderId);
+  const existingId = await findManifestFileId(accessToken, folderId);
 
   const uploadBlob = async (metadata, fileBlob) => {
     const form = new FormData();
@@ -379,8 +382,8 @@ export async function uploadShareManifest({ accessToken, apiKey, folderId, manif
 /**
  * Download and parse the share manifest from Drive, or null if missing / invalid.
  */
-export async function fetchShareManifest({ accessToken, apiKey, folderId }) {
-  const fileId = await findManifestFileId(accessToken, apiKey, folderId);
+export async function fetchShareManifest({ accessToken, folderId }) {
+  const fileId = await findManifestFileId(accessToken, folderId);
   if (!fileId) return null;
   const res = await fetch(
     `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,

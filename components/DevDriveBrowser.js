@@ -3,6 +3,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Spinner } from './Spinner.js';
 import { getOAuthToken } from '../utils/driveAuth.js';
 import { getDriveFolderId } from '../utils/driveFolderStorage.js';
+import { getDriveCredentials, hasGoogleApiKeyOrProxy } from '../utils/driveCredentials.js';
+import { fetchGoogleApisGet } from '../utils/googleApisFetch.js';
 
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
 const SUPPORTED_MIME_TYPES = [
@@ -12,7 +14,7 @@ const SUPPORTED_MIME_TYPES = [
   'application/json', // YouTube URL entries backed up from the app
 ];
 
-export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey }) => {
+export const DevDriveBrowser = ({ onFileSelect, onClose, clientId }) => {
   const [status, setStatus] = useState('Connecting...');
   const [error, setError] = useState(null);
   const [files, setFiles] = useState([]);
@@ -25,8 +27,8 @@ export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey }) => 
       const folderId = getDriveFolderId();
       const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
       const fields = encodeURIComponent('files(id,name,mimeType,size,modifiedTime)');
-      const res = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q=${query}&fields=${fields}&key=${apiKey}`,
+      const res = await fetchGoogleApisGet(
+        `/drive/v3/files?q=${query}&fields=${fields}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       if (!res.ok) {
@@ -40,11 +42,12 @@ export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey }) => 
     } catch (err) {
       setError(err.message);
     }
-  }, [apiKey]);
+  }, []);
 
   useEffect(() => {
-    if (!clientId || !apiKey) {
-      setError('Missing credentials. Set VITE_CLIENT_ID and VITE_API_KEY in your environment.');
+    const creds = getDriveCredentials();
+    if (!clientId || !hasGoogleApiKeyOrProxy(creds)) {
+      setError('Missing credentials. Set VITE_CLIENT_ID and VITE_API_KEY (or enable the Google API proxy).');
       return;
     }
     if (!getDriveFolderId().trim()) {
@@ -60,7 +63,7 @@ export const DevDriveBrowser = ({ onFileSelect, onClose, clientId, apiKey }) => 
       .catch((err) => {
         setError(`Auth failed: ${err.message}`);
       });
-  }, [clientId, apiKey, listFiles]);
+  }, [clientId, listFiles]);
 
   const handleDownload = async (file) => {
     setDownloading(file.id);

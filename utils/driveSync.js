@@ -1,4 +1,5 @@
 import { SHARE_MANIFEST_NAME } from './shareManifest.js';
+import { fetchGoogleApisGet } from './googleApisFetch.js';
 
 const CHANNEL_JSON_MARKER = 'infodepo-channel';
 
@@ -30,7 +31,6 @@ const ALL_SYNCABLE_MIME_TYPES = [...SUPPORTED_MIME_TYPES, ...IMAGE_MIME_TYPES];
  */
 export async function syncDriveToLocal({
   accessToken,
-  apiKey,
   folderId,
   books,
   getBookByDriveId,
@@ -51,8 +51,8 @@ export async function syncDriveToLocal({
   const listFolderContents = async (id) => {
     const q = encodeURIComponent(`'${id}' in parents and trashed = false`);
     const f = encodeURIComponent('files(id,name,mimeType,size,modifiedTime)');
-    const r = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=${q}&fields=${f}&key=${apiKey}`,
+    const r = await fetchGoogleApisGet(
+      `/drive/v3/files?q=${q}&fields=${f}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
     if (!r.ok) return [];
@@ -73,8 +73,8 @@ export async function syncDriveToLocal({
   progress('Listing Drive files...');
   const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
   const fields = encodeURIComponent('files(id,name,mimeType,size,modifiedTime)');
-  const res = await fetch(
-    `https://www.googleapis.com/drive/v3/files?q=${query}&fields=${fields}&key=${apiKey}`,
+  const res = await fetchGoogleApisGet(
+    `/drive/v3/files?q=${query}&fields=${fields}`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
   if (!res.ok) {
