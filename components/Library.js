@@ -30,6 +30,7 @@ import { deleteDriveFilesForMergedItem, deleteDriveFilesForChannel } from '../ut
 
 /** Ensures startup background sync runs once per page load (survives React Strict Mode remount). */
 let ownerBackgroundSyncScheduled = false;
+let receiverBackgroundSyncScheduled = false;
 
 const channelUploadKey = (ch) => `channel-${ch?.id}`;
 
@@ -58,6 +59,7 @@ export const Library = ({
   getShareByDriveFileId, upsertDriveShare,
   getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
   setRecordTags,
+  renameItem,
   getMergedLibraryItems,
   getSharesList,
   addShare,
@@ -761,6 +763,89 @@ export const Library = ({
     return () => clearTimeout(t);
   }, [hasCredentials, driveFolderId]);
 
+  useEffect(() => {
+    const receiverShares = (shares || []).filter((s) => s.role === 'receiver' && String(s.driveFileId || '').trim());
+    if (!receiverShares.length) return;
+    if (!credentials.clientId || !hasGoogleApiKeyOrProxy(credentials)) return;
+    if (receiverBackgroundSyncScheduled) return;
+
+    receiverBackgroundSyncScheduled = true;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      // Reuse the same lock so owner and receiver startup syncs do not overlap.
+      if (syncInFlightRef.current) return;
+      syncInFlightRef.current = true;
+      setIsSyncing(true);
+      setSyncResult(null);
+      setSyncProgress('Refreshing linked shares...');
+      try {
+        const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
+        let added = 0;
+        let updated = 0;
+        let skipped = 0;
+
+        for (const rec of receiverShares) {
+          if (cancelled) break;
+          const payload = await fetchSharesJsonByFileId(token, rec.driveFileId);
+          const explicitRefs = normalizeExplicitRefs(payload?.explicitRefs);
+          if (payload) {
+            await updateShare(rec.id, {
+              driveFileName: payload.driveFileName,
+              recipients: payload.recipients,
+              includeTags: payload.includeTags,
+              explicitRefs,
+              updatedAt: payload.updatedAt,
+            });
+          }
+          const driveIds = new Set(
+            (explicitRefs || []).map((r) => String(r.driveId || '').trim()).filter(Boolean)
+          );
+          if (!driveIds.size) continue;
+
+          setSyncProgress(`Downloading shared content for ${payload?.driveFileName || rec.driveFileName || 'share'}...`);
+          const result = await syncReceiverShareContent({
+            accessToken: token,
+            driveIds,
+            getBookByDriveId,
+            getBookByName,
+            upsertDriveBook,
+            getShareByDriveFileId,
+            upsertDriveShare,
+            getImageByDriveId,
+            getImageByName,
+            upsertDriveImage,
+            getNotes,
+            upsertDriveChannel,
+            onProgress: setSyncProgress,
+          });
+          added += result.added || 0;
+          updated += result.updated || 0;
+          skipped += result.skipped || 0;
+        }
+
+        if (!cancelled) {
+          setSyncResult({ added, updated, skipped, backed: 0, backupFailed: 0 });
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('[InfoDepo] receiver startup sync failed:', err);
+          setSyncResult({ error: `Receiver startup sync failed: ${err.message}` });
+        }
+      } finally {
+        syncInFlightRef.current = false;
+        if (!cancelled) {
+          setIsSyncing(false);
+          setSyncProgress('');
+        }
+      }
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [shares, credentials.clientId, updateShare]);
+
   const toggleFilter = (filter) => {
     setActiveFilters(prev => {
       const next = new Set(prev);
@@ -1387,6 +1472,7 @@ export const Library = ({
                   uploadStatus: uploadStatuses[libraryItemKey(video)] ?? null,
                   readOnly: false,
                   onSetTags: (v, tags) => setRecordTagsAndReapplyShares(v.id, v.idbStore, tags),
+                  onRename: (v, name) => renameItem(v.id, v.idbStore, name),
                   availableTags,
                 });
               }
@@ -1402,6 +1488,7 @@ export const Library = ({
                   uploadStatus: uploadStatuses[channelUploadKey(ch)] ?? null,
                   readOnly: false,
                   onSetTags: (c, tags) => setRecordTagsAndReapplyShares(c.id, 'channels', tags),
+                  onRename: (c, name) => renameItem(c.id, 'channels', name),
                   availableTags,
                 });
               }

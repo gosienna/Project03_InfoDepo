@@ -908,6 +908,30 @@ export const useIndexedDB = () => {
     });
   }, [db, loadItems, loadChannels]);
 
+  const renameItem = useCallback((id, storeName, nextName) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    const name = String(nextName || '').trim();
+    if (!name) return Promise.reject(new Error('Name cannot be empty'));
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(storeName, 'readwrite'); } catch (err) { reject(err); return; }
+      const os = tx.objectStore(storeName);
+      const getReq = os.get(id);
+      getReq.onsuccess = () => {
+        const existing = getReq.result;
+        if (!existing) { reject(new Error('Record not found')); return; }
+        const putReq = os.put({ ...existing, name, localModifiedAt: new Date() });
+        putReq.onsuccess = () => {
+          if (storeName === CHANNELS_STORE) loadChannels();
+          else if (storeName !== IMAGES_STORE) loadItems();
+          resolve();
+        };
+        putReq.onerror = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  }, [db, loadItems, loadChannels]);
+
   return {
     items, channels, shares, isInitialized,
     addItem, updateItem, deleteItem, clearAll,
@@ -919,6 +943,7 @@ export const useIndexedDB = () => {
     getBookByDriveId, getBookByName, upsertDriveBook,
     getShareById, getShareByDriveFileId, upsertDriveShare,
     setRecordTags,
+    renameItem,
     getMergedLibraryItems,
     loadShares,
     getSharesList,

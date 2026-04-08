@@ -108,21 +108,26 @@ Sync complete — 2 added, 1 updated, 5 unchanged
 ### Per-item upload
 Each card in the library has an upload button (↑). Clicking it:
 1. Acquires OAuth token with `drive.file` scope (cached per session)
-2. POSTs a multipart upload to `drive/v3/files?uploadType=multipart`
-3. On success: calls `setItemDriveId(id, idbStore, driveFileId)` to persist the Drive ID in IndexedDB
+2. Uploads as multipart:
+   - **POST** `drive/v3/files?uploadType=multipart` when `driveId` is empty (create new Drive file)
+   - **PATCH** `drive/v3/files/{driveId}?uploadType=multipart` when `driveId` exists (update same Drive file ID)
+3. On success: calls `setItemDriveId(id, idbStore, driveFileId, { modifiedTime })` to persist Drive ID and sync timestamps
 4. Card icon changes to green ✓
 
 ### Backup All
-The **"Backup All"** button (`backupAllToGDrive` in `utils/driveSync.js`) uploads every item where `driveId === ''`:
+The **Sync/Backup pipeline** (`backupAllToGDrive` in `utils/driveSync.js`) uploads every item that needs backup (new item or local changes newer than known Drive revision):
 
 ```
-For each item in (books + notes + videos) where driveId === '':
-  Upload blob to Drive → get back Drive file ID
-  Call setItemDriveId(id, idbStore, driveFileId)
+For each item in (books + notes + videos) where backup is needed:
+  if driveId exists:
+    PATCH existing Drive file
+  else:
+    POST new Drive file
+  Call setItemDriveId(id, idbStore, driveFileId, { modifiedTime })
 
-For each image record where driveId === '':
-  Upload image blob to Drive → get back Drive file ID
-  Call setItemDriveId(id, 'images', driveFileId)
+For markdown note assets:
+  POST new asset files for assets that do not yet have driveId
+  keep existing asset driveIds unchanged
 
 Return { backed: N, failed: M }
 ```

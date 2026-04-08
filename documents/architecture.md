@@ -27,7 +27,7 @@ App.js
 │   └── DevDriveBrowser.js  # Dev/prod: OAuth + Drive API folder browser
 ├── YoutubeChannelViewer.js # Sortable video grid for a channel; auto-refreshes new videos on mount
 └── Reader.js               # Dispatches to viewer by file extension / MIME type
-    ├── PdfViewer.js        # PDF via iframe + object URL
+    ├── PdfViewer.js        # PDF via pdf.js + SVG overlays; annotations saved with pdf-lib
     ├── TxtViewer.js        # Plain text via FileReader
     ├── MarkdownEditor.js   # Markdown editor with live preview and image assets
     ├── YoutubeViewer.js    # YouTube embed via youtube-nocookie.com iframe
@@ -75,7 +75,7 @@ Share (receiver)
 | `components/NewYoutubeModal.js` | Modal to save a YouTube URL as a `application/x-youtube` JSON blob |
 | `reader.html` | Standalone EPUB reader page, no React |
 | `utils/fileUtils.js` | File extension extraction, byte size formatting |
-| `utils/driveSync.js` | Drive sync engine — quota management, metadata-only stubs, shared content download |
+| `utils/driveSync.js` | Drive sync engine — owner backup (POST/PATCH), folder pull, shared content download |
 | `utils/sharesDriveJson.js` | Share config serialization/deserialization for Drive JSON |
 | `utils/sharesDriveFile.js` | Upload/fetch share JSON files to/from Google Drive |
 | `utils/driveSharePermissions.js` | Reconcile Drive ACLs from owner share records |
@@ -86,7 +86,7 @@ Share (receiver)
 | Extension | MIME type | Viewer | Notes |
 |-----------|-----------|--------|-------|
 | `.epub` | `application/epub+zip` | `reader.html` (new tab) | EPUB.js |
-| `.pdf` | `application/pdf` | `PdfViewer` | iframe + object URL |
+| `.pdf` | `application/pdf` | `PdfViewer` | pdf.js page rendering, highlight/text/line annotations, save via pdf-lib |
 | `.txt` | `text/plain` | `TxtViewer` | FileReader |
 | `.md` | `text/markdown` | `MarkdownEditor` | Live preview, slash commands, image assets |
 | `.youtube` | `application/x-youtube` | `YoutubeViewer` | JSON blob `{url, title}` — iframe embed |

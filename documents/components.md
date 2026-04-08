@@ -204,7 +204,7 @@ Shares are listed directly in the library grid as `DataTile` tiles (`tileType: '
 | `item` | `object` | `{ id, name, type, data, size, idbStore, tags?, ... }` |
 | `onSelect` | `function` | Opens the item |
 | `onDelete` | `function` | `(id, type) => void` — routed to the correct store |
-| `onUpload` | `function` | `(item) => void` — multipart upload to Drive folder |
+| `onUpload` | `function` | `(item) => void` — multipart upload to Drive (`POST` when no `driveId`, `PATCH` when `driveId` exists) |
 | `uploadStatus` | `null \| 'uploading' \| 'success' \| 'error'` | Drive upload state |
 | `onSetTags` | `function \| undefined` | `(item, tags) => void` — `setRecordTags(id, idbStore, tags)` |
 | `readOnly` | `boolean` | Hides upload, delete, tag editing (shared viewer) |
@@ -374,15 +374,19 @@ videoId absent  → YouTube logo + "Open in YouTube" link (channel/playlist fall
 ---
 
 ### `PdfViewer.js`
-**Role:** Renders a PDF Blob in an iframe.
+**Role:** Renders editable PDFs page-by-page with `pdf.js`, supports in-view annotations, and saves changes back to IndexedDB as a new PDF blob.
 
-**Props:** `data` (Blob)
+**Props:** `data` (Blob), `itemId`, `onUpdateItem`, `readOnly`
 
 **How it works:**
-```js
-objectUrl = URL.createObjectURL(data)  // memoized
-<iframe src={objectUrl} />             // browser's built-in PDF renderer
-```
+- Loads the PDF with `pdfjs-dist`, renders each page to canvas, and mounts an SVG overlay per page for annotation interaction.
+- Annotation tools (owner mode):
+  - **Highlight:** click-drag rectangle
+  - **Text:** click to place text editor, then save text with selected color and size
+  - **Line:** first click sets start, mouse move previews live line, second click commits end point
+- Overlay annotations are temporary until **Save** (or autosave interval) is triggered.
+- Save flow uses `pdf-lib` to draw annotations into the PDF bytes, then calls `onUpdateItem(itemId, newBlob, 'application/pdf')`.
+- `readOnly` disables annotation controls and editing interactions.
 
 ---
 

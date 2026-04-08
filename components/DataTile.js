@@ -79,6 +79,7 @@ export const DataTile = ({
   onUpload,
   uploadStatus,
   onSetTags,
+  onRename,
   readOnly,
   availableTags,
 }) => {
@@ -95,7 +96,11 @@ export const DataTile = ({
   const [thumbVideoId, setThumbVideoId] = useState(null);
   const [tagInput, setTagInput] = useState('');
   const [tagPickerMode, setTagPickerMode] = useState('select');
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+  const [isSavingName, setIsSavingName] = useState(false);
   const newTagInputRef = useRef(null);
+  const nameInputRef = useRef(null);
 
   const tags = Array.isArray(record?.tags) ? record.tags : [];
   const tagSuggestions = (availableTags || []).filter((t) => !tags.includes(t));
@@ -119,6 +124,9 @@ export const DataTile = ({
   useEffect(() => {
     setTagInput('');
     setTagPickerMode('select');
+    setIsEditingName(false);
+    setNameInput('');
+    setIsSavingName(false);
   }, [recordId, isChannel]);
 
   useEffect(() => {
@@ -126,6 +134,13 @@ export const DataTile = ({
       newTagInputRef.current.focus();
     }
   }, [tagPickerMode]);
+
+  useEffect(() => {
+    if (isEditingName && nameInputRef.current) {
+      nameInputRef.current.focus();
+      nameInputRef.current.select();
+    }
+  }, [isEditingName]);
 
   const tagSubject = () => record;
 
@@ -163,6 +178,43 @@ export const DataTile = ({
     e.stopPropagation();
     if (!onSetTags) return;
     onSetTags(tagSubject(), tags.filter((x) => x !== tag));
+  };
+
+  const renameTarget = isChannel ? ch : video;
+
+  const beginRename = (e) => {
+    e.stopPropagation();
+    if (readOnly || isShare || !onRename || !renameTarget) return;
+    setNameInput(renameTarget.name || '');
+    setIsEditingName(true);
+  };
+
+  const cancelRename = (e) => {
+    e?.stopPropagation?.();
+    setIsEditingName(false);
+    setNameInput('');
+    setIsSavingName(false);
+  };
+
+  const commitRename = async (e) => {
+    e?.stopPropagation?.();
+    if (!onRename || !renameTarget || isSavingName) return;
+    const trimmed = String(nameInput || '').trim();
+    if (!trimmed) return;
+    if (trimmed === String(renameTarget.name || '').trim()) {
+      setIsEditingName(false);
+      return;
+    }
+    setIsSavingName(true);
+    try {
+      await onRename(renameTarget, trimmed);
+      setIsEditingName(false);
+      setNameInput('');
+    } catch (err) {
+      window.alert(err?.message || 'Could not rename item.');
+    } finally {
+      setIsSavingName(false);
+    }
   };
 
   const idPrefix = isChannel ? `ch-${recordId}` : isShare ? `share-${recordId}` : `item-${recordId}`;
@@ -424,7 +476,79 @@ export const DataTile = ({
       React.createElement(
         'div',
         { className: 'p-4' },
-        React.createElement('h3', { className: 'font-bold text-md text-gray-100 truncate', title: ch.name }, ch.name),
+        React.createElement(
+          'div',
+          { className: 'flex items-start gap-2', onClick: (e) => e.stopPropagation() },
+          isEditingName
+            ? React.createElement('input', {
+                ref: nameInputRef,
+                type: 'text',
+                value: nameInput,
+                onChange: (e) => setNameInput(e.target.value),
+                onClick: (e) => e.stopPropagation(),
+                onKeyDown: (e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitRename(e);
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelRename(e);
+                  }
+                },
+                className:
+                  'flex-1 min-w-0 bg-gray-900 border border-indigo-600/60 rounded px-2 py-1 text-sm text-gray-100 placeholder-gray-500',
+                placeholder: 'Enter channel name',
+                'aria-label': 'Rename channel',
+                disabled: isSavingName,
+              })
+            : React.createElement('h3', { className: 'font-bold text-md text-gray-100 truncate flex-1 min-w-0', title: ch.name }, ch.name),
+          !readOnly &&
+            onRename &&
+            React.createElement(
+              'div',
+              { className: 'shrink-0 flex items-center gap-1' },
+              isEditingName
+                ? React.createElement(
+                    React.Fragment,
+                    null,
+                    React.createElement(
+                      'button',
+                      {
+                        type: 'button',
+                        onClick: commitRename,
+                        disabled: isSavingName || !String(nameInput || '').trim(),
+                        className:
+                          'text-xs px-2 py-1 rounded bg-indigo-600/80 text-white hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed',
+                        title: 'Save name',
+                      },
+                      isSavingName ? 'Saving…' : 'Save'
+                    ),
+                    React.createElement(
+                      'button',
+                      {
+                        type: 'button',
+                        onClick: cancelRename,
+                        disabled: isSavingName,
+                        className: 'text-xs px-2 py-1 rounded bg-gray-700 text-gray-200 hover:bg-gray-600',
+                        title: 'Cancel rename',
+                      },
+                      'Cancel'
+                    )
+                  )
+                : React.createElement(
+                    'button',
+                    {
+                      type: 'button',
+                      onClick: beginRename,
+                      className:
+                        'text-xs px-2 py-1 rounded bg-gray-700/80 text-gray-200 hover:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity',
+                      title: 'Rename channel',
+                    },
+                    'Rename'
+                  )
+            )
+        ),
         React.createElement(
           'p',
           { className: 'text-sm text-gray-400' },
@@ -512,9 +636,81 @@ export const DataTile = ({
       'div',
       { className: 'p-4' },
       React.createElement(
-        'h3',
-        { className: 'font-bold text-md text-gray-100 truncate', title: video.name },
-        isYoutube ? video.name.replace(/\.youtube$/i, '') : video.name
+        'div',
+        { className: 'flex items-start gap-2', onClick: (e) => e.stopPropagation() },
+        isEditingName
+          ? React.createElement('input', {
+              ref: nameInputRef,
+              type: 'text',
+              value: nameInput,
+              onChange: (e) => setNameInput(e.target.value),
+              onClick: (e) => e.stopPropagation(),
+              onKeyDown: (e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitRename(e);
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  cancelRename(e);
+                }
+              },
+              className:
+                'flex-1 min-w-0 bg-gray-900 border border-indigo-600/60 rounded px-2 py-1 text-sm text-gray-100 placeholder-gray-500',
+              placeholder: 'Enter item name',
+              'aria-label': 'Rename item',
+              disabled: isSavingName,
+            })
+          : React.createElement(
+              'h3',
+              { className: 'font-bold text-md text-gray-100 truncate flex-1 min-w-0', title: video.name },
+              isYoutube ? video.name.replace(/\.youtube$/i, '') : video.name
+            ),
+        !readOnly &&
+          onRename &&
+          React.createElement(
+            'div',
+            { className: 'shrink-0 flex items-center gap-1' },
+            isEditingName
+              ? React.createElement(
+                  React.Fragment,
+                  null,
+                  React.createElement(
+                    'button',
+                    {
+                      type: 'button',
+                      onClick: commitRename,
+                      disabled: isSavingName || !String(nameInput || '').trim(),
+                      className:
+                        'text-xs px-2 py-1 rounded bg-indigo-600/80 text-white hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed',
+                      title: 'Save name',
+                    },
+                    isSavingName ? 'Saving…' : 'Save'
+                  ),
+                  React.createElement(
+                    'button',
+                    {
+                      type: 'button',
+                      onClick: cancelRename,
+                      disabled: isSavingName,
+                      className: 'text-xs px-2 py-1 rounded bg-gray-700 text-gray-200 hover:bg-gray-600',
+                      title: 'Cancel rename',
+                    },
+                    'Cancel'
+                  )
+                )
+              : React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    onClick: beginRename,
+                    className:
+                      'text-xs px-2 py-1 rounded bg-gray-700/80 text-gray-200 hover:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity',
+                    title: 'Rename item',
+                  },
+                  'Rename'
+                )
+          )
       ),
       isYoutube && video._channelVideo
         ? React.createElement(
