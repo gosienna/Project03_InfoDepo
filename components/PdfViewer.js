@@ -42,11 +42,6 @@ function isExpectedPdfCancellation(err) {
   );
 }
 
-function debugPdf(...args) {
-  if (!import.meta.env.DEV) return;
-  console.debug('[PdfViewer]', ...args);
-}
-
 export const PdfViewer = ({
   data,
   itemId,
@@ -284,17 +279,9 @@ export const PdfViewer = ({
     if (!mount) return;
     useWindowScrollRef.current = !(mount.scrollHeight > mount.clientHeight + 2);
     const savedPage = Number(initialReadingPosition?.pdfPage);
-    debugPdf('restore-check', {
-      itemId,
-      status,
-      wrappers: pageWrappers.length,
-      savedPage,
-      savedScrollTop: initialReadingPosition?.pdfScrollTop,
-    });
     if (Number.isInteger(savedPage) && savedPage > 0) {
       if (!pageWrappers.length || savedPage > pageWrappers.length) {
         // Wait until page wrappers are available before attempting restore.
-        debugPdf('restore-waiting-for-wrappers', { savedPage, wrappers: pageWrappers.length });
         return;
       }
       const wrapper = pageWrappers[savedPage - 1];
@@ -303,12 +290,6 @@ export const PdfViewer = ({
         requestAnimationFrame(() => {
           jumpToWrapper(wrapper, mount);
           didRestoreScrollRef.current = true;
-          debugPdf('restore-by-page-success', {
-            savedPage,
-            useWindowScroll: useWindowScrollRef.current,
-            windowY: window.scrollY,
-            mountScrollTop: mount.scrollTop,
-          });
         });
         return;
       }
@@ -320,14 +301,12 @@ export const PdfViewer = ({
       requestAnimationFrame(() => {
         mount.scrollTop = savedScrollTop;
         didRestoreScrollRef.current = true;
-        debugPdf('restore-by-scroll-success', { savedScrollTop, actualScrollTop: mount.scrollTop });
       });
       return;
     }
 
     if (!pageWrappers.length) return;
     didRestoreScrollRef.current = true;
-    debugPdf('restore-no-saved-position');
   }, [status, initialReadingPosition, itemId, pageWrappers]);
 
   useEffect(() => {
@@ -380,7 +359,6 @@ export const PdfViewer = ({
       // Important: avoid overwriting a previously saved page (often page 1)
       // before restore jump has completed.
       if (!didRestoreScrollRef.current && lastUserScrollAtRef.current === 0) {
-        debugPdf('save-skipped-before-restore');
         return;
       }
       useWindowScrollRef.current = !(mount.scrollHeight > mount.clientHeight + 2);
@@ -402,11 +380,6 @@ export const PdfViewer = ({
         lastKnownPageRef.current > 1 &&
         scrollTop <= 50
       ) {
-        debugPdf('save-skipped-regression-to-page-1', {
-          currentPage,
-          lastKnownPage: lastKnownPageRef.current,
-          scrollTop,
-        });
         return;
       }
 
@@ -419,10 +392,7 @@ export const PdfViewer = ({
         // Keep for backward compatibility; may be 0 in some layouts.
         pdfScrollTop: scrollTop,
       };
-      debugPdf('save-reading-position', { itemId, storeName, payload });
-      onSaveReadingPosition(itemId, storeName, payload)
-        .then(() => debugPdf('save-reading-position-success', { itemId }))
-        .catch((err) => debugPdf('save-reading-position-failed', { itemId, err }));
+      onSaveReadingPosition(itemId, storeName, payload).catch(() => {});
     };
 
     const onScroll = () => {
@@ -431,9 +401,7 @@ export const PdfViewer = ({
       // explicit navigation and allow position saves.
       if (!didRestoreScrollRef.current) {
         didRestoreScrollRef.current = true;
-        debugPdf('restore-marked-by-user-scroll');
       }
-      debugPdf('scroll-event', { scrollTop: getScrollTop(), useWindowScroll: useWindowScrollRef.current });
       if (saveScrollDebounceRef.current) clearTimeout(saveScrollDebounceRef.current);
       saveScrollDebounceRef.current = setTimeout(saveNow, 300);
     };
