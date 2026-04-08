@@ -30,13 +30,44 @@ async function renderPageToCanvas(page, containerWidth) {
   return canvas;
 }
 
-export const PdfViewer = ({ data, itemId, onUpdateItem, readOnly }) => {
+function isExpectedPdfCancellation(err) {
+  const name = String(err?.name || '');
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    name === 'RenderingCancelledException' ||
+    name === 'AbortException' ||
+    msg.includes('rendering cancelled') ||
+    msg.includes('rendering canceled') ||
+    msg.includes('abort')
+  );
+}
+
+function debugPdf(...args) {
+  if (!import.meta.env.DEV) return;
+  console.debug('[PdfViewer]', ...args);
+}
+
+export const PdfViewer = ({
+  data,
+  itemId,
+  initialReadingPosition,
+  onUpdateItem,
+  onSaveReadingPosition,
+  storeName,
+  readOnly,
+}) => {
   const containerRef = useRef(null);
   const loadingTaskRef = useRef(null);
   const pdfDocRef = useRef(null);
   const [status, setStatus] = useState('loading');
   const [errorText, setErrorText] = useState('');
   const runIdRef = useRef(0);
+  const didRestoreScrollRef = useRef(false);
+  const lastSavedPositionKeyRef = useRef(null);
+  const saveScrollDebounceRef = useRef(null);
+  const useWindowScrollRef = useRef(false);
+  const lastKnownPageRef = useRef(1);
+  const lastUserScrollAtRef = useRef(0);
 
   // pageWrappers holds DOM nodes (position:relative divs) created during PDF render.
   // We use React state so portals re-render when pages change.
@@ -109,6 +140,24 @@ export const PdfViewer = ({ data, itemId, onUpdateItem, readOnly }) => {
     return () => { panel.removeEventListener('mouseenter', open); panel.removeEventListener('mouseleave', close); };
   }, [panelOpen]); // re-register when panel mounts/unmounts
   const autoSaveMsgTimerRef = useRef(null);
+
+  const jumpToWrapper = (wrapper, mount) => {
+    if (!wrapper || !mount) return;
+    if (useWindowScrollRef.current) {
+      const headerOffset = 88;
+      const targetTop = Math.max(0, Math.round(wrapper.getBoundingClientRect().top + window.scrollY - headerOffset));
+      window.scrollTo({ top: targetTop, behavior: 'auto' });
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: targetTop, behavior: 'auto' });
+      });
+      return;
+    }
+    const targetTop = Math.max(0, wrapper.offsetTop - 8);
+    mount.scrollTop = targetTop;
+    requestAnimationFrame(() => {
+      mount.scrollTop = targetTop;
+    });
+  };
 
   // PDF rendering effect
   useEffect(() => {
@@ -187,6 +236,9 @@ export const PdfViewer = ({ data, itemId, onUpdateItem, readOnly }) => {
           pageWrapper.appendChild(canvas);
           wrap.appendChild(pageWrapper);
           newWrappers.push(pageWrapper);
+          // Publish wrappers incrementally so page tracking/restore can work
+          // before the full document finishes rendering.
+          setPageWrappers((prev) => [...prev, pageWrapper]);
 
           if (i === 1) setStatus('ready');
 
@@ -198,6 +250,10 @@ export const PdfViewer = ({ data, itemId, onUpdateItem, readOnly }) => {
         setPageWrappers([...newWrappers]);
         setStatus('ready');
       } catch (err) {
+        if (isExpectedPdfCancellation(err) || cancelled || runId !== runIdRef.current) {
+          cleanupPdf();
+          return;
+        }
         console.error('PDF load error:', err);
         if (!cancelled && runId === runIdRef.current) {
           setStatus('error');
@@ -214,6 +270,203 @@ export const PdfViewer = ({ data, itemId, onUpdateItem, readOnly }) => {
       if (loadingTaskRef.current) { loadingTaskRef.current.destroy(); loadingTaskRef.current = null; }
     };
   }, [data]);
+
+  useEffect(() => {
+    didRestoreScrollRef.current = false;
+    lastSavedPositionKeyRef.current = null;
+    lastKnownPageRef.current = Number(initialReadingPosition?.pdfPage) || 1;
+    lastUserScrollAtRef.current = 0;
+  }, [data, itemId]);
+
+  useEffect(() => {
+    if (status !== 'ready' || didRestoreScrollRef.current) return;
+    const mount = containerRef.current;
+    if (!mount) return;
+    useWindowScrollRef.current = !(mount.scrollHeight > mount.clientHeight + 2);
+    const savedPage = Number(initialReadingPosition?.pdfPage);
+    debugPdf('restore-check', {
+      itemId,
+      status,
+      wrappers: pageWrappers.length,
+      savedPage,
+      savedScrollTop: initialReadingPosition?.pdfScrollTop,
+    });
+    if (Number.isInteger(savedPage) && savedPage > 0) {
+      if (!pageWrappers.length || savedPage > pageWrappers.length) {
+        // Wait until page wrappers are available before attempting restore.
+        debugPdf('restore-waiting-for-wrappers', { savedPage, wrappers: pageWrappers.length });
+        return;
+      }
+      const wrapper = pageWrappers[savedPage - 1];
+      if (wrapper) {
+        jumpToWrapper(wrapper, mount);
+        requestAnimationFrame(() => {
+          jumpToWrapper(wrapper, mount);
+          didRestoreScrollRef.current = true;
+          debugPdf('restore-by-page-success', {
+            savedPage,
+            useWindowScroll: useWindowScrollRef.current,
+            windowY: window.scrollY,
+            mountScrollTop: mount.scrollTop,
+          });
+        });
+        return;
+      }
+    }
+
+    const savedScrollTop = Number(initialReadingPosition?.pdfScrollTop);
+    if (Number.isFinite(savedScrollTop) && savedScrollTop >= 0) {
+      mount.scrollTop = savedScrollTop;
+      requestAnimationFrame(() => {
+        mount.scrollTop = savedScrollTop;
+        didRestoreScrollRef.current = true;
+        debugPdf('restore-by-scroll-success', { savedScrollTop, actualScrollTop: mount.scrollTop });
+      });
+      return;
+    }
+
+    if (!pageWrappers.length) return;
+    didRestoreScrollRef.current = true;
+    debugPdf('restore-no-saved-position');
+  }, [status, initialReadingPosition, itemId, pageWrappers]);
+
+  useEffect(() => {
+    if (!onSaveReadingPosition || !storeName || !itemId) return undefined;
+    const mount = containerRef.current;
+    if (!mount) return undefined;
+    let pollId = null;
+    const getScrollTop = () => (useWindowScrollRef.current ? window.scrollY : mount.scrollTop);
+
+    const getCurrentPage = () => {
+      if (!pageWrappers.length) return null;
+      if (useWindowScrollRef.current) {
+        const headerOffset = 88;
+        const readLine = window.scrollY + headerOffset + Math.max(120, (window.innerHeight - headerOffset) * 0.35);
+        let bestIndex = 0;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < pageWrappers.length; i++) {
+          const wrapper = pageWrappers[i];
+          const r = wrapper.getBoundingClientRect();
+          const top = r.top + window.scrollY;
+          const bottom = top + Math.max(1, r.height);
+          if (readLine >= top && readLine <= bottom) return i + 1;
+          const dist = readLine < top ? (top - readLine) : (readLine - bottom);
+          if (dist < bestDistance) {
+            bestDistance = dist;
+            bestIndex = i;
+          }
+        }
+        return bestIndex + 1;
+      }
+
+      const readLine = mount.scrollTop + Math.max(80, mount.clientHeight * 0.35);
+      let bestIndex = 0;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < pageWrappers.length; i++) {
+        const wrapper = pageWrappers[i];
+        const top = wrapper.offsetTop;
+        const bottom = top + Math.max(1, wrapper.clientHeight);
+        if (readLine >= top && readLine <= bottom) return i + 1;
+        const dist = readLine < top ? (top - readLine) : (readLine - bottom);
+        if (dist < bestDistance) {
+          bestDistance = dist;
+          bestIndex = i;
+        }
+      }
+      return bestIndex + 1;
+    };
+
+    const saveNow = () => {
+      // Important: avoid overwriting a previously saved page (often page 1)
+      // before restore jump has completed.
+      if (!didRestoreScrollRef.current && lastUserScrollAtRef.current === 0) {
+        debugPdf('save-skipped-before-restore');
+        return;
+      }
+      useWindowScrollRef.current = !(mount.scrollHeight > mount.clientHeight + 2);
+      const scrollTop = Math.max(0, Math.round(getScrollTop()));
+      const detectedPage = getCurrentPage();
+      const currentPage = Number.isInteger(detectedPage) && detectedPage > 0
+        ? detectedPage
+        : lastKnownPageRef.current;
+      if (Number.isInteger(currentPage) && currentPage > 0) {
+        lastKnownPageRef.current = currentPage;
+      }
+
+      // Avoid clobbering a valid saved page with page 1 during teardown/navigation
+      // when layout snaps back to top without user scrolling.
+      const recentUserScroll = Date.now() - lastUserScrollAtRef.current < 1500;
+      if (
+        !recentUserScroll &&
+        currentPage === 1 &&
+        lastKnownPageRef.current > 1 &&
+        scrollTop <= 50
+      ) {
+        debugPdf('save-skipped-regression-to-page-1', {
+          currentPage,
+          lastKnownPage: lastKnownPageRef.current,
+          scrollTop,
+        });
+        return;
+      }
+
+      const key = `${currentPage ?? ''}:${scrollTop}`;
+      if (lastSavedPositionKeyRef.current === key) return;
+      lastSavedPositionKeyRef.current = key;
+      const payload = {
+        kind: 'pdf',
+        ...(currentPage ? { pdfPage: currentPage } : {}),
+        // Keep for backward compatibility; may be 0 in some layouts.
+        pdfScrollTop: scrollTop,
+      };
+      debugPdf('save-reading-position', { itemId, storeName, payload });
+      onSaveReadingPosition(itemId, storeName, payload)
+        .then(() => debugPdf('save-reading-position-success', { itemId }))
+        .catch((err) => debugPdf('save-reading-position-failed', { itemId, err }));
+    };
+
+    const onScroll = () => {
+      lastUserScrollAtRef.current = Date.now();
+      // If user actively scrolls before our restore flow finishes, treat that as
+      // explicit navigation and allow position saves.
+      if (!didRestoreScrollRef.current) {
+        didRestoreScrollRef.current = true;
+        debugPdf('restore-marked-by-user-scroll');
+      }
+      debugPdf('scroll-event', { scrollTop: getScrollTop(), useWindowScroll: useWindowScrollRef.current });
+      if (saveScrollDebounceRef.current) clearTimeout(saveScrollDebounceRef.current);
+      saveScrollDebounceRef.current = setTimeout(saveNow, 300);
+    };
+    const onPageHide = () => saveNow();
+
+    useWindowScrollRef.current = !(mount.scrollHeight > mount.clientHeight + 2);
+    const scrollTarget = useWindowScrollRef.current ? window : mount;
+    scrollTarget.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', onPageHide);
+
+    // Fallback polling keeps position synced even if some environments
+    // suppress/merge scroll events during kinetic scrolling.
+    pollId = window.setInterval(saveNow, 1200);
+
+    // Persist once right after restore becomes active for this mount.
+    const postRestoreSaveTimer = window.setTimeout(() => saveNow(), 400);
+
+    return () => {
+      scrollTarget.removeEventListener('scroll', onScroll);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', onPageHide);
+      if (pollId) {
+        clearInterval(pollId);
+        pollId = null;
+      }
+      if (saveScrollDebounceRef.current) {
+        clearTimeout(saveScrollDebounceRef.current);
+        saveScrollDebounceRef.current = null;
+      }
+      clearTimeout(postRestoreSaveTimer);
+    };
+  }, [itemId, onSaveReadingPosition, storeName, pageWrappers]);
 
   // Auto-save every 60 seconds
   useEffect(() => {

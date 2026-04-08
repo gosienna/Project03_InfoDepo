@@ -202,7 +202,7 @@ function registerIframeEdgeNavigation(rendition) {
   });
 }
 
-export const EpubViewer = ({ data }) => {
+export const EpubViewer = ({ data, itemId, initialReadingPosition, onSaveReadingPosition, storeName }) => {
   const viewerRef = useRef(null);
   const renditionRef = useRef(null);
   const bookRef = useRef(null);
@@ -229,8 +229,17 @@ export const EpubViewer = ({ data }) => {
           registerInternalLinkInterception(rendition);
           registerIframeEdgeNavigation(rendition);
 
-          rendition.display().then(() => {
+          const savedLocation = typeof initialReadingPosition?.epubCfi === 'string'
+            ? initialReadingPosition.epubCfi
+            : undefined;
+          rendition.display(savedLocation || undefined).then(() => {
             setIsLoading(false);
+          });
+
+          rendition.on('relocated', (location) => {
+            const cfi = location?.start?.cfi;
+            if (!cfi || !onSaveReadingPosition || !itemId || !storeName) return;
+            onSaveReadingPosition(itemId, storeName, { kind: 'epub', epubCfi: cfi }).catch(() => {});
           });
         })
         .catch((err) => {
@@ -244,7 +253,7 @@ export const EpubViewer = ({ data }) => {
         }
       };
     }
-  }, [data]);
+  }, [data, initialReadingPosition, itemId, onSaveReadingPosition, storeName]);
 
   const goToNextPage = () => {
     if (renditionRef.current) {

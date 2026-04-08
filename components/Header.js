@@ -5,7 +5,7 @@ import { BookIcon } from './icons/BookIcon.js';
 export const Header = ({ onBack, userEmail }) => {
   return React.createElement(
     "header",
-    { className: "relative z-[100] bg-gray-800 shadow-xl p-4 flex items-center justify-between gap-4 border-b border-gray-700/50" },
+    { className: "sticky top-0 z-[100] bg-gray-800 shadow-xl p-4 flex items-center justify-between gap-4 border-b border-gray-700/50" },
     React.createElement(
       "div",
       { className: "flex items-center min-w-0 flex-1" },

@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import ePub from 'epubjs';
 import { formatBytes, getFileExtension } from '../utils/fileUtils.js';
 import { BookIcon } from './icons/BookIcon.js';
 import { TrashIcon } from './icons/TrashIcon.js';
@@ -197,32 +196,11 @@ export const DataTile = ({
   }, [isPdfBook, video?.id, video?.data, video?.size]);
 
   useEffect(() => {
-    let cancelled = false;
-    let book = null;
-    let coverUrl = null;
     if (!isEpubBook || !video?.data) return () => {};
-    (async () => {
-      try {
-        const buffer = await video.data.arrayBuffer();
-        if (cancelled) return;
-        book = ePub(buffer);
-        coverUrl = await book.coverUrl();
-        if (!cancelled && coverUrl) {
-          setBookFirstPageThumb(coverUrl);
-        }
-      } catch {
-        if (!cancelled) setBookFirstPageThumb(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (book) {
-        try { book.destroy(); } catch {}
-      }
-      if (coverUrl && coverUrl.startsWith('blob:')) {
-        try { URL.revokeObjectURL(coverUrl); } catch {}
-      }
-    };
+    // Avoid epubjs runtime crashes in tile preview generation.
+    // Reader view still fully supports EPUB; tile falls back to generic thumbnail.
+    setBookFirstPageThumb(null);
+    return () => {};
   }, [isEpubBook, video?.id, video?.data, video?.size]);
 
   useEffect(() => {

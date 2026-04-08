@@ -16,7 +16,7 @@ const MIME_TO_EXT = {
   'application/x-youtube': 'youtube',
 };
 
-export const Reader = ({ video, onUpdateItem, onAddImage, onGetImages, readOnly }) => {
+export const Reader = ({ video, onUpdateItem, onSaveReadingPosition, onAddImage, onGetImages, readOnly }) => {
   const fileExtension = useMemo(() => {
     const ext = getFileExtension(video.name);
     return ext || MIME_TO_EXT[video.type] || '';
@@ -25,11 +25,31 @@ export const Reader = ({ video, onUpdateItem, onAddImage, onGetImages, readOnly 
   const renderContent = () => {
     switch (fileExtension) {
       case 'epub':
-        return React.createElement(EpubViewer, { data: video.data });
+        return React.createElement(EpubViewer, {
+          data: video.data,
+          itemId: video.id,
+          initialReadingPosition: video.readingPosition,
+          onSaveReadingPosition,
+          storeName: video.idbStore,
+        });
       case 'pdf':
-        return React.createElement(PdfViewer, { data: video.data, itemId: video.id, onUpdateItem, readOnly });
+        return React.createElement(PdfViewer, {
+          data: video.data,
+          itemId: video.id,
+          initialReadingPosition: video.readingPosition,
+          onUpdateItem,
+          onSaveReadingPosition,
+          storeName: video.idbStore,
+          readOnly,
+        });
       case 'txt':
-        return React.createElement(TxtViewer, { data: video.data });
+        return React.createElement(TxtViewer, {
+          data: video.data,
+          itemId: video.id,
+          initialReadingPosition: video.readingPosition,
+          onSaveReadingPosition,
+          storeName: video.idbStore,
+        });
       case 'md':
         return React.createElement(MarkdownEditor, { video, onUpdateItem, onAddImage, onGetImages, readOnly });
       case 'youtube':

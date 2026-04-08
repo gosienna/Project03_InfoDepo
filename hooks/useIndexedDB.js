@@ -955,6 +955,55 @@ export const useIndexedDB = () => {
     });
   }, [db, loadItems, loadChannels]);
 
+  const setItemReadingPosition = useCallback((id, storeName, readingPosition) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    if (!id) return Promise.reject(new Error('Record id is required'));
+
+    const candidates = [
+      storeName,
+      BOOKS_STORE,
+      NOTES_STORE,
+      VIDEOS_STORE,
+    ].filter((s, idx, arr) => s && arr.indexOf(s) === idx);
+
+    const tryStore = (index) =>
+      new Promise((resolve, reject) => {
+        if (index >= candidates.length) {
+          reject(new Error('Record not found in candidate stores'));
+          return;
+        }
+        const targetStore = candidates[index];
+        let tx;
+        try { tx = db.transaction(targetStore, 'readwrite'); } catch (err) { reject(err); return; }
+        const os = tx.objectStore(targetStore);
+        const getReq = os.get(id);
+        getReq.onsuccess = () => {
+          const existing = getReq.result;
+          if (!existing) {
+            tryStore(index + 1).then(resolve).catch(reject);
+            return;
+          }
+          const putReq = os.put({ ...existing, readingPosition });
+          putReq.onsuccess = () => {
+            if (targetStore === CHANNELS_STORE) {
+              setChannels((prev) =>
+                prev.map((rec) => (rec.id === id ? { ...rec, readingPosition } : rec))
+              );
+            } else if (targetStore !== IMAGES_STORE) {
+              setItems((prev) =>
+                prev.map((rec) => (rec.id === id ? { ...rec, readingPosition } : rec))
+              );
+            }
+            resolve();
+          };
+          putReq.onerror = () => reject(putReq.error);
+        };
+        getReq.onerror = () => reject(getReq.error);
+      });
+
+    return tryStore(0);
+  }, [db]);
+
   return {
     items, channels, shares, isInitialized,
     addItem, updateItem, deleteItem, clearAll,
@@ -967,6 +1016,7 @@ export const useIndexedDB = () => {
     getShareById, getShareByDriveFileId, upsertDriveShare,
     setRecordTags,
     renameItem,
+    setItemReadingPosition,
     getMergedLibraryItems,
     loadShares,
     getSharesList,

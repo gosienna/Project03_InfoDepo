@@ -67,6 +67,8 @@
     let currentIndex = 0;
     const blobCache = {};
     let shadowRoot = null;
+    let dbRef = null;
+    let lastSavedChapterIndex = null;
 
     function setLoading(msg) {
       document.getElementById('loading-msg').textContent = msg;
@@ -86,6 +88,26 @@
     }
     function nextPage() {
       if (currentIndex < spine.length - 1) renderChapter(++currentIndex);
+    }
+
+    function saveReadingPosition(chapterIndex) {
+      if (!dbRef || !bookId || !Number.isInteger(chapterIndex)) return;
+      if (lastSavedChapterIndex === chapterIndex) return;
+      lastSavedChapterIndex = chapterIndex;
+      const tx = dbRef.transaction(BOOKS_STORE, 'readwrite');
+      const os = tx.objectStore(BOOKS_STORE);
+      const req = os.get(bookId);
+      req.onsuccess = (e) => {
+        const existing = e.target.result;
+        if (!existing) return;
+        os.put({
+          ...existing,
+          readingPosition: {
+            kind: 'epub-chapter',
+            chapterIndex,
+          },
+        });
+      };
     }
 
     function normalizeZipPath(p) {
@@ -326,6 +348,7 @@
       document.getElementById('btn-next').disabled = index === spine.length - 1;
       document.getElementById('edge-prev').disabled = index === 0;
       document.getElementById('edge-next').disabled = index === spine.length - 1;
+      saveReadingPosition(index);
     }
 
     const bookId = parseInt(new URLSearchParams(location.search).get('id'));
@@ -343,6 +366,7 @@
         req.onerror = e => reject(e.target.error);
       }).catch(err => { showError(`DB error: ${err.message}`); return null; });
       if (!db) return;
+      dbRef = db;
 
       setLoading('Loading book data...');
       const book = await new Promise((resolve, reject) => {
@@ -395,8 +419,12 @@
           document.getElementById('book-title').textContent = titleEl.textContent;
         }
 
-        currentIndex = 0;
-        await renderChapter(0);
+        const savedChapterIndex = Number(book.readingPosition?.chapterIndex);
+        currentIndex =
+          Number.isInteger(savedChapterIndex) && savedChapterIndex >= 0 && savedChapterIndex < spine.length
+            ? savedChapterIndex
+            : 0;
+        await renderChapter(currentIndex);
         hideLoading();
 
       } catch (err) {
