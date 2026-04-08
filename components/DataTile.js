@@ -1,5 +1,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import ePub from 'epubjs';
 import { formatBytes, getFileExtension } from '../utils/fileUtils.js';
 import { BookIcon } from './icons/BookIcon.js';
 import { TrashIcon } from './icons/TrashIcon.js';
@@ -9,6 +12,8 @@ import { normalizeTag } from '../utils/tagUtils.js';
 const YT_VIDEO_ID_RE = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
 
 const NEW_TAG_OPTION = '__infodepo_new_tag__';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 function formatViewCount(n) {
   const x = typeof n === 'number' && !Number.isNaN(n) ? n : 0;
@@ -93,8 +98,16 @@ export const DataTile = ({
 
   const fileExtension = !isChannel && video?.name ? getFileExtension(video.name) : '';
   const isYoutube = !isChannel && video?.type === 'application/x-youtube';
+  const isBookTile = !isChannel && !isShare && video?.idbStore === 'books';
+  const isPdfBook =
+    isBookTile &&
+    (video?.type === 'application/pdf' || (typeof video?.name === 'string' && /\.pdf$/i.test(video.name)));
+  const isEpubBook =
+    isBookTile &&
+    (video?.type === 'application/epub+zip' || (typeof video?.name === 'string' && /\.epub$/i.test(video.name)));
   const [thumbVideoId, setThumbVideoId] = useState(null);
   const [featuredChannelVideoId, setFeaturedChannelVideoId] = useState(null);
+  const [bookFirstPageThumb, setBookFirstPageThumb] = useState(null);
   const [tagInput, setTagInput] = useState('');
   const [tagPickerMode, setTagPickerMode] = useState('select');
   const [isEditingName, setIsEditingName] = useState(false);
@@ -135,6 +148,82 @@ export const DataTile = ({
     const idx = Math.floor(Math.random() * vids.length);
     setFeaturedChannelVideoId(vids[idx].videoId);
   }, [isChannel, ch?.id, ch?.videos?.length]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let loadingTask = null;
+    if (!isPdfBook || !video?.data) {
+      setBookFirstPageThumb(null);
+      return () => {};
+    }
+    (async () => {
+      try {
+        const buffer = await video.data.arrayBuffer();
+        if (cancelled) return;
+        loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
+        const pdfDoc = await loadingTask.promise;
+        if (cancelled) {
+          try { await pdfDoc.destroy(); } catch {}
+          return;
+        }
+        const firstPage = await pdfDoc.getPage(1);
+        const base = firstPage.getViewport({ scale: 1 });
+        const targetWidth = 260;
+        const scale = targetWidth / Math.max(1, base.width);
+        const viewport = firstPage.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.floor(viewport.width));
+        canvas.height = Math.max(1, Math.floor(viewport.height));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas context unavailable');
+        await firstPage.render({ canvasContext: ctx, viewport }).promise;
+        if (cancelled) return;
+        setBookFirstPageThumb(canvas.toDataURL('image/jpeg', 0.9));
+        try { await pdfDoc.destroy(); } catch {}
+      } catch {
+        if (!cancelled) setBookFirstPageThumb(null);
+      } finally {
+        if (loadingTask) {
+          try { loadingTask.destroy(); } catch {}
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (loadingTask) {
+        try { loadingTask.destroy(); } catch {}
+      }
+    };
+  }, [isPdfBook, video?.id, video?.data, video?.size]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let book = null;
+    let coverUrl = null;
+    if (!isEpubBook || !video?.data) return () => {};
+    (async () => {
+      try {
+        const buffer = await video.data.arrayBuffer();
+        if (cancelled) return;
+        book = ePub(buffer);
+        coverUrl = await book.coverUrl();
+        if (!cancelled && coverUrl) {
+          setBookFirstPageThumb(coverUrl);
+        }
+      } catch {
+        if (!cancelled) setBookFirstPageThumb(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (book) {
+        try { book.destroy(); } catch {}
+      }
+      if (coverUrl && coverUrl.startsWith('blob:')) {
+        try { URL.revokeObjectURL(coverUrl); } catch {}
+      }
+    };
+  }, [isEpubBook, video?.id, video?.data, video?.size]);
 
   useEffect(() => {
     setTagInput('');
@@ -641,9 +730,16 @@ export const DataTile = ({
             })
           )
         )
-    : React.createElement(BookIcon, {
-        className: 'h-20 w-20 text-gray-500 group-hover:text-indigo-400 transition-colors duration-300',
-      });
+    : isBookTile && bookFirstPageThumb
+      ? React.createElement('img', {
+          src: bookFirstPageThumb,
+          alt: `${video?.name || 'Book'} first page`,
+          className: 'w-full h-full object-cover',
+          loading: 'lazy',
+        })
+      : React.createElement(BookIcon, {
+          className: 'h-20 w-20 text-gray-500 group-hover:text-indigo-400 transition-colors duration-300',
+        });
 
   return React.createElement(
     'div',

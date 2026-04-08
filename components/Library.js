@@ -27,6 +27,13 @@ import { applyShareRecordsToDriveFiles } from '../utils/driveSharePermissions.js
 import { payloadToClientRecord, normalizeExplicitRefs } from '../utils/sharesDriveJson.js';
 import { getOwnerDriveAccessToken, invalidateDriveAccessTokenCache } from '../utils/driveAccessToken.js';
 import { deleteDriveFilesForMergedItem, deleteDriveFilesForChannel } from '../utils/deleteLibraryContentOnDrive.js';
+import {
+  LIBRARY_DISPLAY_POLICIES,
+  modifiedTimeSortMs,
+  applyLibraryDisplayPolicy,
+  readLibraryDisplayPolicy,
+  writeLibraryDisplayPolicy,
+} from '../utils/libraryDisplayPolicy.js';
 
 /** Ensures startup background sync runs once per page load (survives React Strict Mode remount). */
 let ownerBackgroundSyncScheduled = false;
@@ -37,17 +44,6 @@ const channelUploadKey = (ch) => `channel-${ch?.id}`;
 const SEARCH_SUGGEST_MAX = 15;
 
 const LIBRARY_PAGE_SIZE = 20;
-
-/** Newest first; items/channels use `localModifiedAt` / `modifiedTime`, shares use `updatedAt` or `modifiedTime`. */
-function modifiedTimeSortMs(rec) {
-  const t = rec?.localModifiedAt ?? rec?.modifiedTime ?? rec?.updatedAt;
-  if (t instanceof Date && !Number.isNaN(t.getTime())) return t.getTime();
-  if (typeof t === 'string' || typeof t === 'number') {
-    const ms = new Date(t).getTime();
-    return Number.isNaN(ms) ? 0 : ms;
-  }
-  return 0;
-}
 
 export const Library = ({
   items, channels, shares,
@@ -95,6 +91,7 @@ export const Library = ({
   const [searchSuggestIndex, setSearchSuggestIndex] = useState(-1);
   const [searchInputFocused, setSearchInputFocused] = useState(false);
   const [libraryPageIndex, setLibraryPageIndex] = useState(0);
+  const [libraryDisplayPolicy, setLibraryDisplayPolicy] = useState(() => readLibraryDisplayPolicy());
   const [activeFilters,    setActiveFilters]    = useState(new Set());
 
   // Sync + Backup state (combined operation)
@@ -930,9 +927,8 @@ export const Library = ({
     for (const s of filteredShares) {
       rows.push({ kind: 'share', data: s, sortMs: modifiedTimeSortMs(s) });
     }
-    rows.sort((a, b) => b.sortMs - a.sortMs);
-    return rows;
-  }, [filteredItems, filteredChannels, filteredShares]);
+    return applyLibraryDisplayPolicy(rows, libraryDisplayPolicy);
+  }, [filteredItems, filteredChannels, filteredShares, libraryDisplayPolicy]);
 
   const libraryPageRows = useMemo(() => {
     const start = libraryPageIndex * LIBRARY_PAGE_SIZE;
@@ -1448,7 +1444,7 @@ export const Library = ({
       )
     ),
 
-    // Unified grid: newest first by modifiedTime (updatedAt for shares), 20 per page
+    // Unified grid: display order follows selected policy, 20 per page
     sortedLibraryRows.length > 0
       ? React.createElement(
           React.Fragment,
@@ -1755,6 +1751,41 @@ export const Library = ({
                 '. Changing it may require signing in to Google again from the setup screen.',
               ),
             ),
+          ),
+
+          // Section 1c: Library display order
+          React.createElement(
+            'div',
+            { className: 'space-y-2' },
+            React.createElement('p', { className: 'text-xs font-semibold text-gray-400 uppercase tracking-wider' }, 'Library display'),
+            React.createElement(
+              'div',
+              { className: 'bg-gray-900 rounded-xl px-4 py-3 space-y-2' },
+              React.createElement('p', { className: 'text-sm font-medium text-gray-200' }, 'Item order policy'),
+              React.createElement(
+                'select',
+                {
+                  value: libraryDisplayPolicy,
+                  onChange: (e) => {
+                    const next = e.target.value;
+                    setLibraryDisplayPolicy(next);
+                    writeLibraryDisplayPolicy(next);
+                    setLibraryPageIndex(0);
+                  },
+                  className:
+                    'w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500',
+                },
+                React.createElement('option', { value: LIBRARY_DISPLAY_POLICIES.random }, 'Random (default)'),
+                React.createElement('option', { value: LIBRARY_DISPLAY_POLICIES.modifiedTimeBased }, 'Modified time (newest first)')
+              ),
+              React.createElement(
+                'p',
+                { className: 'text-xs text-gray-500' },
+                'Saved in this browser as ',
+                React.createElement('code', { className: 'text-gray-400' }, 'infodepo_library_display_policy'),
+                '.'
+              )
+            )
           ),
 
           // Section 2: Google Account
