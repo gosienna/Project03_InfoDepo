@@ -33,13 +33,16 @@ export const NewChannelModal = ({ onSave, onClose }) => {
       const channelInfo = await resolveChannelId(trimmed);
       setProgress('Fetching videos...');
       const videos = await fetchChannelVideos(channelInfo.channelId, setProgress);
-      await onSave({
+      const saveResult = await onSave({
         channelId: channelInfo.channelId,
         handle: channelInfo.handle,
         name: channelInfo.name,
         thumbnailUrl: channelInfo.thumbnailUrl,
         videos,
       });
+      if (saveResult === 'updated') {
+        window.alert('This channel already exists. Its videos were refreshed.');
+      }
       onClose();
     } catch (err) {
       console.error('Channel fetch failed:', err);

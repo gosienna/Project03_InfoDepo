@@ -438,14 +438,14 @@ export const DataTile = ({
       ? React.createElement('img', {
           src: ch.thumbnailUrl,
           alt: ch.name,
-          className: 'h-12 w-12 rounded-full object-cover border-2 border-gray-100/80 shadow-lg',
+          className: 'h-16 w-16 rounded-full object-cover border-2 border-gray-100/80 shadow-lg',
         })
       : React.createElement(
           'div',
-          { className: 'h-12 w-12 rounded-full bg-gray-800/90 border-2 border-gray-100/60 shadow-lg flex items-center justify-center' },
+          { className: 'h-16 w-16 rounded-full bg-gray-800/90 border-2 border-gray-100/60 shadow-lg flex items-center justify-center' },
           React.createElement(
             'svg',
-            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-6 w-6 text-red-500/80', fill: 'currentColor', viewBox: '0 0 24 24' },
+            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-8 w-8 text-red-500/80', fill: 'currentColor', viewBox: '0 0 24 24' },
             React.createElement('path', {
               d: 'M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z',
             })
@@ -471,12 +471,25 @@ export const DataTile = ({
           )
         );
 
+    const featuredChannelVideoTitle = featuredChannelVideoId
+      ? (Array.isArray(ch.videos) ? ch.videos.find((v) => v.videoId === featuredChannelVideoId)?.title : '') || ''
+      : '';
+
     return React.createElement(
       'div',
       {
         className: DATA_TILE_SHELL,
         onClick: () => onSelect({ ...ch, _featuredVideoId: featuredChannelVideoId || undefined }),
       },
+      featuredChannelVideoTitle &&
+        React.createElement(
+          'p',
+          {
+            className: 'px-4 pt-3 pb-2 text-sm font-semibold text-white truncate',
+            title: featuredChannelVideoTitle,
+          },
+          featuredChannelVideoTitle
+        ),
       React.createElement(
         'div',
         { className: 'relative p-4 bg-gray-700 h-40 flex items-center justify-center overflow-hidden' },
@@ -489,7 +502,6 @@ export const DataTile = ({
           },
           'Channel'
         ),
-        React.createElement('div', { className: 'absolute bottom-2 right-2 z-20' }, channelOverlayThumb),
         React.createElement(
           'div',
           { className: 'absolute bottom-2 left-2 z-20 flex items-center gap-1.5' },
@@ -595,7 +607,8 @@ export const DataTile = ({
         ch.handle &&
           React.createElement('p', { className: 'text-xs text-gray-500 truncate mt-0.5', title: ch.handle }, ch.handle),
         tagRow
-      )
+      ),
+      React.createElement('div', { className: 'absolute bottom-2 right-2 z-20 pointer-events-none' }, channelOverlayThumb)
     );
   }
 

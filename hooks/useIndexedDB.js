@@ -748,16 +748,39 @@ export const useIndexedDB = () => {
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(CHANNELS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
+      const os = tx.objectStore(CHANNELS_STORE);
       const now = new Date();
-      const addReq = tx.objectStore(CHANNELS_STORE).add({
-        ...record,
-        tags: normalizeTagsList(record.tags),
-        driveId: '',
-        modifiedTime: now,
-        localModifiedAt: now,
-      });
-      addReq.onsuccess = () => { loadChannels(); resolve(); };
-      addReq.onerror = (e) => reject(e.target.error);
+      const normalizedTags = normalizeTagsList(record.tags);
+      const existingByChannelReq = os.index('channelId').get(record.channelId);
+
+      existingByChannelReq.onsuccess = () => {
+        const existing = existingByChannelReq.result;
+        if (existing) {
+          const putReq = os.put({
+            ...existing,
+            ...record,
+            tags: normalizedTags.length ? normalizedTags : (Array.isArray(existing.tags) ? existing.tags : []),
+            // Preserve existing Drive linkage when re-importing the same channel locally.
+            driveId: existing.driveId || '',
+            modifiedTime: now,
+            localModifiedAt: now,
+          });
+          putReq.onsuccess = () => { loadChannels(); resolve('updated'); };
+          putReq.onerror = (e) => reject(e.target.error);
+          return;
+        }
+
+        const addReq = os.add({
+          ...record,
+          tags: normalizedTags,
+          driveId: '',
+          modifiedTime: now,
+          localModifiedAt: now,
+        });
+        addReq.onsuccess = () => { loadChannels(); resolve('added'); };
+        addReq.onerror = (e) => reject(e.target.error);
+      };
+      existingByChannelReq.onerror = (e) => reject(e.target.error);
     });
   }, [db, loadChannels]);
 
