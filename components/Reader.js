@@ -27,7 +27,7 @@ export const Reader = ({ video, onUpdateItem, onAddImage, onGetImages, readOnly 
       case 'epub':
         return React.createElement(EpubViewer, { data: video.data });
       case 'pdf':
-        return React.createElement(PdfViewer, { data: video.data });
+        return React.createElement(PdfViewer, { data: video.data, itemId: video.id, onUpdateItem, readOnly });
       case 'txt':
         return React.createElement(TxtViewer, { data: video.data });
       case 'md':

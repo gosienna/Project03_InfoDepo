@@ -604,10 +604,16 @@ export const Library = ({
       form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
       form.append('file', video.data);
 
-      const res = await fetch(
-        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime',
-        { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form }
-      );
+      const existingDriveId = String(video.driveId || '').trim();
+      const uploadUrl = existingDriveId
+        ? `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(existingDriveId)}?uploadType=multipart&fields=id,name,modifiedTime`
+        : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime';
+      const uploadMethod = existingDriveId ? 'PATCH' : 'POST';
+      const res = await fetch(uploadUrl, {
+        method: uploadMethod,
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
 
       if (!res.ok) {
         const err = await res.json();
