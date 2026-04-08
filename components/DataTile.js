@@ -94,6 +94,7 @@ export const DataTile = ({
   const fileExtension = !isChannel && video?.name ? getFileExtension(video.name) : '';
   const isYoutube = !isChannel && video?.type === 'application/x-youtube';
   const [thumbVideoId, setThumbVideoId] = useState(null);
+  const [featuredChannelVideoId, setFeaturedChannelVideoId] = useState(null);
   const [tagInput, setTagInput] = useState('');
   const [tagPickerMode, setTagPickerMode] = useState('select');
   const [isEditingName, setIsEditingName] = useState(false);
@@ -120,6 +121,20 @@ export const DataTile = ({
     };
     reader.readAsText(video.data);
   }, [isChannel, isShare, video?.id, video?.type, isYoutube, video?.size, video?.data]);
+
+  useEffect(() => {
+    if (!isChannel) {
+      setFeaturedChannelVideoId(null);
+      return;
+    }
+    const vids = Array.isArray(ch?.videos) ? ch.videos.filter((v) => typeof v?.videoId === 'string' && v.videoId.trim()) : [];
+    if (!vids.length) {
+      setFeaturedChannelVideoId(null);
+      return;
+    }
+    const idx = Math.floor(Math.random() * vids.length);
+    setFeaturedChannelVideoId(vids[idx].videoId);
+  }, [isChannel, ch?.id, ch?.videos?.length]);
 
   useEffect(() => {
     setTagInput('');
@@ -419,11 +434,30 @@ export const DataTile = ({
       if (onUpload) onUpload(ch);
     };
 
-    const channelThumb = ch.thumbnailUrl
+    const channelOverlayThumb = ch.thumbnailUrl
       ? React.createElement('img', {
           src: ch.thumbnailUrl,
           alt: ch.name,
-          className: 'w-full h-full object-cover',
+          className: 'h-12 w-12 rounded-full object-cover border-2 border-gray-100/80 shadow-lg',
+        })
+      : React.createElement(
+          'div',
+          { className: 'h-12 w-12 rounded-full bg-gray-800/90 border-2 border-gray-100/60 shadow-lg flex items-center justify-center' },
+          React.createElement(
+            'svg',
+            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-6 w-6 text-red-500/80', fill: 'currentColor', viewBox: '0 0 24 24' },
+            React.createElement('path', {
+              d: 'M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z',
+            })
+          )
+        );
+
+    const channelHero = featuredChannelVideoId
+      ? React.createElement('img', {
+          src: `https://img.youtube.com/vi/${featuredChannelVideoId}/mqdefault.jpg`,
+          alt: `${ch.name} featured video`,
+          className: 'absolute inset-0 w-full h-full object-cover',
+          loading: 'lazy',
         })
       : React.createElement(
           'div',
@@ -441,22 +475,24 @@ export const DataTile = ({
       'div',
       {
         className: DATA_TILE_SHELL,
-        onClick: () => onSelect(ch),
+        onClick: () => onSelect({ ...ch, _featuredVideoId: featuredChannelVideoId || undefined }),
       },
       React.createElement(
         'div',
         { className: 'relative p-4 bg-gray-700 h-40 flex items-center justify-center overflow-hidden' },
-        channelThumb,
+        channelHero,
+        React.createElement('div', { className: 'absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none' }),
         React.createElement(
           'span',
           {
-            className: 'absolute top-2 right-2 bg-red-600 text-white text-xs font-bold px-2 py-1 rounded',
+            className: 'absolute top-2 right-2 z-20 bg-red-600 text-white text-xs font-bold px-2 py-1 rounded',
           },
           'Channel'
         ),
+        React.createElement('div', { className: 'absolute bottom-2 right-2 z-20' }, channelOverlayThumb),
         React.createElement(
           'div',
-          { className: 'absolute bottom-2 right-2 flex items-center gap-1.5' },
+          { className: 'absolute bottom-2 left-2 z-20 flex items-center gap-1.5' },
           !readOnly && onUpload && React.createElement(UploadButton, { status: uploadStatus, onClick: handleChannelUpload }),
           !readOnly &&
             onDelete &&

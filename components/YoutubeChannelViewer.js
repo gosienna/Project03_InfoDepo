@@ -53,6 +53,7 @@ export const YoutubeChannelViewer = ({
   const [sortMode, setSortMode] = useState('newest');
   const [pageIndex, setPageIndex] = useState(0);
   const [titleSearch, setTitleSearch] = useState('');
+  const [featuredVideoId, setFeaturedVideoId] = useState(null);
   const [refreshStatus, setRefreshStatus] = useState('idle');
   const refreshedChannelIdRef = useRef(null);
 
@@ -84,6 +85,21 @@ export const YoutubeChannelViewer = ({
       });
   }, [channel.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    const vids = Array.isArray(channel.videos) ? channel.videos.filter((v) => typeof v?.videoId === 'string' && v.videoId.trim()) : [];
+    if (!vids.length) {
+      setFeaturedVideoId(null);
+      return;
+    }
+    const fromTile = typeof channel._featuredVideoId === 'string' ? channel._featuredVideoId.trim() : '';
+    if (fromTile && vids.some((v) => v.videoId === fromTile)) {
+      setFeaturedVideoId(fromTile);
+      return;
+    }
+    const idx = Math.floor(Math.random() * vids.length);
+    setFeaturedVideoId(vids[idx].videoId);
+  }, [channel.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const rawCount = (channel.videos || []).length;
 
   const filteredByTitle = useMemo(() => {
@@ -99,7 +115,14 @@ export const YoutubeChannelViewer = ({
     return vids;
   }, [filteredByTitle, sortMode]);
 
-  const totalVideos = sortedVideos.length;
+  const displayVideos = useMemo(() => {
+    if (!featuredVideoId) return sortedVideos;
+    const featured = sortedVideos.find((v) => v.videoId === featuredVideoId);
+    if (!featured) return sortedVideos;
+    return [featured, ...sortedVideos.filter((v) => v.videoId !== featuredVideoId)];
+  }, [sortedVideos, featuredVideoId]);
+
+  const totalVideos = displayVideos.length;
   const totalPages = Math.max(1, Math.ceil(totalVideos / VIDEOS_PER_PAGE));
 
   useEffect(() => {
@@ -113,8 +136,8 @@ export const YoutubeChannelViewer = ({
 
   const pageVideos = useMemo(() => {
     const start = pageIndex * VIDEOS_PER_PAGE;
-    return sortedVideos.slice(start, start + VIDEOS_PER_PAGE);
-  }, [sortedVideos, pageIndex]);
+    return displayVideos.slice(start, start + VIDEOS_PER_PAGE);
+  }, [displayVideos, pageIndex]);
 
   const libraryItems = useMemo(
     () => pageVideos.map(videoToLibraryItem),
