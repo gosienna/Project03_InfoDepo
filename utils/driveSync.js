@@ -123,7 +123,6 @@ export async function syncDriveToLocal({
 
   // Phase 0: sync note bundles stored as Drive folders (folder contains a .md + image assets).
   for (const folder of driveFolders) {
-    progress(`Scanning note folder "${folder.name}"...`);
     const contents = await listFolderContents(folder.driveId);
     const mdFile = contents.find(f => /\.(md|markdown|mdown|mkd)$/i.test(f.name) && f.mimeType === 'text/markdown');
     if (!mdFile) continue; // not a note bundle
@@ -160,8 +159,6 @@ export async function syncDriveToLocal({
 
   // Phase 1: sync content files (books, notes, videos)
   for (const driveFile of contentFiles) {
-    progress(`Processing ${driveFile.name}...`);
-
     if (
       driveFile.mimeType === 'application/json' &&
       isShareDriveJsonFilename(driveFile.name) &&
@@ -179,6 +176,7 @@ export async function syncDriveToLocal({
         continue;
       }
 
+      progress(`Downloading ${driveFile.name}...`);
       const shareBlobRes = await fetch(
         `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -203,19 +201,13 @@ export async function syncDriveToLocal({
       ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
       : true;
 
-    console.log(
-      `[InfoDepo] sync check "${driveFile.name}":`,
-      existing
-        ? `local=${new Date(existing.modifiedTime).toISOString()} drive=${driveFile.modifiedTime} newer=${driveIsNewer}`
-        : 'no local copy'
-    );
-
     if (existing && !driveIsNewer) {
       if (!existing.driveId) await upsertDriveBook(driveFile, existing.data);
       counts.skipped++;
       continue;
     }
 
+    progress(`Downloading ${driveFile.name}...`);
     const blobRes = await fetch(
       `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -273,8 +265,6 @@ export async function syncDriveToLocal({
     }
 
     for (const driveFile of imageFiles) {
-      progress(`Processing image ${driveFile.name}...`);
-
       let existing = getImageByDriveId ? await getImageByDriveId(driveFile.driveId) : undefined;
       if (!existing && getImageByName) existing = await getImageByName(driveFile.name);
 
@@ -287,6 +277,7 @@ export async function syncDriveToLocal({
         continue;
       }
 
+      progress(`Downloading image ${driveFile.name}...`);
       const blobRes = await fetch(
         `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
