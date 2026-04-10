@@ -558,8 +558,10 @@ export async function backupAllToGDrive({
       { method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}` }, body: form }
     );
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error?.message || res.statusText);
+      const body = await res.json().catch(() => ({}));
+      const err = new Error(body.error?.message || res.statusText);
+      err.status = res.status;
+      throw err;
     }
     return res.json();
   };
@@ -649,7 +651,22 @@ export async function backupAllToGDrive({
         const did = String(item.driveId || '').trim();
         let driveFile;
         if (did) {
-          driveFile = await patchMultipart(did, item.data, driveName, driveMime);
+          try {
+            driveFile = await patchMultipart(did, item.data, driveName, driveMime);
+          } catch (patchErr) {
+            if (patchErr.status === 404) {
+              // Drive file was deleted — recreate it.
+              console.warn(`Drive file gone for "${item.name}", uploading as new file.`);
+              driveFile = await postMultipart(item.data, driveName, driveMime);
+            } else if (patchErr.status === 403) {
+              // App does not own this file (e.g. shared/imported from another account).
+              // Skip — do not create a duplicate.
+              console.warn(`Skipping backup for "${item.name}": no write access to Drive file (403).`);
+              continue;
+            } else {
+              throw patchErr;
+            }
+          }
         } else {
           driveFile = await postMultipart(item.data, driveName, driveMime);
         }
@@ -675,7 +692,19 @@ export async function backupAllToGDrive({
       const did = String(ch.driveId || '').trim();
       let driveFile;
       if (did) {
-        driveFile = await patchMultipart(did, blob, fileName, 'application/json');
+        try {
+          driveFile = await patchMultipart(did, blob, fileName, 'application/json');
+        } catch (patchErr) {
+          if (patchErr.status === 404) {
+            console.warn(`Drive file gone for channel "${label}", uploading as new file.`);
+            driveFile = await postMultipart(blob, fileName, 'application/json');
+          } else if (patchErr.status === 403) {
+            console.warn(`Skipping backup for channel "${label}": no write access to Drive file (403).`);
+            continue;
+          } else {
+            throw patchErr;
+          }
+        }
       } else {
         driveFile = await postMultipart(blob, fileName, 'application/json');
       }
