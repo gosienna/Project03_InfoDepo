@@ -203,6 +203,13 @@ export async function syncDriveToLocal({
       ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
       : true;
 
+    console.log(
+      `[InfoDepo] sync check "${driveFile.name}":`,
+      existing
+        ? `local=${new Date(existing.modifiedTime).toISOString()} drive=${driveFile.modifiedTime} newer=${driveIsNewer}`
+        : 'no local copy'
+    );
+
     if (existing && !driveIsNewer) {
       if (!existing.driveId) await upsertDriveBook(driveFile, existing.data);
       counts.skipped++;
