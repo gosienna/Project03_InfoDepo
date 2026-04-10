@@ -27,7 +27,47 @@ async function renderPageToCanvas(page, containerWidth) {
   canvas.className = 'max-w-full shadow-md rounded bg-white';
 
   await page.render({ canvasContext: ctx, viewport }).promise;
-  return canvas;
+  return { canvas, userScale, outputScale, viewportCss: page.getViewport({ scale: userScale }) };
+}
+
+async function buildTextLayerDiv(page, viewportCss) {
+  const textContent = await page.getTextContent();
+  const div = document.createElement('div');
+  div.className = 'pdf-text-layer';
+  div.style.position = 'absolute';
+  div.style.left = '0';
+  div.style.top = '0';
+  div.style.width = '100%';
+  div.style.height = '100%';
+  div.style.overflow = 'hidden';
+  div.style.lineHeight = '1';
+  div.style.zIndex = '5';
+  const base = viewportCss.transform;
+  for (const item of textContent.items) {
+    if (!('str' in item) || !item.str) continue;
+    if (!Array.isArray(item.transform) || item.transform.length < 6) continue;
+    const span = document.createElement('span');
+    const tx = pdfjsLib.Util.transform(base, item.transform);
+    const fontHeight = Math.hypot(tx[2], tx[3]) || 12;
+    span.textContent = item.str;
+    span.style.position = 'absolute';
+    span.style.left = `${tx[4]}px`;
+    span.style.top = `${tx[5] - fontHeight}px`;
+    span.style.fontSize = `${fontHeight}px`;
+    span.style.fontFamily = item.fontName ? `${item.fontName}, sans-serif` : 'sans-serif';
+    span.style.color = 'transparent';
+    span.style.userSelect = 'text';
+    span.style.whiteSpace = 'pre';
+    span.style.cursor = 'text';
+    div.appendChild(span);
+  }
+  return div;
+}
+
+function readingPositionWithoutPdfAnnotations(rp) {
+  if (!rp || typeof rp !== 'object') return {};
+  const { pdfAnnotations: _a, ...rest } = rp;
+  return rest;
 }
 
 function isExpectedPdfCancellation(err) {
@@ -46,8 +86,12 @@ export const PdfViewer = ({
   data,
   itemId,
   initialReadingPosition,
+  initialAnnotations,
+  pdfDriveId,
+  exportBaseName,
   onUpdateItem,
   onSaveReadingPosition,
+  onSavePdfAnnotations,
   storeName,
   readOnly,
 }) => {
@@ -63,6 +107,7 @@ export const PdfViewer = ({
   const useWindowScrollRef = useRef(false);
   const lastKnownPageRef = useRef(1);
   const lastUserScrollAtRef = useRef(0);
+  const readingPositionRef = useRef(readingPositionWithoutPdfAnnotations(initialReadingPosition || {}));
 
   // pageWrappers holds DOM nodes (position:relative divs) created during PDF render.
   // We use React state so portals re-render when pages change.
@@ -73,7 +118,16 @@ export const PdfViewer = ({
   const annotationsRef = useRef([]);
   useEffect(() => { annotationsRef.current = annotations; }, [annotations]);
 
-  const [tool, setTool] = useState('none'); // 'none' | 'highlight' | 'text' | 'line'
+  useEffect(() => {
+    const list = Array.isArray(initialAnnotations) ? initialAnnotations : [];
+    setAnnotations(list);
+    annotationsRef.current = list;
+  }, [itemId, initialAnnotations]);
+  useEffect(() => {
+    readingPositionRef.current = readingPositionWithoutPdfAnnotations(initialReadingPosition || {});
+  }, [initialReadingPosition]);
+
+  const [tool, setTool] = useState('none'); // 'none' | 'highlight' | 'text' | 'draw' | 'line'
   const toolRef = useRef('none');
   useEffect(() => { toolRef.current = tool; }, [tool]);
 
@@ -81,7 +135,12 @@ export const PdfViewer = ({
   const dragRef = useRef(null);
   useEffect(() => { dragRef.current = drag; }, [drag]);
   const [textDraft, setTextDraft] = useState(null); // { pageIndex, x, y, text }
+  const [strokeDraft, setStrokeDraft] = useState(null); // { pageIndex, points: [{x, y}, ...] }
+  const strokeDraftRef = useRef(null);
+  useEffect(() => { strokeDraftRef.current = strokeDraft; }, [strokeDraft]);
   const [lineDraft, setLineDraft] = useState(null); // { pageIndex, startX, startY, curX, curY }
+  const lineDraftRef = useRef(null);
+  useEffect(() => { lineDraftRef.current = lineDraft; }, [lineDraft]);
   const [textColor, setTextColor] = useState('black');
   const [textFontSize, setTextFontSize] = useState(14);
 
@@ -98,7 +157,14 @@ export const PdfViewer = ({
     return TEXT_COLOR_OPTIONS.find((opt) => opt.id === colorId) || TEXT_COLOR_OPTIONS[0];
   }
   useEffect(() => {
-    if (tool !== 'line') setLineDraft(null);
+    if (tool !== 'draw') {
+      setStrokeDraft(null);
+      strokeDraftRef.current = null;
+    }
+    if (tool !== 'line') {
+      setLineDraft(null);
+      lineDraftRef.current = null;
+    }
   }, [tool]);
 
   const [saving, setSaving] = useState(false);
@@ -107,6 +173,7 @@ export const PdfViewer = ({
   const tabRef = useRef(null);
   const panelRef = useRef(null);
   const closeTimerRef = useRef(null);
+  const panelPinnedRef = useRef(false);
 
   function scheduleClose() {
     closeTimerRef.current = setTimeout(() => setPanelOpen(false), 150);
@@ -118,21 +185,57 @@ export const PdfViewer = ({
   useEffect(() => {
     const tab = tabRef.current;
     if (!tab) return;
+    const isCoarsePointer = () =>
+      typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(hover: none), (pointer: coarse)').matches;
     const open = () => { cancelClose(); setPanelOpen(true); };
-    const close = () => scheduleClose();
+    const close = () => {
+      if (panelPinnedRef.current) return;
+      scheduleClose();
+    };
+    const togglePinnedPanel = (e) => {
+      if (!isCoarsePointer()) return;
+      e.preventDefault();
+      cancelClose();
+      panelPinnedRef.current = !panelPinnedRef.current;
+      setPanelOpen(panelPinnedRef.current);
+    };
     tab.addEventListener('mouseenter', open);
     tab.addEventListener('mouseleave', close);
-    return () => { tab.removeEventListener('mouseenter', open); tab.removeEventListener('mouseleave', close); };
+    tab.addEventListener('touchstart', togglePinnedPanel, { passive: false });
+    return () => {
+      tab.removeEventListener('mouseenter', open);
+      tab.removeEventListener('mouseleave', close);
+      tab.removeEventListener('touchstart', togglePinnedPanel);
+    };
   }, []);
 
   useEffect(() => {
     const panel = panelRef.current;
     if (!panel) return;
-    const open = () => cancelClose();
-    const close = () => scheduleClose();
+    const open = () => {
+      cancelClose();
+      if (panelPinnedRef.current) setPanelOpen(true);
+    };
+    const close = () => {
+      if (panelPinnedRef.current) return;
+      scheduleClose();
+    };
+    const unpinPanel = () => {
+      panelPinnedRef.current = false;
+      setPanelOpen(false);
+    };
     panel.addEventListener('mouseenter', open);
     panel.addEventListener('mouseleave', close);
-    return () => { panel.removeEventListener('mouseenter', open); panel.removeEventListener('mouseleave', close); };
+    panel.addEventListener('touchstart', open, { passive: true });
+    panel.addEventListener('touchend', unpinPanel, { passive: true });
+    return () => {
+      panel.removeEventListener('mouseenter', open);
+      panel.removeEventListener('mouseleave', close);
+      panel.removeEventListener('touchstart', open);
+      panel.removeEventListener('touchend', unpinPanel);
+    };
   }, [panelOpen]); // re-register when panel mounts/unmounts
   const autoSaveMsgTimerRef = useRef(null);
 
@@ -159,10 +262,11 @@ export const PdfViewer = ({
     const runId = ++runIdRef.current;
     let cancelled = false;
 
-    setAnnotations([]);
-    annotationsRef.current = [];
     setTextDraft(null);
+    setStrokeDraft(null);
+    strokeDraftRef.current = null;
     setLineDraft(null);
+    lineDraftRef.current = null;
     setPageWrappers([]);
 
     const mount = containerRef.current;
@@ -222,13 +326,19 @@ export const PdfViewer = ({
 
           const page = await pdfDoc.getPage(i);
           const w = mount.clientWidth || containerWidth;
-          const canvas = await renderPageToCanvas(page, w);
+          const { canvas, viewportCss } = await renderPageToCanvas(page, w);
 
           // position:relative wrapper so the SVG overlay (position:absolute) stays on top
           const pageWrapper = document.createElement('div');
           pageWrapper.style.position = 'relative';
           pageWrapper.style.display = 'inline-block';
           pageWrapper.appendChild(canvas);
+          try {
+            const textLayer = await buildTextLayerDiv(page, viewportCss);
+            pageWrapper.appendChild(textLayer);
+          } catch (tlErr) {
+            console.warn('PDF text layer failed:', tlErr);
+          }
           wrap.appendChild(pageWrapper);
           newWrappers.push(pageWrapper);
           // Publish wrappers incrementally so page tracking/restore can work
@@ -387,11 +497,13 @@ export const PdfViewer = ({
       if (lastSavedPositionKeyRef.current === key) return;
       lastSavedPositionKeyRef.current = key;
       const payload = {
+        ...readingPositionWithoutPdfAnnotations(readingPositionRef.current || {}),
         kind: 'pdf',
         ...(currentPage ? { pdfPage: currentPage } : {}),
         // Keep for backward compatibility; may be 0 in some layouts.
         pdfScrollTop: scrollTop,
       };
+      readingPositionRef.current = payload;
       onSaveReadingPosition(itemId, storeName, payload).catch(() => {});
     };
 
@@ -436,19 +548,55 @@ export const PdfViewer = ({
     };
   }, [itemId, onSaveReadingPosition, storeName, pageWrappers]);
 
-  // Auto-save every 60 seconds
   useEffect(() => {
-    if (readOnly || !onUpdateItem) return;
+    const mount = containerRef.current;
+    if (!mount) return;
+    const layers = mount.querySelectorAll('.pdf-text-layer');
+    const blockText = tool !== 'none';
+    layers.forEach((el) => {
+      el.style.pointerEvents = blockText ? 'none' : 'auto';
+    });
+  }, [tool, status, pageWrappers.length]);
+
+  // Auto-save annotation sidecar every 60 seconds
+  useEffect(() => {
+    if (readOnly || !onSavePdfAnnotations || !storeName || !itemId) return;
     const id = setInterval(() => {
-      if (annotationsRef.current.length > 0) {
-        performSave(annotationsRef.current, true);
-      }
+      performSave(annotationsRef.current, true);
     }, 60_000);
     return () => clearInterval(id);
-  }, [data, itemId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data, itemId, onSavePdfAnnotations, storeName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function performSave(currentAnnotations, isAuto = false) {
-    if (!currentAnnotations.length || !onUpdateItem) return;
+    if (!onSavePdfAnnotations || !storeName || !itemId) return;
+    setSaving(true);
+    try {
+      await onSavePdfAnnotations(
+        itemId,
+        storeName,
+        Array.isArray(currentAnnotations) ? currentAnnotations : [],
+        pdfDriveId || ''
+      );
+
+      if (isAuto) {
+        if (autoSaveMsgTimerRef.current) clearTimeout(autoSaveMsgTimerRef.current);
+        setAutoSaveMsg('Annotations auto-saved');
+        autoSaveMsgTimerRef.current = setTimeout(() => setAutoSaveMsg(''), 2000);
+      }
+    } catch (err) {
+      console.error('PDF save error:', err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function exportFlattenedPdf() {
+    const list = annotationsRef.current;
+    if (!list.length) {
+      window.alert('No annotations to export.');
+      return;
+    }
+    if (!pageWrappers.length) return;
     setSaving(true);
     try {
       const { PDFDocument, rgb } = await import('pdf-lib');
@@ -456,7 +604,7 @@ export const PdfViewer = ({
       const pdfDoc = await PDFDocument.load(buf);
       const pages = pdfDoc.getPages();
 
-      for (const ann of currentAnnotations) {
+      for (const ann of list) {
         const page = pages[ann.pageIndex];
         if (!page) continue;
         const { width: pdfW, height: pdfH } = page.getSize();
@@ -482,18 +630,27 @@ export const PdfViewer = ({
         }
         if (ann.type === 'line') {
           page.drawLine({
-            start: {
-              x: ann.x1 * scaleX,
-              y: pdfH - ann.y1 * scaleY,
-            },
-            end: {
-              x: ann.x2 * scaleX,
-              y: pdfH - ann.y2 * scaleY,
-            },
+            start: { x: ann.x1 * scaleX, y: pdfH - ann.y1 * scaleY },
+            end: { x: ann.x2 * scaleX, y: pdfH - ann.y2 * scaleY },
             thickness: 2 * Math.max(scaleX, scaleY),
             color: rgb(0.85, 0.13, 0.13),
             opacity: 0.95,
           });
+          continue;
+        }
+        if (ann.type === 'draw') {
+          const pts = Array.isArray(ann.points) ? ann.points : [];
+          for (let i = 1; i < pts.length; i++) {
+            const p0 = pts[i - 1];
+            const p1 = pts[i];
+            page.drawLine({
+              start: { x: p0.x * scaleX, y: pdfH - p0.y * scaleY },
+              end: { x: p1.x * scaleX, y: pdfH - p1.y * scaleY },
+              thickness: 2 * Math.max(scaleX, scaleY),
+              color: rgb(0.85, 0.13, 0.13),
+              opacity: 0.95,
+            });
+          }
           continue;
         }
         page.drawRectangle({
@@ -508,18 +665,17 @@ export const PdfViewer = ({
       }
 
       const bytes = await pdfDoc.save();
-      const newBlob = new Blob([bytes], { type: 'application/pdf' });
-      await onUpdateItem(itemId, newBlob, 'application/pdf');
-      setAnnotations([]);
-      annotationsRef.current = [];
-
-      if (isAuto) {
-        if (autoSaveMsgTimerRef.current) clearTimeout(autoSaveMsgTimerRef.current);
-        setAutoSaveMsg('Auto-saved');
-        autoSaveMsgTimerRef.current = setTimeout(() => setAutoSaveMsg(''), 2000);
-      }
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const base = String(exportBaseName || 'document').replace(/[/\\?%*:|"<>]/g, '-');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${base}-annotated.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
     } catch (err) {
-      console.error('PDF save error:', err);
+      console.error('Export PDF error:', err);
+      window.alert(err?.message || 'Export failed');
     } finally {
       setSaving(false);
     }
@@ -532,28 +688,37 @@ export const PdfViewer = ({
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
-  function handleMouseDown(e, pageIndex) {
+  function handlePointerDown(e, pageIndex) {
     if (toolRef.current === 'none' || readOnly) return;
+    if (typeof e.button === 'number' && e.button !== 0) return;
     e.preventDefault();
     const { x, y } = getSvgCoords(e, e.currentTarget);
     if (toolRef.current === 'text') {
       setTextDraft({ pageIndex, x, y, text: '' });
       return;
     }
+    if (toolRef.current === 'draw') {
+      setTextDraft(null);
+      setLineDraft(null);
+      lineDraftRef.current = null;
+      const draft = { pageIndex, points: [{ x, y }] };
+      setStrokeDraft(draft);
+      strokeDraftRef.current = draft;
+      if (typeof e.currentTarget?.setPointerCapture === 'function' && e.pointerId != null) {
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+      return;
+    }
     if (toolRef.current === 'line') {
       setTextDraft(null);
-      if (!lineDraft || lineDraft.pageIndex !== pageIndex) {
-        setLineDraft({ pageIndex, startX: x, startY: y, curX: x, curY: y });
-        return;
+      setStrokeDraft(null);
+      strokeDraftRef.current = null;
+      const draft = { pageIndex, startX: x, startY: y, curX: x, curY: y };
+      setLineDraft(draft);
+      lineDraftRef.current = draft;
+      if (typeof e.currentTarget?.setPointerCapture === 'function' && e.pointerId != null) {
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
       }
-      const x1 = lineDraft.startX;
-      const y1 = lineDraft.startY;
-      const x2 = x;
-      const y2 = y;
-      if (Math.abs(x2 - x1) > 2 || Math.abs(y2 - y1) > 2) {
-        setAnnotations((prev) => [...prev, { type: 'line', pageIndex, x1, y1, x2, y2 }]);
-      }
-      setLineDraft(null);
       return;
     }
     const d = { pageIndex, startX: x, startY: y, curX: x, curY: y };
@@ -561,10 +726,22 @@ export const PdfViewer = ({
     dragRef.current = d;
   }
 
-  function handleMouseMove(e, pageIndex) {
+  function handlePointerMove(e, pageIndex) {
     const { x, y } = getSvgCoords(e, e.currentTarget);
-    if (toolRef.current === 'line' && lineDraft && lineDraft.pageIndex === pageIndex) {
-      setLineDraft((prev) => (prev ? { ...prev, curX: x, curY: y } : prev));
+    if (toolRef.current === 'draw' && strokeDraftRef.current && strokeDraftRef.current.pageIndex === pageIndex) {
+      const prev = strokeDraftRef.current;
+      const last = prev.points[prev.points.length - 1];
+      if (!last) return;
+      if (Math.abs(x - last.x) < 0.8 && Math.abs(y - last.y) < 0.8) return;
+      const next = { ...prev, points: [...prev.points, { x, y }] };
+      setStrokeDraft(next);
+      strokeDraftRef.current = next;
+      return;
+    }
+    if (toolRef.current === 'line' && lineDraftRef.current && lineDraftRef.current.pageIndex === pageIndex) {
+      const next = { ...lineDraftRef.current, curX: x, curY: y };
+      setLineDraft(next);
+      lineDraftRef.current = next;
       return;
     }
     if (!dragRef.current || dragRef.current.pageIndex !== pageIndex) return;
@@ -573,7 +750,37 @@ export const PdfViewer = ({
     dragRef.current = d;
   }
 
-  function handleMouseUp(e, pageIndex) {
+  function handlePointerUp(e, pageIndex) {
+    if (toolRef.current === 'draw') {
+      const draft = strokeDraftRef.current;
+      if (draft && draft.pageIndex === pageIndex && draft.points.length > 1) {
+        setAnnotations((prev) => [...prev, { type: 'draw', pageIndex, points: draft.points }]);
+      }
+      setStrokeDraft(null);
+      strokeDraftRef.current = null;
+      if (typeof e.currentTarget?.releasePointerCapture === 'function' && e.pointerId != null) {
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+      return;
+    }
+    if (toolRef.current === 'line') {
+      const draft = lineDraftRef.current;
+      if (draft && draft.pageIndex === pageIndex) {
+        const x1 = draft.startX;
+        const y1 = draft.startY;
+        const x2 = draft.curX;
+        const y2 = draft.curY;
+        if (Math.abs(x2 - x1) > 2 || Math.abs(y2 - y1) > 2) {
+          setAnnotations((prev) => [...prev, { type: 'line', pageIndex, x1, y1, x2, y2 }]);
+        }
+      }
+      setLineDraft(null);
+      lineDraftRef.current = null;
+      if (typeof e.currentTarget?.releasePointerCapture === 'function' && e.pointerId != null) {
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+      return;
+    }
     if (toolRef.current !== 'highlight') return;
     const d = dragRef.current;
     if (!d || d.pageIndex !== pageIndex) return;
@@ -594,6 +801,14 @@ export const PdfViewer = ({
     if (dragRef.current) {
       setDrag(null);
       dragRef.current = null;
+    }
+    if (strokeDraftRef.current) {
+      setStrokeDraft(null);
+      strokeDraftRef.current = null;
+    }
+    if (lineDraftRef.current) {
+      setLineDraft(null);
+      lineDraftRef.current = null;
     }
   }
 
@@ -627,9 +842,8 @@ export const PdfViewer = ({
     setTextDraft(null);
   }
 
-  // Build portals: one SVG overlay per page wrapper
+  // Build portals: one SVG overlay per page wrapper (view-only when readOnly)
   const overlayPortals =
-    !readOnly &&
     pageWrappers.map((wrapper, pageIndex) => {
       const pageAnnotations = annotations
         .map((ann, i) => ({ ann, i }))
@@ -645,6 +859,7 @@ export const PdfViewer = ({
           }
         : null;
 
+      const svgPointerThrough = readOnly || tool === 'none';
       const svgEl = React.createElement(
         'svg',
         {
@@ -654,14 +869,20 @@ export const PdfViewer = ({
             left: 0,
             width: '100%',
             height: '100%',
-            cursor: tool !== 'none' ? 'crosshair' : 'default',
-            // Allow pointer events only when tool is active or annotations exist
-            pointerEvents: tool !== 'none' || pageAnnotations.length > 0 ? 'auto' : 'none',
+            zIndex: 10,
+            cursor: readOnly ? 'default' : (tool !== 'none' ? 'crosshair' : 'default'),
+            pointerEvents: svgPointerThrough ? 'none' : 'auto',
+            touchAction: !readOnly && tool !== 'none' ? 'none' : 'auto',
           },
-          onMouseDown: (e) => handleMouseDown(e, pageIndex),
-          onMouseMove: (e) => handleMouseMove(e, pageIndex),
-          onMouseUp: (e) => handleMouseUp(e, pageIndex),
-          onMouseLeave: handleMouseLeave,
+          ...(readOnly
+            ? {}
+            : {
+                onPointerDown: (e) => handlePointerDown(e, pageIndex),
+                onPointerMove: (e) => handlePointerMove(e, pageIndex),
+                onPointerUp: (e) => handlePointerUp(e, pageIndex),
+                onPointerCancel: handleMouseLeave,
+                onMouseLeave: handleMouseLeave,
+              }),
         },
         pageAnnotations.map(({ ann, i }) => {
           if (ann.type === 'text') {
@@ -676,8 +897,12 @@ export const PdfViewer = ({
                 y: ann.y + fontSize,
                 fill: colorMeta.css,
                 fontSize,
-                style: { cursor: 'pointer', userSelect: 'none' },
-                onClick: (e) => { e.stopPropagation(); removeAnnotation(i); },
+                style: {
+                  cursor: readOnly ? 'default' : 'pointer',
+                  userSelect: 'none',
+                  pointerEvents: readOnly ? 'none' : 'auto',
+                },
+                ...(readOnly ? {} : { onClick: (e) => { e.stopPropagation(); removeAnnotation(i); } }),
               },
               lines.map((line, idx) => React.createElement('tspan', {
                 key: `${i}-${idx}`,
@@ -695,8 +920,23 @@ export const PdfViewer = ({
               y2: ann.y2,
               stroke: 'rgba(220, 38, 38, 0.95)',
               strokeWidth: 2,
-              style: { cursor: 'pointer' },
-              onClick: (e) => { e.stopPropagation(); removeAnnotation(i); },
+              style: { cursor: readOnly ? 'default' : 'pointer', pointerEvents: readOnly ? 'none' : 'auto' },
+              ...(readOnly ? {} : { onClick: (e) => { e.stopPropagation(); removeAnnotation(i); } }),
+            });
+          }
+          if (ann.type === 'draw') {
+            const pts = Array.isArray(ann.points) ? ann.points : [];
+            if (pts.length < 2) return null;
+            return React.createElement('polyline', {
+              key: i,
+              points: pts.map((p) => `${p.x},${p.y}`).join(' '),
+              fill: 'none',
+              stroke: 'rgba(220, 38, 38, 0.95)',
+              strokeWidth: 2,
+              strokeLinecap: 'round',
+              strokeLinejoin: 'round',
+              style: { cursor: readOnly ? 'default' : 'pointer', pointerEvents: readOnly ? 'none' : 'auto' },
+              ...(readOnly ? {} : { onClick: (e) => { e.stopPropagation(); removeAnnotation(i); } }),
             });
           }
           return React.createElement('rect', {
@@ -708,8 +948,8 @@ export const PdfViewer = ({
             fill: 'rgba(255, 230, 0, 0.35)',
             stroke: 'rgba(200, 160, 0, 0.7)',
             strokeWidth: 1,
-            style: { cursor: 'pointer' },
-            onClick: (e) => { e.stopPropagation(); removeAnnotation(i); },
+            style: { cursor: readOnly ? 'default' : 'pointer', pointerEvents: readOnly ? 'none' : 'auto' },
+            ...(readOnly ? {} : { onClick: (e) => { e.stopPropagation(); removeAnnotation(i); } }),
           });
         }),
         dragRect &&
@@ -727,7 +967,30 @@ export const PdfViewer = ({
           })
       );
       const children = [svgEl];
-      if (lineDraft && lineDraft.pageIndex === pageIndex) {
+      if (!readOnly && strokeDraft && strokeDraft.pageIndex === pageIndex && strokeDraft.points.length > 1) {
+        children.push(
+          React.createElement('svg', {
+            key: 'stroke-draft',
+            style: {
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              pointerEvents: 'none',
+            },
+          },
+          React.createElement('polyline', {
+            points: strokeDraft.points.map((p) => `${p.x},${p.y}`).join(' '),
+            fill: 'none',
+            stroke: 'rgba(220, 38, 38, 0.75)',
+            strokeWidth: 2,
+            strokeLinecap: 'round',
+            strokeLinejoin: 'round',
+          }))
+        );
+      }
+      if (!readOnly && lineDraft && lineDraft.pageIndex === pageIndex) {
         children.push(
           React.createElement('svg', {
             key: 'line-draft',
@@ -745,13 +1008,13 @@ export const PdfViewer = ({
             y1: lineDraft.startY,
             x2: lineDraft.curX,
             y2: lineDraft.curY,
-            stroke: 'rgba(220, 38, 38, 0.75)',
+            stroke: 'rgba(220, 38, 38, 0.8)',
             strokeWidth: 2,
             strokeDasharray: '6 3',
           }))
         );
       }
-      if (textDraft && textDraft.pageIndex === pageIndex) {
+      if (!readOnly && textDraft && textDraft.pageIndex === pageIndex) {
         children.push(
           React.createElement(
             'div',
@@ -951,6 +1214,12 @@ export const PdfViewer = ({
         tool === 'text' ? '#111' : '#e5e7eb',
       ),
       panelBtn(
+        tool === 'draw' ? '✎ Draw ON' : '✎ Draw',
+        () => setTool((t) => (t === 'draw' ? 'none' : 'draw')),
+        tool === 'draw' ? '#fca5a5' : 'rgba(75,85,99,1)',
+        tool === 'draw' ? '#111' : '#e5e7eb',
+      ),
+      panelBtn(
         tool === 'line' ? '/ Line ON' : '/ Line',
         () => setTool((t) => (t === 'line' ? 'none' : 'line')),
         tool === 'line' ? '#fca5a5' : 'rgba(75,85,99,1)',
@@ -1006,15 +1275,30 @@ export const PdfViewer = ({
           )
         ),
       ),
-      annotations.length > 0 && panelBtn(
+      panelBtn(
         'Clear All',
-        () => { setAnnotations([]); annotationsRef.current = []; setTextDraft(null); setLineDraft(null); },
+        () => {
+          setAnnotations([]);
+          annotationsRef.current = [];
+          setTextDraft(null);
+          setStrokeDraft(null);
+          strokeDraftRef.current = null;
+          setLineDraft(null);
+          lineDraftRef.current = null;
+          performSave([], false);
+        },
         'rgba(75,85,99,1)', '#e5e7eb',
       ),
-      annotations.length > 0 && panelBtn(
-        saving ? 'Saving…' : 'Save',
+      panelBtn(
+        saving ? 'Saving…' : 'Save Annotations',
         () => performSave(annotations),
         saving ? 'rgba(37,99,235,0.5)' : 'rgba(37,99,235,1)', '#fff',
+        saving,
+      ),
+      annotations.length > 0 && panelBtn(
+        saving ? 'Export…' : 'Export annotated PDF',
+        () => exportFlattenedPdf(),
+        'rgba(55,65,81,1)', '#e5e7eb',
         saving,
       ),
       autoSaveMsg && React.createElement(
@@ -1022,6 +1306,30 @@ export const PdfViewer = ({
         { style: { fontSize: 11, color: 'rgba(74,222,128,1)', paddingLeft: 2 } },
         autoSaveMsg,
       ),
+    ),
+
+    readOnly && annotations.length > 0 && React.createElement(
+      'button',
+      {
+        type: 'button',
+        style: {
+          position: 'absolute',
+          right: 12,
+          top: 12,
+          zIndex: 40,
+          padding: '6px 10px',
+          borderRadius: 8,
+          border: 'none',
+          background: 'rgba(55,65,81,0.95)',
+          color: '#e5e7eb',
+          fontSize: 12,
+          cursor: saving ? 'wait' : 'pointer',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
+        },
+        disabled: saving,
+        onClick: () => exportFlattenedPdf(),
+      },
+      saving ? 'Export…' : 'Export PDF',
     ),
 
     // SVG annotation overlays (portals into each page wrapper DOM node)

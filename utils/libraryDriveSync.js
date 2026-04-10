@@ -27,6 +27,9 @@ export async function runOwnerSyncPipeline({
   getNotes,
   getChannelByDriveId,
   upsertDriveChannel,
+  getPdfAnnotationSidecar,
+  setPdfAnnotationDriveSync,
+  upsertDrivePdfAnnotation,
 }) {
   const backupResult = await backupAllToGDrive({
     accessToken,
@@ -36,6 +39,8 @@ export async function runOwnerSyncPipeline({
     onSetDriveId,
     onSetNoteFolderData,
     onProgress,
+    getPdfAnnotationSidecar,
+    setPdfAnnotationDriveSync,
   });
 
   const syncResult = await syncDriveToLocal({
@@ -53,6 +58,7 @@ export async function runOwnerSyncPipeline({
     getNotes,
     getChannelByDriveId,
     upsertDriveChannel,
+    upsertDrivePdfAnnotation,
     onProgress,
   });
 

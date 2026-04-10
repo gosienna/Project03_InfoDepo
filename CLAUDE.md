@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A client-side media library and reader. Content (books, notes, YouTube links, channels) is imported from local files or Google Drive, stored as blobs in IndexedDB (`InfoDepo` database, schema version 2). Owners can share subsets of their library with other Google accounts via Drive-backed share configs. No backend; everything runs in the browser.
+A client-side media library and reader. Content (books, notes, YouTube links, channels) is imported from local files or Google Drive, stored as blobs in IndexedDB (`InfoDepo` database, schema version 6). Owners can share subsets of their library with other Google accounts via Drive-backed share configs. No backend; everything runs in the browser.
 
 > For detailed documentation see [`documents/`](documents/):
 > - [Architecture](documents/architecture.md)
@@ -19,7 +19,7 @@ A client-side media library and reader. Content (books, notes, YouTube links, ch
 - **React 18.3.1** — functional components, hooks only, no JSX (uses `React.createElement()` throughout)
 - **Vite 6.2.0** — dev server on port 3001
 - **Tailwind CSS** — loaded via CDN in `index.html`
-- **IndexedDB** (`InfoDepo`, version 2) — six stores: `books`, `notes`, `videos`, `images`, `channels`, `shares`
+- **IndexedDB** (`InfoDepo`, version 6) — seven stores: `books`, `notes`, `videos`, `images`, `channels`, `shares`, `pdfAnnotations`
 - **YouTube Data API v3** — channel video listing (reuses `VITE_API_KEY`)
 - **Google OAuth 2.0 + Drive API v3** — folder sync/backup, share permissions, OAuth gate
 - **EPUB.js** — EPUB rendering (CDN)
@@ -128,7 +128,7 @@ The Drive **folder ID** is collected at runtime via `GoogleOAuthGate` and stored
 - **No JSX** — all components use `React.createElement()`, not JSX syntax
 - **CDN-loaded libraries** — EPUB.js, Google APIs, Tailwind, React loaded via CDN in `index.html`
 - **EPUB opens in new tab** — `reader.html?id=X` avoids iframe sandbox restrictions
-- **IndexedDB schema v2** — six stores; `shares` store added in v2 with migration from `localStorage`
+- **IndexedDB schema v6** — seven stores; `pdfAnnotations` for PDF markup sidecars; `shares` added in v2 with migration from `localStorage`
 - **Google Drive scopes** — `drive.file` for owner operations; broader scope if share ACLs require it
 
 ## Testing

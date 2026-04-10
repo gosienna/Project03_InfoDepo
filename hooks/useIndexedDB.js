@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { INFO_DEPO_DB_NAME as DB_NAME, INFO_DEPO_DB_VERSION as DB_VERSION } from '../utils/infodepoDb.js';
 import { normalizeTagsList } from '../utils/tagUtils.js';
 import { parseSharesDriveJsonText, payloadToClientRecord } from '../utils/sharesDriveJson.js';
+import { parsePdfAnnotationSidecarText, pdfAnnotationSidecarNeedsBackup, timeMs as sidecarTimeMs } from '../utils/pdfAnnotationSidecar.js';
 
 const BOOKS_STORE    = 'books';
 const NOTES_STORE    = 'notes';
@@ -10,6 +11,9 @@ const VIDEOS_STORE   = 'videos';
 const IMAGES_STORE   = 'images';
 const CHANNELS_STORE = 'channels';
 const SHARES_STORE   = 'shares';
+const PDF_ANNOTATIONS_STORE = 'pdfAnnotations';
+
+const pdfAnnotationSidecarKey = (itemId, idbStore) => `${idbStore}:${itemId}`;
 
 
 const isYoutubeType = (type) =>
@@ -80,7 +84,17 @@ export const useIndexedDB = () => {
     };
 
     request.onsuccess = (event) => {
-      setDb(event.target.result);
+      const database = event.target.result;
+      if (!database.objectStoreNames.contains(PDF_ANNOTATIONS_STORE)) {
+        console.warn(
+          '[InfoDepo] IndexedDB is missing pdfAnnotations — close other tabs, hard refresh, and ensure the app bundle includes INFO_DEPO_DB_VERSION',
+          DB_VERSION,
+          '(current DB version:',
+          database.version,
+          ')'
+        );
+      }
+      setDb(database);
       setIsInitialized(true);
     };
 
@@ -98,6 +112,14 @@ export const useIndexedDB = () => {
         addStore(IMAGES_STORE,   [{ key: 'noteId',    path: 'noteId',    unique: false }]);
         addStore(CHANNELS_STORE, [{ key: 'channelId', path: 'channelId', unique: true  }]);
         addStore(SHARES_STORE,   [{ key: 'driveFileId', path: 'driveFileId', unique: false }], { keyPath: 'id' });
+      }
+      // Sidecar store (not stored inside PDF blobs). Create on any upgrade if missing — avoids gaps when
+      // oldVersion checks skipped a release (e.g. DB already at v4 without this store).
+      if (!dbInstance.objectStoreNames.contains(PDF_ANNOTATIONS_STORE)) {
+        const s = dbInstance.createObjectStore(PDF_ANNOTATIONS_STORE, { keyPath: 'sidecarKey' });
+        s.createIndex('pdfDriveId', 'pdfDriveId', { unique: false });
+        s.createIndex('annotationDriveId', 'annotationDriveId', { unique: false });
+        s.createIndex('itemId', 'itemId', { unique: false });
       }
     };
   }, []);
@@ -591,11 +613,20 @@ export const useIndexedDB = () => {
   const deleteItem = useCallback((id, type) => {
     if (!db) return Promise.resolve();
     const store = storeForType(type);
+    const isPdf = String(type || '').trim() === 'application/pdf';
     return deleteImagesForNote(id).then(() => new Promise((resolve, reject) => {
       const tx = db.transaction(store, 'readwrite');
       const deleteRequest = tx.objectStore(store).delete(id);
       deleteRequest.onsuccess = () => {
         loadItems('deleteItem');
+        if (isPdf) {
+          try {
+            const tx2 = db.transaction(PDF_ANNOTATIONS_STORE, 'readwrite');
+            tx2.objectStore(PDF_ANNOTATIONS_STORE).delete(pdfAnnotationSidecarKey(id, store));
+          } catch {
+            /* store may not exist on very old DB */
+          }
+        }
         resolve();
       };
       deleteRequest.onerror   = (e) => { console.error('Error deleting item:', e.target.error); reject(e.target.error); };
@@ -988,15 +1019,20 @@ export const useIndexedDB = () => {
             tryStore(index + 1).then(resolve).catch(reject);
             return;
           }
-          const putReq = os.put({ ...existing, readingPosition });
+          let nextReadingPosition = readingPosition;
+          if (readingPosition && readingPosition.kind === 'pdf' && readingPosition.pdfAnnotations != null) {
+            const { pdfAnnotations: _legacyAnn, ...rest } = readingPosition;
+            nextReadingPosition = rest;
+          }
+          const putReq = os.put({ ...existing, readingPosition: nextReadingPosition });
           putReq.onsuccess = () => {
             if (targetStore === CHANNELS_STORE) {
               setChannels((prev) =>
-                prev.map((rec) => (rec.id === id ? { ...rec, readingPosition } : rec))
+                prev.map((rec) => (rec.id === id ? { ...rec, readingPosition: nextReadingPosition } : rec))
               );
             } else if (targetStore !== IMAGES_STORE) {
               setItems((prev) =>
-                prev.map((rec) => (rec.id === id ? { ...rec, readingPosition } : rec))
+                prev.map((rec) => (rec.id === id ? { ...rec, readingPosition: nextReadingPosition } : rec))
               );
             }
             resolve();
@@ -1007,6 +1043,165 @@ export const useIndexedDB = () => {
       });
 
     return tryStore(0);
+  }, [db]);
+
+  const getPdfAnnotationSidecar = useCallback((itemId, idbStore) => {
+    if (!db || itemId == null || !idbStore) return Promise.resolve(null);
+    const sidecarKey = pdfAnnotationSidecarKey(itemId, idbStore);
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(PDF_ANNOTATIONS_STORE, 'readonly'); }
+      catch (err) { resolve(null); return; }
+      const req = tx.objectStore(PDF_ANNOTATIONS_STORE).get(sidecarKey);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  }, [db]);
+
+  const putPdfAnnotationsForItem = useCallback((itemId, idbStore, annotations, pdfDriveId = '') => {
+    if (!db || itemId == null || !idbStore) return Promise.reject(new Error('Database not initialized'));
+    const sidecarKey = pdfAnnotationSidecarKey(itemId, idbStore);
+    const now = new Date();
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(PDF_ANNOTATIONS_STORE, 'readwrite'); }
+      catch (err) { reject(err); return; }
+      const os = tx.objectStore(PDF_ANNOTATIONS_STORE);
+      const g = os.get(sidecarKey);
+      g.onsuccess = () => {
+        const prev = g.result;
+        const pdfD = String(pdfDriveId || '').trim() || (prev && String(prev.pdfDriveId || '').trim()) || '';
+        const rec = {
+          sidecarKey,
+          itemId,
+          idbStore,
+          pdfDriveId: pdfD,
+          annotations: Array.isArray(annotations) ? annotations : [],
+          version: 1,
+          annotationDriveId: prev?.annotationDriveId || '',
+          modifiedTime: prev?.modifiedTime || '',
+          localModifiedAt: now,
+        };
+        const p = os.put(rec);
+        p.onsuccess = () => resolve();
+        p.onerror = () => reject(p.error);
+      };
+      g.onerror = () => reject(g.error);
+    });
+  }, [db]);
+
+  const setPdfAnnotationDriveSync = useCallback((itemId, idbStore, { annotationDriveId, modifiedTime, pdfDriveId } = {}) => {
+    if (!db || itemId == null || !idbStore) return Promise.reject(new Error('Database not initialized'));
+    const sidecarKey = pdfAnnotationSidecarKey(itemId, idbStore);
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(PDF_ANNOTATIONS_STORE, 'readwrite'); }
+      catch (err) { reject(err); return; }
+      const os = tx.objectStore(PDF_ANNOTATIONS_STORE);
+      const g = os.get(sidecarKey);
+      g.onsuccess = () => {
+        const prev = g.result || {
+          sidecarKey,
+          itemId,
+          idbStore,
+          pdfDriveId: '',
+          annotations: [],
+          version: 1,
+          annotationDriveId: '',
+          modifiedTime: '',
+          localModifiedAt: new Date(),
+        };
+        const rec = { ...prev };
+        if (pdfDriveId != null && String(pdfDriveId).trim() !== '') {
+          rec.pdfDriveId = String(pdfDriveId).trim();
+        }
+        if (annotationDriveId != null && String(annotationDriveId).trim() !== '') {
+          rec.annotationDriveId = String(annotationDriveId).trim();
+        }
+        if (modifiedTime != null && String(modifiedTime).trim() !== '') {
+          rec.modifiedTime = modifiedTime;
+          rec.localModifiedAt = new Date(modifiedTime);
+        }
+        const p = os.put(rec);
+        p.onsuccess = () => resolve();
+        p.onerror = () => reject(p.error);
+      };
+      g.onerror = () => reject(g.error);
+    });
+  }, [db]);
+
+  const upsertDrivePdfAnnotation = useCallback((driveFile, text) => {
+    if (!db) return Promise.resolve('skipped');
+    const payload = parsePdfAnnotationSidecarText(text);
+    if (!payload) return Promise.resolve('skipped');
+
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction([BOOKS_STORE, NOTES_STORE], 'readonly'); }
+      catch (err) { resolve('skipped'); return; }
+
+      const findPdfRow = (storeName) =>
+        new Promise((res, rej) => {
+          const ix = tx.objectStore(storeName).index('driveId');
+          const r = ix.getAll(payload.pdfDriveId);
+          r.onsuccess = () => {
+            const rows = r.result || [];
+            res(rows.find((row) => row && row.type === 'application/pdf') || null);
+          };
+          r.onerror = () => rej(r.error);
+        });
+
+      Promise.all([findPdfRow(BOOKS_STORE), findPdfRow(NOTES_STORE)])
+        .then(([fromBooks, fromNotes]) => {
+          const book = fromBooks || fromNotes;
+          const idbStore = fromBooks ? BOOKS_STORE : NOTES_STORE;
+          if (!book) {
+            resolve('skipped');
+            return;
+          }
+          const sk = pdfAnnotationSidecarKey(book.id, idbStore);
+          let tw;
+          try { tw = db.transaction(PDF_ANNOTATIONS_STORE, 'readwrite'); }
+          catch (e) { resolve('skipped'); return; }
+          const os = tw.objectStore(PDF_ANNOTATIONS_STORE);
+          const g = os.get(sk);
+          g.onsuccess = () => {
+            const existing = g.result;
+            if (
+              existing &&
+              sidecarTimeMs(existing.localModifiedAt) != null &&
+              sidecarTimeMs(existing.modifiedTime) != null &&
+              sidecarTimeMs(existing.localModifiedAt) > sidecarTimeMs(existing.modifiedTime)
+            ) {
+              resolve('skipped');
+              return;
+            }
+            const driveNewer =
+              !existing?.modifiedTime ||
+              new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime);
+            if (existing && !driveNewer) {
+              resolve('skipped');
+              return;
+            }
+            const rec = {
+              sidecarKey: sk,
+              itemId: book.id,
+              idbStore,
+              pdfDriveId: payload.pdfDriveId,
+              annotations: Array.isArray(payload.annotations) ? payload.annotations : [],
+              version: payload.version || 1,
+              annotationDriveId: driveFile.driveId,
+              modifiedTime: driveFile.modifiedTime,
+              localModifiedAt: new Date(driveFile.modifiedTime),
+            };
+            const p = os.put(rec);
+            p.onsuccess = () => resolve(existing ? 'updated' : 'added');
+            p.onerror = () => reject(p.error);
+          };
+          g.onerror = () => reject(g.error);
+        })
+        .catch(reject);
+    });
   }, [db]);
 
   return {
@@ -1022,6 +1217,10 @@ export const useIndexedDB = () => {
     setRecordTags,
     renameItem,
     setItemReadingPosition,
+    getPdfAnnotationSidecar,
+    putPdfAnnotationsForItem,
+    setPdfAnnotationDriveSync,
+    upsertDrivePdfAnnotation,
     getMergedLibraryItems,
     loadItems, loadChannels, loadShares,
     getSharesList,

@@ -1,6 +1,12 @@
 import { SHARE_MANIFEST_NAME } from './shareManifest.js';
 import { fetchGoogleApisGet } from './googleApisFetch.js';
 import { isShareDriveJsonFilename } from './sharesDriveJson.js';
+import {
+  isPdfAnnotationSidecarFilename,
+  pdfAnnotationSidecarFileName,
+  serializePdfAnnotationSidecar,
+  pdfAnnotationSidecarNeedsBackup,
+} from './pdfAnnotationSidecar.js';
 
 export const CHANNEL_JSON_MARKER = 'infodepo-channel';
 
@@ -45,6 +51,7 @@ export async function syncDriveToLocal({
   getNotes,
   getChannelByDriveId,
   upsertDriveChannel,
+  upsertDrivePdfAnnotation,
   onProgress,
   allowedDriveIds,
 }) {
@@ -160,6 +167,32 @@ export async function syncDriveToLocal({
 
   // Phase 1: sync content files (books, notes, videos)
   for (const driveFile of contentFiles) {
+    if (
+      driveFile.mimeType === 'application/json' &&
+      isPdfAnnotationSidecarFilename(driveFile.name) &&
+      upsertDrivePdfAnnotation
+    ) {
+      try {
+        const blobRes = await fetch(
+          `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        if (!blobRes.ok) {
+          counts.skipped++;
+          continue;
+        }
+        const text = await blobRes.text();
+        const annAction = await upsertDrivePdfAnnotation(driveFile, text);
+        if (annAction === 'added') counts.added++;
+        else if (annAction === 'updated') counts.updated++;
+        else counts.skipped++;
+      } catch (e) {
+        console.warn(`PDF annotation sidecar sync failed for ${driveFile.name}:`, e);
+        counts.skipped++;
+      }
+      continue;
+    }
+
     if (
       driveFile.mimeType === 'application/json' &&
       isShareDriveJsonFilename(driveFile.name) &&
@@ -332,6 +365,7 @@ export async function syncSharedFilesByDriveId({
   getImageByName,
   upsertDriveImage,
   upsertDriveChannel,
+  upsertDrivePdfAnnotation,
   onProgress,
 }) {
   const progress = onProgress || (() => {});
@@ -396,6 +430,31 @@ export async function syncSharedFilesByDriveId({
       const shareAction = await upsertDriveShare(driveFile, shareText, { role: 'receiver' });
       if (shareAction === 'added') counts.added++;
       else if (shareAction === 'updated') counts.updated++;
+      else counts.skipped++;
+      continue;
+    }
+
+    const isPdfAnnSidecar =
+      !isImage &&
+      driveFile.mimeType === 'application/json' &&
+      isPdfAnnotationSidecarFilename(driveFile.name) &&
+      upsertDrivePdfAnnotation;
+
+    if (isPdfAnnSidecar) {
+      progress(`Downloading ${driveFile.name}…`);
+      const annBlobRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (!annBlobRes.ok) {
+        console.warn(`[share sync] download failed for ${driveFile.name}:`, annBlobRes.statusText);
+        counts.skipped++;
+        continue;
+      }
+      const annText = await annBlobRes.text();
+      const annAction = await upsertDrivePdfAnnotation(driveFile, annText);
+      if (annAction === 'added') counts.added++;
+      else if (annAction === 'updated') counts.updated++;
       else counts.skipped++;
       continue;
     }
@@ -532,6 +591,8 @@ export async function backupAllToGDrive({
   onSetDriveId,
   onSetNoteFolderData,
   onProgress,
+  getPdfAnnotationSidecar,
+  setPdfAnnotationDriveSync,
 }) {
   const progress = onProgress || (() => {});
   let backed = 0;
@@ -683,10 +744,71 @@ export async function backupAllToGDrive({
         }
         await onSetDriveId(item.id, item.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
         backed++;
+        if (item.type === 'application/pdf' && setPdfAnnotationDriveSync) {
+          try {
+            await setPdfAnnotationDriveSync(item.id, item.idbStore, {
+              pdfDriveId: driveFile.id,
+            });
+          } catch (e) {
+            console.warn(`[backup] pdf sidecar pdfDriveId link failed for "${item.name}":`, e?.message);
+          }
+        }
       }
     } catch (err) {
       console.warn(`Backup failed for "${item.name}":`, err.message);
       failed++;
+    }
+  }
+
+  // PDF annotation sidecars: upload when annotations changed even if PDF blob was not dirty.
+  if (getPdfAnnotationSidecar && setPdfAnnotationDriveSync) {
+    for (const item of itemsList) {
+      if (item.type !== 'application/pdf' || !item.data) continue;
+      const pdfDid = String(item.driveId || '').trim();
+      if (!pdfDid) continue;
+      let sc;
+      try {
+        sc = await getPdfAnnotationSidecar(item.id, item.idbStore);
+      } catch {
+        continue;
+      }
+      if (!sc || !pdfAnnotationSidecarNeedsBackup(sc)) continue;
+      const annName = pdfAnnotationSidecarFileName(item.name);
+      const payload = serializePdfAnnotationSidecar({
+        pdfDriveId: pdfDid,
+        itemId: item.id,
+        idbStore: item.idbStore,
+        annotations: sc.annotations || [],
+      });
+      const blob = new Blob([payload], { type: 'application/json' });
+      const annDid = String(sc.annotationDriveId || '').trim();
+      progress(`Backing up annotations for "${item.name}"...`);
+      try {
+        let annDriveFile;
+        if (annDid) {
+          try {
+            annDriveFile = await patchMultipart(annDid, blob, annName, 'application/json');
+          } catch (patchErr) {
+            if (patchErr.status === 404 || patchErr.status === 403) {
+              console.warn(`PATCH ${patchErr.status} for "${annName}", uploading as new file.`);
+              annDriveFile = await postMultipart(blob, annName, 'application/json');
+            } else {
+              throw patchErr;
+            }
+          }
+        } else {
+          annDriveFile = await postMultipart(blob, annName, 'application/json');
+        }
+        await setPdfAnnotationDriveSync(item.id, item.idbStore, {
+          annotationDriveId: annDriveFile.id,
+          modifiedTime: annDriveFile.modifiedTime,
+          pdfDriveId: pdfDid,
+        });
+        backed++;
+      } catch (err) {
+        console.warn(`Annotation backup failed for "${item.name}":`, err.message);
+        failed++;
+      }
     }
   }
 

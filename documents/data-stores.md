@@ -1,6 +1,6 @@
 # Data Stores
 
-InfoDepo uses **six** IndexedDB object stores inside the `InfoDepo` database (schema version: **2**).
+InfoDepo uses **seven** IndexedDB object stores inside the `InfoDepo` database (schema version: **6**).
 
 ---
 
@@ -14,10 +14,13 @@ InfoDepo uses **six** IndexedDB object stores inside the `InfoDepo` database (sc
 | `images`   | Image attachments for Markdown notes  | Yes          |
 | `channels` | YouTube channel metadata + video list | No           |
 | `shares`   | Drive share configs (JSON shape, string `id` key) | N/A (metadata only) |
+| `pdfAnnotations` | Editable PDF annotation layers (per item, key `sidecarKey` = `${idbStore}:${itemId}`) | Yes — sidecar JSON on Drive (`*.infodepo-annotations.json`) |
 
 The hook `useIndexedDB` (`hooks/useIndexedDB.js`) manages all stores and exposes a unified `items` array (books + notes + videos combined, sorted newest-first by `modifiedTime`), a `channels` array, and a **`shares` array** (rows from the `shares` store).
 
-**Clear library:** `clearAll()` wipes all six object stores.
+**Clear library:** `clearAll()` wipes the main six content stores (see `clearAll` implementation); the `pdfAnnotations` store is cleared when the database is reset.
+
+PDF annotations are persisted with `getPdfAnnotationSidecar`, `putPdfAnnotationsForItem`, `setPdfAnnotationDriveSync`, and merged from Drive via `upsertDrivePdfAnnotation` during sync.
 
 Upgrading from DB v1: existing `localStorage` key `infodepo_shares_v1` is migrated into `shares` on first open and then removed.
 
@@ -252,6 +255,6 @@ See [google-drive-integration.md](google-drive-integration.md) for the full back
 
 ## Schema Version
 
-Current version: **2** — adds the `shares` store (`keyPath: 'id'`, index `driveFileId`). Upgrading from v1 runs a one-time migration: rows from `localStorage` key `infodepo_shares_v1` are copied into `shares`, then that key is removed.
+Current version: **6** — upgrades create the `pdfAnnotations` store whenever it is missing. Version 6 specifically re-runs migration for databases that reached v5 without that store (same requested version skips `onupgradeneeded`). Version **2** introduced the `shares` store (`keyPath: 'id'`, index `driveFileId`). Upgrading from v1 runs a one-time migration: rows from `localStorage` key `infodepo_shares_v1` are copied into `shares`, then that key is removed.
 
 To reset the database (e.g. after a schema change during development): DevTools → Application → Storage → Clear site data, then reload.

@@ -54,6 +54,9 @@ export const Library = ({
   getBookByDriveId, getBookByName, upsertDriveBook,
   getShareByDriveFileId, upsertDriveShare,
   getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
+  getPdfAnnotationSidecar,
+  setPdfAnnotationDriveSync,
+  upsertDrivePdfAnnotation,
   setRecordTags,
   renameItem,
   getMergedLibraryItems,
@@ -293,6 +296,7 @@ export const Library = ({
             getChannelByDriveId,
             upsertDriveChannel: (driveFile, channelData) =>
               upsertDriveChannel(driveFile, channelData, { silent: true }),
+            upsertDrivePdfAnnotation,
             onProgress: setSyncProgress,
           });
           loadItems('linkShare/syncDone');
@@ -442,6 +446,7 @@ export const Library = ({
             getChannelByDriveId,
             upsertDriveChannel: (driveFile, channelData) =>
               upsertDriveChannel(driveFile, channelData, { silent: true }),
+            upsertDrivePdfAnnotation,
             onProgress: setSyncProgress,
           });
           loadItems('openShare/syncDone');
@@ -756,6 +761,9 @@ export const Library = ({
         getChannelByDriveId,
         upsertDriveChannel: (driveFile, channelData) =>
           upsertDriveChannel(driveFile, channelData, { silent: true }),
+        getPdfAnnotationSidecar,
+        setPdfAnnotationDriveSync,
+        upsertDrivePdfAnnotation,
       });
       const ownerChanged = combined.backed > 0 || combined.added > 0 || combined.updated > 0;
       console.log('[InfoDepo] ownerSync result:', combined, 'reloading:', ownerChanged);
@@ -847,6 +855,7 @@ export const Library = ({
             getChannelByDriveId,
             upsertDriveChannel: (driveFile, channelData) =>
               upsertDriveChannel(driveFile, channelData, { silent: true }),
+            upsertDrivePdfAnnotation,
             onProgress: setSyncProgress,
           });
           added += result.added || 0;

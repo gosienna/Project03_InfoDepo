@@ -98,6 +98,6 @@ Share (receiver)
 | Framework | React 18.3.1 (no JSX — uses `React.createElement()`) |
 | Build | Vite 6.2.0 |
 | Styling | Tailwind CSS (CDN) |
-| Storage | IndexedDB (`InfoDepo` database, schema version 2, stores: `books`, `notes`, `videos`, `images`, `channels`, `shares`) |
+| Storage | IndexedDB (`InfoDepo` database, schema version 6, stores: `books`, `notes`, `videos`, `images`, `channels`, `shares`, `pdfAnnotations`) |
 | EPUB rendering | EPUB.js (CDN) |
 | Auth (dev only) | Google OAuth 2.0 via Google Identity Services |
