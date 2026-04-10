@@ -754,9 +754,13 @@ export const Library = ({
         upsertDriveChannel: (driveFile, channelData) =>
           upsertDriveChannel(driveFile, channelData, { silent: true }),
       });
-      loadItems('ownerSync/done');
-      loadChannels('ownerSync/done');
-      loadShares('ownerSync/done');
+      const ownerChanged = combined.backed > 0 || combined.added > 0 || combined.updated > 0;
+      console.log('[InfoDepo] ownerSync result:', combined, 'reloading:', ownerChanged);
+      if (ownerChanged) {
+        loadItems('ownerSync/done');
+        loadChannels('ownerSync/done');
+        loadShares('ownerSync/done');
+      }
 
       setSyncResult(combined);
     } catch (err) {
@@ -847,9 +851,13 @@ export const Library = ({
         }
 
         if (!cancelled) {
-          loadItems('receiverStartupSync/done');
-          loadChannels('receiverStartupSync/done');
-          loadShares('receiverStartupSync/done');
+          const receiverChanged = added > 0 || updated > 0;
+          console.log('[InfoDepo] receiverStartupSync result:', { added, updated, skipped }, 'reloading:', receiverChanged);
+          if (receiverChanged) {
+            loadItems('receiverStartupSync/done');
+            loadChannels('receiverStartupSync/done');
+            loadShares('receiverStartupSync/done');
+          }
           setSyncResult({ added, updated, skipped, backed: 0, backupFailed: 0 });
         }
       } catch (err) {
