@@ -104,8 +104,8 @@ export const useIndexedDB = () => {
 
   useEffect(() => { initDB(); }, [initDB]);
 
-  const loadItems = useCallback(() => {
-    console.log('[InfoDepo] loadItems called', new Error().stack);
+  const loadItems = useCallback((caller = 'unknown') => {
+    console.log('[InfoDepo] loadItems called by:', caller);
     if (!db) return;
     let tx;
     try {
@@ -154,8 +154,8 @@ export const useIndexedDB = () => {
     videosReq.onerror   = (e) => { console.error('Error loading videos:', e.target.error); tryCombine(); };
   }, [db]);
 
-  const loadChannels = useCallback(() => {
-    console.log('[InfoDepo] loadChannels called', new Error().stack);
+  const loadChannels = useCallback((caller = 'unknown') => {
+    console.log('[InfoDepo] loadChannels called by:', caller);
     if (!db) return;
     let tx;
     try { tx = db.transaction(CHANNELS_STORE, 'readonly'); }
@@ -169,8 +169,8 @@ export const useIndexedDB = () => {
     req.onerror = () => setChannels([]);
   }, [db]);
 
-  const loadShares = useCallback(() => {
-    console.log('[InfoDepo] loadShares called', new Error().stack);
+  const loadShares = useCallback((caller = 'unknown') => {
+    console.log('[InfoDepo] loadShares called by:', caller);
     if (!db) return;
     let tx;
     try {
@@ -229,9 +229,9 @@ export const useIndexedDB = () => {
 
   useEffect(() => {
     if (isInitialized) {
-      loadItems();
-      loadChannels();
-      loadShares();
+      loadItems('useEffect[isInitialized]');
+      loadChannels('useEffect[isInitialized]');
+      loadShares('useEffect[isInitialized]');
     }
   }, [isInitialized, loadItems, loadChannels, loadShares]);
 
@@ -284,7 +284,7 @@ export const useIndexedDB = () => {
         const tx = db.transaction(SHARES_STORE, 'readwrite');
         const req = tx.objectStore(SHARES_STORE).put(record);
         req.onsuccess = () => {
-          loadShares();
+          loadShares('addShare');
           resolve();
         };
         req.onerror = () => reject(req.error);
@@ -308,7 +308,7 @@ export const useIndexedDB = () => {
           }
           const p = os.put({ ...existing, ...patch });
           p.onsuccess = () => {
-            loadShares();
+            loadShares('updateShare');
             resolve();
           };
           p.onerror = () => reject(p.error);
@@ -326,7 +326,7 @@ export const useIndexedDB = () => {
         const tx = db.transaction(SHARES_STORE, 'readwrite');
         const req = tx.objectStore(SHARES_STORE).delete(id);
         req.onsuccess = () => {
-          loadShares();
+          loadShares('deleteShare');
           resolve();
         };
         req.onerror = () => reject(req.error);
@@ -367,7 +367,7 @@ export const useIndexedDB = () => {
         tags: [],
       };
       const addRequest = tx.objectStore(store).add(record);
-      addRequest.onsuccess = () => { loadItems(); resolve(); };
+      addRequest.onsuccess = () => { loadItems('addItem'); resolve(); };
       addRequest.onerror   = (e) => { console.error('Error adding item:', store, e.target.error); reject(e.target.error); };
     });
   }, [db, loadItems]);
@@ -403,7 +403,7 @@ export const useIndexedDB = () => {
             localModifiedAt: new Date(),
             tags: Array.isArray(existing.tags) ? existing.tags : [],
           });
-          putRequest.onsuccess = () => { loadItems(); resolve(); };
+          putRequest.onsuccess = () => { loadItems('updateItem'); resolve(); };
           putRequest.onerror   = () => reject(putRequest.error);
         };
         getRequest.onerror = () => reject(getRequest.error);
@@ -555,7 +555,7 @@ export const useIndexedDB = () => {
           return match ? { ...a, driveId: match.driveId } : a;
         }) : [];
         const putReq = os.put({ ...note, driveFolderId: folderId, assets });
-        putReq.onsuccess = () => { if (!silent) loadItems(); resolve(); };
+        putReq.onsuccess = () => { if (!silent) loadItems('setNoteFolderData'); resolve(); };
         putReq.onerror   = () => reject(putReq.error);
       };
       req.onerror = () => reject(req.error);
@@ -595,7 +595,7 @@ export const useIndexedDB = () => {
       const tx = db.transaction(store, 'readwrite');
       const deleteRequest = tx.objectStore(store).delete(id);
       deleteRequest.onsuccess = () => {
-        loadItems();
+        loadItems('deleteItem');
         resolve();
       };
       deleteRequest.onerror   = (e) => { console.error('Error deleting item:', e.target.error); reject(e.target.error); };
@@ -636,7 +636,7 @@ export const useIndexedDB = () => {
             : {}),
         });
         putRequest.onsuccess = () => {
-          if (!silent) { if (storeName === CHANNELS_STORE) loadChannels(); else loadItems(); }
+          if (!silent) { if (storeName === CHANNELS_STORE) loadChannels('setItemDriveId'); else loadItems('setItemDriveId'); }
           resolve();
         };
         putRequest.onerror   = () => reject(putRequest.error);
@@ -724,7 +724,7 @@ export const useIndexedDB = () => {
           ...(Array.isArray(assets) ? { assets } : {}),
         };
         const putRequest = os.put(updated);
-        putRequest.onsuccess = () => { if (!silent) loadItems(); resolve('updated'); };
+        putRequest.onsuccess = () => { if (!silent) loadItems('upsertDriveBook/updated'); resolve('updated'); };
         putRequest.onerror   = (e) => reject(e.target.error);
       } else {
         const mtNew = driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date();
@@ -739,7 +739,7 @@ export const useIndexedDB = () => {
           ...(Array.isArray(assets) ? { assets } : {}),
         };
         const addRequest = os.add(record);
-        addRequest.onsuccess = () => { if (!silent) loadItems(); resolve('added'); };
+        addRequest.onsuccess = () => { if (!silent) loadItems('upsertDriveBook/added'); resolve('added'); };
         addRequest.onerror   = (e) => reject(e.target.error);
       }
     });
@@ -769,7 +769,7 @@ export const useIndexedDB = () => {
             modifiedTime: now,
             localModifiedAt: now,
           });
-          putReq.onsuccess = () => { loadChannels(); resolve('updated'); };
+          putReq.onsuccess = () => { loadChannels('addChannel/updated'); resolve('updated'); };
           putReq.onerror = (e) => reject(e.target.error);
           return;
         }
@@ -781,7 +781,7 @@ export const useIndexedDB = () => {
           modifiedTime: now,
           localModifiedAt: now,
         });
-        addReq.onsuccess = () => { loadChannels(); resolve('added'); };
+        addReq.onsuccess = () => { loadChannels('addChannel/added'); resolve('added'); };
         addReq.onerror = (e) => reject(e.target.error);
       };
       existingByChannelReq.onerror = (e) => reject(e.target.error);
@@ -794,7 +794,7 @@ export const useIndexedDB = () => {
       const tx = db.transaction(CHANNELS_STORE, 'readwrite');
       const req = tx.objectStore(CHANNELS_STORE).delete(id);
       req.onsuccess = () => {
-        loadChannels();
+        loadChannels('deleteChannel');
         resolve();
       };
       req.onerror = (e) => reject(e.target.error);
@@ -811,7 +811,7 @@ export const useIndexedDB = () => {
         const existing = getReq.result;
         if (!existing) { reject(new Error('Channel not found')); return; }
         const putReq = os.put({ ...existing, ...data, localModifiedAt: new Date() });
-        putReq.onsuccess = () => { loadChannels(); resolve(); };
+        putReq.onsuccess = () => { loadChannels('updateChannel'); resolve(); };
         putReq.onerror = (e) => reject(e.target.error);
       };
       getReq.onerror = (e) => reject(e.target.error);
@@ -858,7 +858,7 @@ export const useIndexedDB = () => {
           modifiedTime: mtCh,
           localModifiedAt: mtCh,
         });
-        putReq.onsuccess = () => { if (!silent) loadChannels(); resolve('updated'); };
+        putReq.onsuccess = () => { if (!silent) loadChannels('upsertDriveChannel/updated'); resolve('updated'); };
         putReq.onerror = (e) => reject(e.target.error);
       } else {
         const mtAdd = new Date(driveFile.modifiedTime);
@@ -869,7 +869,7 @@ export const useIndexedDB = () => {
           modifiedTime: mtAdd,
           localModifiedAt: mtAdd,
         });
-        addReq.onsuccess = () => { if (!silent) loadChannels(); resolve('added'); };
+        addReq.onsuccess = () => { if (!silent) loadChannels('upsertDriveChannel/added'); resolve('added'); };
         addReq.onerror = (e) => reject(e.target.error);
       }
     });
@@ -904,7 +904,7 @@ export const useIndexedDB = () => {
         const tx = db.transaction(SHARES_STORE, 'readwrite');
         const putReq = tx.objectStore(SHARES_STORE).put(rec);
         putReq.onsuccess = () => {
-          if (!silent) loadShares();
+          if (!silent) loadShares('upsertDriveShare');
           resolve(existing ? 'updated' : 'added');
         };
         putReq.onerror = () => reject(putReq.error);
@@ -926,8 +926,8 @@ export const useIndexedDB = () => {
         if (!existing) { reject(new Error('Record not found')); return; }
         const putReq = os.put({ ...existing, tags: normalized, localModifiedAt: new Date() });
         putReq.onsuccess = () => {
-          if (storeName === CHANNELS_STORE) loadChannels();
-          else if (storeName !== IMAGES_STORE) loadItems();
+          if (storeName === CHANNELS_STORE) loadChannels('setRecordTags');
+          else if (storeName !== IMAGES_STORE) loadItems('setRecordTags');
           resolve();
         };
         putReq.onerror = () => reject(putReq.error);
@@ -950,8 +950,8 @@ export const useIndexedDB = () => {
         if (!existing) { reject(new Error('Record not found')); return; }
         const putReq = os.put({ ...existing, name, localModifiedAt: new Date() });
         putReq.onsuccess = () => {
-          if (storeName === CHANNELS_STORE) loadChannels();
-          else if (storeName !== IMAGES_STORE) loadItems();
+          if (storeName === CHANNELS_STORE) loadChannels('renameItem');
+          else if (storeName !== IMAGES_STORE) loadItems('renameItem');
           resolve();
         };
         putReq.onerror = () => reject(putReq.error);

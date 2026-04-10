@@ -294,9 +294,9 @@ export const Library = ({
               upsertDriveChannel(driveFile, channelData, { silent: true }),
             onProgress: setSyncProgress,
           });
-          loadItems();
-          loadChannels();
-          loadShares();
+          loadItems('linkShare/syncDone');
+          loadChannels('linkShare/syncDone');
+          loadShares('linkShare/syncDone');
           setSyncResult({
             added: result.added,
             updated: result.updated,
@@ -442,9 +442,9 @@ export const Library = ({
               upsertDriveChannel(driveFile, channelData, { silent: true }),
             onProgress: setSyncProgress,
           });
-          loadItems();
-          loadChannels();
-          loadShares();
+          loadItems('openShare/syncDone');
+          loadChannels('openShare/syncDone');
+          loadShares('openShare/syncDone');
           setSyncResult({
             added: result.added,
             updated: result.updated,
@@ -754,9 +754,9 @@ export const Library = ({
         upsertDriveChannel: (driveFile, channelData) =>
           upsertDriveChannel(driveFile, channelData, { silent: true }),
       });
-      loadItems();
-      loadChannels();
-      loadShares();
+      loadItems('ownerSync/done');
+      loadChannels('ownerSync/done');
+      loadShares('ownerSync/done');
 
       setSyncResult(combined);
     } catch (err) {
@@ -847,9 +847,9 @@ export const Library = ({
         }
 
         if (!cancelled) {
-          loadItems();
-          loadChannels();
-          loadShares();
+          loadItems('receiverStartupSync/done');
+          loadChannels('receiverStartupSync/done');
+          loadShares('receiverStartupSync/done');
           setSyncResult({ added, updated, skipped, backed: 0, backupFailed: 0 });
         }
       } catch (err) {
