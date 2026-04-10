@@ -33,6 +33,9 @@ const App = () => {
     addShare,
     updateShare,
     deleteShare,
+    loadItems,
+    loadChannels,
+    loadShares,
   } = useIndexedDB();
   const [googleUserEmail, setGoogleUserEmail] = useState(null);
   const [currentVideo, setCurrentVideo] = useState(null);
@@ -248,6 +251,9 @@ const App = () => {
             deleteShare,
             onGoogleUserEmail: setGoogleUserEmail,
             onDriveCredentialsChanged: recheckDriveOAuthGate,
+            loadItems,
+            loadChannels,
+            loadShares,
           })
         : view === 'channel' && currentChannel
         ? React.createElement(YoutubeChannelViewer, {

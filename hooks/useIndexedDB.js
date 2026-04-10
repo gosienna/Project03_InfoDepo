@@ -538,7 +538,7 @@ export const useIndexedDB = () => {
   }, [db]);
 
   /** Persist the Drive folder ID and per-asset Drive file IDs back onto the note record. */
-  const setNoteFolderData = useCallback((noteId, folderId, assetDriveIds) => {
+  const setNoteFolderData = useCallback((noteId, folderId, assetDriveIds, { silent = false } = {}) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
       const tx = db.transaction(NOTES_STORE, 'readwrite');
@@ -552,7 +552,7 @@ export const useIndexedDB = () => {
           return match ? { ...a, driveId: match.driveId } : a;
         }) : [];
         const putReq = os.put({ ...note, driveFolderId: folderId, assets });
-        putReq.onsuccess = () => { loadItems(); resolve(); };
+        putReq.onsuccess = () => { if (!silent) loadItems(); resolve(); };
         putReq.onerror   = () => reject(putReq.error);
       };
       req.onerror = () => reject(req.error);
@@ -615,6 +615,7 @@ export const useIndexedDB = () => {
    */
   const setItemDriveId = useCallback((id, storeName, driveId, syncMeta = null) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
+    const silent = syncMeta?.silent ?? false;
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(storeName, 'readwrite'); } catch (err) { reject(err); return; }
@@ -632,7 +633,7 @@ export const useIndexedDB = () => {
             : {}),
         });
         putRequest.onsuccess = () => {
-          if (storeName === CHANNELS_STORE) loadChannels(); else loadItems();
+          if (!silent) { if (storeName === CHANNELS_STORE) loadChannels(); else loadItems(); }
           resolve();
         };
         putRequest.onerror   = () => reject(putRequest.error);
@@ -691,7 +692,7 @@ export const useIndexedDB = () => {
 
   // assets (optional): array of { name, data, type, driveId } to embed in the note record.
   // driveFile may carry driveFolderId for note bundles synced from Drive subfolders.
-  const upsertDriveBook = useCallback(async (driveFile, blob, assets) => {
+  const upsertDriveBook = useCallback(async (driveFile, blob, assets, { silent = false } = {}) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     if (!blob) return Promise.resolve('skipped'); // no-blob stubs no longer supported
     let existing = await getBookByDriveId(driveFile.driveId);
@@ -720,7 +721,7 @@ export const useIndexedDB = () => {
           ...(Array.isArray(assets) ? { assets } : {}),
         };
         const putRequest = os.put(updated);
-        putRequest.onsuccess = () => { loadItems(); resolve('updated'); };
+        putRequest.onsuccess = () => { if (!silent) loadItems(); resolve('updated'); };
         putRequest.onerror   = (e) => reject(e.target.error);
       } else {
         const mtNew = driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date();
@@ -735,7 +736,7 @@ export const useIndexedDB = () => {
           ...(Array.isArray(assets) ? { assets } : {}),
         };
         const addRequest = os.add(record);
-        addRequest.onsuccess = () => { loadItems(); resolve('added'); };
+        addRequest.onsuccess = () => { if (!silent) loadItems(); resolve('added'); };
         addRequest.onerror   = (e) => reject(e.target.error);
       }
     });
@@ -824,7 +825,7 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
-  const upsertDriveChannel = useCallback(async (driveFile, channelData) => {
+  const upsertDriveChannel = useCallback(async (driveFile, channelData, { silent = false } = {}) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     let existing = await getChannelByDriveId(driveFile.driveId);
     if (!existing) {
@@ -854,7 +855,7 @@ export const useIndexedDB = () => {
           modifiedTime: mtCh,
           localModifiedAt: mtCh,
         });
-        putReq.onsuccess = () => { loadChannels(); resolve('updated'); };
+        putReq.onsuccess = () => { if (!silent) loadChannels(); resolve('updated'); };
         putReq.onerror = (e) => reject(e.target.error);
       } else {
         const mtAdd = new Date(driveFile.modifiedTime);
@@ -865,7 +866,7 @@ export const useIndexedDB = () => {
           modifiedTime: mtAdd,
           localModifiedAt: mtAdd,
         });
-        addReq.onsuccess = () => { loadChannels(); resolve('added'); };
+        addReq.onsuccess = () => { if (!silent) loadChannels(); resolve('added'); };
         addReq.onerror = (e) => reject(e.target.error);
       }
     });
@@ -895,11 +896,12 @@ export const useIndexedDB = () => {
           : `share-${Date.now()}`);
       const rec = payloadToClientRecord(id, payload, role, driveFile.driveId);
 
+      const silent = options.silent ?? false;
       return new Promise((resolve, reject) => {
         const tx = db.transaction(SHARES_STORE, 'readwrite');
         const putReq = tx.objectStore(SHARES_STORE).put(rec);
         putReq.onsuccess = () => {
-          loadShares();
+          if (!silent) loadShares();
           resolve(existing ? 'updated' : 'added');
         };
         putReq.onerror = () => reject(putReq.error);
@@ -1018,7 +1020,7 @@ export const useIndexedDB = () => {
     renameItem,
     setItemReadingPosition,
     getMergedLibraryItems,
-    loadShares,
+    loadItems, loadChannels, loadShares,
     getSharesList,
     addShare,
     updateShare,

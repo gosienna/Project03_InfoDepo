@@ -63,6 +63,9 @@ export const Library = ({
   deleteShare,
   onGoogleUserEmail,
   onDriveCredentialsChanged,
+  loadItems,
+  loadChannels,
+  loadShares,
 }) => {
   const fileInputRef      = useRef(null);
   const searchInputRef    = useRef(null);
@@ -278,16 +281,22 @@ export const Library = ({
             driveIds,
             getBookByDriveId,
             getBookByName,
-            upsertDriveBook,
+            upsertDriveBook: (driveFile, blob, assets) =>
+              upsertDriveBook(driveFile, blob, assets, { silent: true }),
             getShareByDriveFileId,
-            upsertDriveShare,
+            upsertDriveShare: (driveFile, text, opts = {}) =>
+              upsertDriveShare(driveFile, text, { ...opts, silent: true }),
             getImageByDriveId,
             getImageByName,
             upsertDriveImage,
             getNotes,
-            upsertDriveChannel,
+            upsertDriveChannel: (driveFile, channelData) =>
+              upsertDriveChannel(driveFile, channelData, { silent: true }),
             onProgress: setSyncProgress,
           });
+          loadItems();
+          loadChannels();
+          loadShares();
           setSyncResult({
             added: result.added,
             updated: result.updated,
@@ -420,16 +429,22 @@ export const Library = ({
             driveIds,
             getBookByDriveId,
             getBookByName,
-            upsertDriveBook,
+            upsertDriveBook: (driveFile, blob, assets) =>
+              upsertDriveBook(driveFile, blob, assets, { silent: true }),
             getShareByDriveFileId,
-            upsertDriveShare,
+            upsertDriveShare: (driveFile, text, opts = {}) =>
+              upsertDriveShare(driveFile, text, { ...opts, silent: true }),
             getImageByDriveId,
             getImageByName,
             upsertDriveImage,
             getNotes,
-            upsertDriveChannel,
+            upsertDriveChannel: (driveFile, channelData) =>
+              upsertDriveChannel(driveFile, channelData, { silent: true }),
             onProgress: setSyncProgress,
           });
+          loadItems();
+          loadChannels();
+          loadShares();
           setSyncResult({
             added: result.added,
             updated: result.updated,
@@ -720,20 +735,28 @@ export const Library = ({
         folderId: driveFolderId,
         items,
         channels,
-        onSetDriveId,
-        onSetNoteFolderData,
+        onSetDriveId: (id, storeName, driveId, syncMeta = null) =>
+          onSetDriveId(id, storeName, driveId, { ...(syncMeta || {}), silent: true }),
+        onSetNoteFolderData: (noteId, folderId, assetDriveIds) =>
+          onSetNoteFolderData(noteId, folderId, assetDriveIds, { silent: true }),
         onProgress: setSyncProgress,
         getBookByDriveId,
         getBookByName,
-        upsertDriveBook,
+        upsertDriveBook: (driveFile, blob, assets) =>
+          upsertDriveBook(driveFile, blob, assets, { silent: true }),
         getShareByDriveFileId,
-        upsertDriveShare,
+        upsertDriveShare: (driveFile, text, opts = {}) =>
+          upsertDriveShare(driveFile, text, { ...opts, silent: true }),
         getImageByDriveId,
         getImageByName,
         upsertDriveImage,
         getNotes,
-        upsertDriveChannel,
+        upsertDriveChannel: (driveFile, channelData) =>
+          upsertDriveChannel(driveFile, channelData, { silent: true }),
       });
+      loadItems();
+      loadChannels();
+      loadShares();
 
       setSyncResult(combined);
     } catch (err) {
@@ -805,14 +828,17 @@ export const Library = ({
             driveIds,
             getBookByDriveId,
             getBookByName,
-            upsertDriveBook,
+            upsertDriveBook: (driveFile, blob, assets) =>
+              upsertDriveBook(driveFile, blob, assets, { silent: true }),
             getShareByDriveFileId,
-            upsertDriveShare,
+            upsertDriveShare: (driveFile, text, opts = {}) =>
+              upsertDriveShare(driveFile, text, { ...opts, silent: true }),
             getImageByDriveId,
             getImageByName,
             upsertDriveImage,
             getNotes,
-            upsertDriveChannel,
+            upsertDriveChannel: (driveFile, channelData) =>
+              upsertDriveChannel(driveFile, channelData, { silent: true }),
             onProgress: setSyncProgress,
           });
           added += result.added || 0;
@@ -821,6 +847,9 @@ export const Library = ({
         }
 
         if (!cancelled) {
+          loadItems();
+          loadChannels();
+          loadShares();
           setSyncResult({ added, updated, skipped, backed: 0, backupFailed: 0 });
         }
       } catch (err) {
