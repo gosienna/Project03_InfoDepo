@@ -105,6 +105,7 @@ export const useIndexedDB = () => {
   useEffect(() => { initDB(); }, [initDB]);
 
   const loadItems = useCallback(() => {
+    console.log('[InfoDepo] loadItems called', new Error().stack);
     if (!db) return;
     let tx;
     try {
@@ -154,6 +155,7 @@ export const useIndexedDB = () => {
   }, [db]);
 
   const loadChannels = useCallback(() => {
+    console.log('[InfoDepo] loadChannels called', new Error().stack);
     if (!db) return;
     let tx;
     try { tx = db.transaction(CHANNELS_STORE, 'readonly'); }
@@ -168,6 +170,7 @@ export const useIndexedDB = () => {
   }, [db]);
 
   const loadShares = useCallback(() => {
+    console.log('[InfoDepo] loadShares called', new Error().stack);
     if (!db) return;
     let tx;
     try {
