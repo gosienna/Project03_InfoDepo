@@ -43,6 +43,7 @@ export async function syncDriveToLocal({
   getImageByName,
   upsertDriveImage,
   getNotes,
+  getChannelByDriveId,
   upsertDriveChannel,
   onProgress,
   allowedDriveIds,
@@ -205,6 +206,20 @@ export async function syncDriveToLocal({
       if (!existing.driveId) await upsertDriveBook(driveFile, existing.data);
       counts.skipped++;
       continue;
+    }
+
+    // For JSON files not in books/notes/videos, check the channels store before downloading.
+    // Channel files always show as "no local copy" from getBookByDriveId's perspective.
+    if (!existing && driveFile.mimeType === 'application/json' && getChannelByDriveId) {
+      const existingChannel = await getChannelByDriveId(driveFile.driveId);
+      if (existingChannel) {
+        const chNewer = !existingChannel.modifiedTime ||
+          new Date(driveFile.modifiedTime) > new Date(existingChannel.modifiedTime);
+        if (!chNewer) {
+          counts.skipped++;
+          continue;
+        }
+      }
     }
 
     progress(`Downloading ${driveFile.name}...`);

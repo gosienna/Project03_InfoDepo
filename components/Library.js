@@ -290,6 +290,7 @@ export const Library = ({
             getImageByName,
             upsertDriveImage,
             getNotes,
+            getChannelByDriveId,
             upsertDriveChannel: (driveFile, channelData) =>
               upsertDriveChannel(driveFile, channelData, { silent: true }),
             onProgress: setSyncProgress,
@@ -438,6 +439,7 @@ export const Library = ({
             getImageByName,
             upsertDriveImage,
             getNotes,
+            getChannelByDriveId,
             upsertDriveChannel: (driveFile, channelData) =>
               upsertDriveChannel(driveFile, channelData, { silent: true }),
             onProgress: setSyncProgress,
@@ -751,6 +753,7 @@ export const Library = ({
         getImageByName,
         upsertDriveImage,
         getNotes,
+        getChannelByDriveId,
         upsertDriveChannel: (driveFile, channelData) =>
           upsertDriveChannel(driveFile, channelData, { silent: true }),
       });
@@ -841,6 +844,7 @@ export const Library = ({
             getImageByName,
             upsertDriveImage,
             getNotes,
+            getChannelByDriveId,
             upsertDriveChannel: (driveFile, channelData) =>
               upsertDriveChannel(driveFile, channelData, { silent: true }),
             onProgress: setSyncProgress,

@@ -25,6 +25,7 @@ export async function runOwnerSyncPipeline({
   getImageByName,
   upsertDriveImage,
   getNotes,
+  getChannelByDriveId,
   upsertDriveChannel,
 }) {
   const backupResult = await backupAllToGDrive({
@@ -50,6 +51,7 @@ export async function runOwnerSyncPipeline({
     getImageByName,
     upsertDriveImage,
     getNotes,
+    getChannelByDriveId,
     upsertDriveChannel,
     onProgress,
   });
