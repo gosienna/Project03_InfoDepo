@@ -50,7 +50,7 @@ export const Library = ({
   onSelectItem, onSelectChannel, onAddItem, onDeleteItem, onClearLibrary,
   onSetDriveId, onSetNoteFolderData, onGetAllImages, getImagesForNote,
   onAddChannel, onDeleteChannel,
-  upsertDriveChannel,
+  getChannelByDriveId, upsertDriveChannel,
   getBookByDriveId, getBookByName, upsertDriveBook,
   getShareByDriveFileId, upsertDriveShare,
   getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
