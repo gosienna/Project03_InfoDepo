@@ -36,9 +36,26 @@ Orchestration for the **Sync** button and background run is **`runOwnerSyncPipel
 
 Legacy rows without `localModifiedAt` but with a `driveId` are treated as not locally dirty until they receive a local edit that sets `localModifiedAt`.
 
+## Render strategy during sync
+
+All sync pipelines follow a **silent-write → single flush** pattern to avoid mid-sync re-renders:
+
+1. Every upsert call inside a sync pipeline passes `{ silent: true }` — the write goes to IndexedDB but does **not** call `loadItems`, `loadChannels`, or `loadShares`.
+2. When the pipeline finishes, **`loadAll()`** is called once. It reads all five stores concurrently via `Promise.all` and calls `setItems`, `setChannels`, and `setShares` synchronously inside the `.then()` callback — React 18 automatic batching collapses these into **one render**.
+
+This applies to:
+- **Manual Sync** button (`runOwnerSync` in `Library.js`)
+- **Owner background sync** at startup (same `runOwnerSync` via `runOwnerSyncRef`)
+- **Receiver background sync** at startup (per-share `updateShare` calls use `{ silent: true }`, `loadAll()` fires at the end)
+- **Link/open receiver share** flows in `Library.js`
+
+User-initiated mutations (`addItem`, `deleteItem`, `addChannel`, `deleteShare`, etc.) still call the individual loaders immediately for responsive feedback.
+
 ## Background sync on startup
 
-When the library is shown and Drive credentials plus a folder id are configured, **`Library`** schedules **one** owner pipeline run (`setTimeout` 0) per page load. A module-level flag prevents a second schedule on React Strict Mode remount. The same **`syncInFlightRef`** used by manual Sync avoids overlapping runs.
+When the library is shown and Drive credentials plus a folder id are configured, **`Library`** schedules **one** owner pipeline run (`setTimeout` 0) per page load. A module-level flag (`ownerBackgroundSyncScheduled`) prevents a second schedule on React Strict Mode remount. The same **`syncInFlightRef`** used by manual Sync avoids overlapping runs (the receiver background sync also acquires this lock).
+
+A parallel **receiver background sync** (`receiverBackgroundSyncScheduled`) runs once if the `shares` store contains any linked receiver shares. It refreshes each share’s `explicitRefs` from Drive and downloads new/updated referenced files.
 
 If OAuth fails (no token), the run errors and the usual token cleanup applies; there is no separate polling loop.
 

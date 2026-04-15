@@ -40,6 +40,7 @@ const App = () => {
     loadItems,
     loadChannels,
     loadShares,
+    loadAll,
   } = useIndexedDB();
   const [googleUserEmail, setGoogleUserEmail] = useState(null);
   const [currentVideo, setCurrentVideo] = useState(null);
@@ -261,6 +262,7 @@ const App = () => {
             loadItems,
             loadChannels,
             loadShares,
+            loadAll,
           })
         : view === 'channel' && currentChannel
         ? React.createElement(YoutubeChannelViewer, {

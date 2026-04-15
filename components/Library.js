@@ -69,6 +69,7 @@ export const Library = ({
   loadItems,
   loadChannels,
   loadShares,
+  loadAll,
 }) => {
   const fileInputRef      = useRef(null);
   const searchInputRef    = useRef(null);
@@ -299,9 +300,7 @@ export const Library = ({
             upsertDrivePdfAnnotation,
             onProgress: setSyncProgress,
           });
-          loadItems('linkShare/syncDone');
-          loadChannels('linkShare/syncDone');
-          loadShares('linkShare/syncDone');
+          loadAll();
           setSyncResult({
             added: result.added,
             updated: result.updated,
@@ -449,9 +448,7 @@ export const Library = ({
             upsertDrivePdfAnnotation,
             onProgress: setSyncProgress,
           });
-          loadItems('openShare/syncDone');
-          loadChannels('openShare/syncDone');
-          loadShares('openShare/syncDone');
+          loadAll();
           setSyncResult({
             added: result.added,
             updated: result.updated,
@@ -765,14 +762,8 @@ export const Library = ({
         setPdfAnnotationDriveSync,
         upsertDrivePdfAnnotation,
       });
-      const ownerChanged = combined.backed > 0 || combined.added > 0 || combined.updated > 0;
-      console.log('[InfoDepo] ownerSync result:', combined, 'reloading:', ownerChanged);
-      if (ownerChanged) {
-        loadItems('ownerSync/done');
-        loadChannels('ownerSync/done');
-        loadShares('ownerSync/done');
-      }
-
+      console.log('[InfoDepo] ownerSync result:', combined);
+      loadAll();
       setSyncResult(combined);
     } catch (err) {
       console.error('Sync failed:', err);
@@ -830,7 +821,7 @@ export const Library = ({
               includeTags: payload.includeTags,
               explicitRefs,
               updatedAt: payload.updatedAt,
-            });
+            }, { silent: true });
           }
           const driveIds = new Set(
             (explicitRefs || []).map((r) => String(r.driveId || '').trim()).filter(Boolean)
@@ -864,13 +855,8 @@ export const Library = ({
         }
 
         if (!cancelled) {
-          const receiverChanged = added > 0 || updated > 0;
-          console.log('[InfoDepo] receiverStartupSync result:', { added, updated, skipped }, 'reloading:', receiverChanged);
-          if (receiverChanged) {
-            loadItems('receiverStartupSync/done');
-            loadChannels('receiverStartupSync/done');
-            loadShares('receiverStartupSync/done');
-          }
+          console.log('[InfoDepo] receiverStartupSync result:', { added, updated, skipped });
+          loadAll();
           setSyncResult({ added, updated, skipped, backed: 0, backupFailed: 0 });
         }
       } catch (err) {

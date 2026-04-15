@@ -18,6 +18,8 @@ InfoDepo uses **seven** IndexedDB object stores inside the `InfoDepo` database (
 
 The hook `useIndexedDB` (`hooks/useIndexedDB.js`) manages all stores and exposes a unified `items` array (books + notes + videos combined, sorted newest-first by `modifiedTime`), a `channels` array, and a **`shares` array** (rows from the `shares` store).
 
+**Single-render loading:** `loadAll()` reads all five stores concurrently and calls `setItems`, `setChannels`, `setShares` in one React batch. It is called on startup and after every sync completes. Individual loaders (`loadItems`, `loadChannels`, `loadShares`) are still used by user-initiated mutations (add, delete, rename) for immediate feedback.
+
 **Clear library:** `clearAll()` wipes the main six content stores (see `clearAll` implementation); the `pdfAnnotations` store is cleared when the database is reset.
 
 PDF annotations are persisted with `getPdfAnnotationSidecar`, `putPdfAnnotationsForItem`, `setPdfAnnotationDriveSync`, and merged from Drive via `upsertDrivePdfAnnotation` during sync.
@@ -29,6 +31,8 @@ Upgrading from DB v1: existing `localStorage` key `infodepo_shares_v1` is migrat
 ## Store: `shares`
 
 Owner and receiver **share configs** (recipients by email, `includeTags`, `explicitRefs`, `driveFileName`, `driveFileId`, `role`, `updatedAt`) use the same logical shape as the Drive JSON in [`utils/sharesDriveJson.js`](../utils/sharesDriveJson.js) (`*.infodepo-shares.json` in the linked folder). **Drive Permissions API** (`utils/driveSharePermissions.js`) grants reader access to listed files. If grants fail with 403, the client may need broader Drive scope than `drive.file` — see Google’s Drive API auth docs.
+
+`addShare(record, { silent })` and `updateShare(id, patch, { silent })` accept an optional `{ silent: true }` option to suppress the `loadShares` call after the write — used by sync pipelines that call `loadAll()` once at the end instead.
 
 ---
 

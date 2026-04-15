@@ -206,6 +206,40 @@ export const useIndexedDB = () => {
     req.onerror = () => setShares([]);
   }, [db]);
 
+  /** Load all stores concurrently and apply all three setters in one React batch → single render. */
+  const loadAll = useCallback(() => {
+    if (!db) return;
+    const readStore = (storeName) =>
+      new Promise((resolve) => {
+        let tx;
+        try { tx = db.transaction(storeName, 'readonly'); } catch { resolve([]); return; }
+        const req = tx.objectStore(storeName).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror  = () => resolve([]);
+      });
+    Promise.all([
+      readStore(BOOKS_STORE),
+      readStore(NOTES_STORE),
+      readStore(VIDEOS_STORE),
+      readStore(CHANNELS_STORE),
+      readStore(SHARES_STORE),
+    ]).then(([books, notes, videos, chans, shs]) => {
+      const withTags = (r, store) => ({ ...r, idbStore: store, tags: Array.isArray(r.tags) ? r.tags : [] });
+      const merged = [
+        ...books.map((r) => withTags(r, BOOKS_STORE)),
+        ...notes.map((r) => withTags(r, NOTES_STORE)),
+        ...videos.map((r) => withTags(r, VIDEOS_STORE)),
+      ].sort((a, b) => modifiedTimeSortKey(b) - modifiedTimeSortKey(a));
+      const sortedChans = chans
+        .map((r) => ({ ...r, tags: Array.isArray(r.tags) ? r.tags : [] }))
+        .sort((a, b) => modifiedTimeSortKey(b) - modifiedTimeSortKey(a));
+      // React 18 batches these three setters → one render
+      setItems(merged);
+      setChannels(sortedChans);
+      setShares(shs);
+    });
+  }, [db]);
+
   /** @returns {Promise<import('../utils/sharesDriveJson.js').ShareClientRecord[]>} */
   const getSharesList = useCallback(
     () =>
@@ -250,12 +284,8 @@ export const useIndexedDB = () => {
   }, [db]);
 
   useEffect(() => {
-    if (isInitialized) {
-      loadItems('useEffect[isInitialized]');
-      loadChannels('useEffect[isInitialized]');
-      loadShares('useEffect[isInitialized]');
-    }
-  }, [isInitialized, loadItems, loadChannels, loadShares]);
+    if (isInitialized) loadAll();
+  }, [isInitialized, loadAll]);
 
   /** Merged books + notes + videos for Drive share ACL resolution (same shape as Library `items`). */
   const getMergedLibraryItems = useCallback(() => {
@@ -300,13 +330,13 @@ export const useIndexedDB = () => {
   }, [db]);
 
   const addShare = useCallback(
-    (record) => {
+    (record, { silent = false } = {}) => {
       if (!db) return Promise.reject(new Error('Database not initialized'));
       return new Promise((resolve, reject) => {
         const tx = db.transaction(SHARES_STORE, 'readwrite');
         const req = tx.objectStore(SHARES_STORE).put(record);
         req.onsuccess = () => {
-          loadShares('addShare');
+          if (!silent) loadShares('addShare');
           resolve();
         };
         req.onerror = () => reject(req.error);
@@ -316,7 +346,7 @@ export const useIndexedDB = () => {
   );
 
   const updateShare = useCallback(
-    (id, patch) => {
+    (id, patch, { silent = false } = {}) => {
       if (!db) return Promise.reject(new Error('Database not initialized'));
       return new Promise((resolve, reject) => {
         const tx = db.transaction(SHARES_STORE, 'readwrite');
@@ -330,7 +360,7 @@ export const useIndexedDB = () => {
           }
           const p = os.put({ ...existing, ...patch });
           p.onsuccess = () => {
-            loadShares('updateShare');
+            if (!silent) loadShares('updateShare');
             resolve();
           };
           p.onerror = () => reject(p.error);
@@ -1222,7 +1252,7 @@ export const useIndexedDB = () => {
     setPdfAnnotationDriveSync,
     upsertDrivePdfAnnotation,
     getMergedLibraryItems,
-    loadItems, loadChannels, loadShares,
+    loadItems, loadChannels, loadShares, loadAll,
     getSharesList,
     addShare,
     updateShare,

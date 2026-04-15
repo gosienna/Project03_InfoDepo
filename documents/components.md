@@ -31,7 +31,7 @@ root.render(
 
 ### 3. `App.js` — IndexedDB, then Google Drive gate (when configured)
 
-On mount, `useIndexedDB()` opens IndexedDB (`InfoDepo`; version from [`utils/infodepoDb.js`](../utils/infodepoDb.js)) and loads merged `items` (books + notes + videos), `channels`, and `shares`. See [data-stores.md](data-stores.md) for object stores and schema.
+On mount, `useIndexedDB()` opens IndexedDB (`InfoDepo`; version from [`utils/infodepoDb.js`](../utils/infodepoDb.js)) and loads merged `items` (books + notes + videos), `channels`, and `shares` in a **single batched render** via `loadAll()`. See [data-stores.md](data-stores.md) for object stores and schema.
 
 After the database is ready, the app decides whether the user must complete **Google Drive setup** before any library UI appears:
 
@@ -454,7 +454,9 @@ Located at [`hooks/useIndexedDB.js`](../hooks/useIndexedDB.js). Encapsulates all
 | `addChannel`, `deleteChannel`, `updateChannel`, `upsertDriveChannel`, … | Channel CRUD + Drive |
 | `addImage`, `getImagesForNote`, `getAllImages`, … | Note images |
 | `setItemDriveId`, `setRecordTags` | Drive ids and per-row tags |
-| `getSharesList`, `addShare`, `updateShare`, `deleteShare`, `loadShares` | `shares` store CRUD |
+| `getSharesList`, `addShare`, `updateShare`, `deleteShare` | `shares` store CRUD (`addShare` and `updateShare` accept `{ silent }` option) |
+| `loadAll` | Loads all five stores concurrently and sets `items`, `channels`, `shares` in one React batch → **one render**. Used at startup and after every sync completes. |
+| `loadItems`, `loadChannels`, `loadShares` | Individual store loaders; still called by user-initiated mutations (add, delete, rename) so those operations keep immediate feedback. |
 | `getMergedLibraryItems` | Merged rows for Drive share ACL helpers |
 | `getBookByDriveId`, `getBookByName`, `upsertDriveBook`, … | Drive sync helpers |
 
@@ -497,5 +499,5 @@ Add flows (owner)                                  Open from grid
   └── onAddItem / addChannel / addShare → IndexedDB  ├── Share card (owner) → SharesEditorModal
        │                                              └── Share card (receiver) → share content filter
        ▼
-  loadItems() / loadChannels() / loadShares() (inside hook)
+  loadAll() → setItems + setChannels + setShares batched → one render (inside hook)
 ```
