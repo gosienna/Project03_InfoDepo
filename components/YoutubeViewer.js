@@ -12,6 +12,7 @@ export const YoutubeViewer = ({ video }) => {
   const [parsed,    setParsed]    = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error,     setError]     = useState(null);
+  const [fullWidth,  setFullWidth]  = useState(false);
 
   useEffect(() => {
     setIsLoading(true);
@@ -73,7 +74,7 @@ export const YoutubeViewer = ({ video }) => {
     // Content area
     React.createElement(
       'div',
-      { className: 'w-full max-w-3xl' },
+      { className: `w-full ${fullWidth ? '' : 'max-w-3xl'}` },
 
       videoId
         // Embedded player
@@ -93,7 +94,23 @@ export const YoutubeViewer = ({ video }) => {
             ),
             React.createElement(
               'div',
-              { className: 'flex justify-center mt-4' },
+              { className: 'flex justify-center items-center gap-3 mt-4' },
+              React.createElement(
+                'button',
+                {
+                  onClick: () => setFullWidth(w => !w),
+                  title: fullWidth ? 'Collapse width' : 'Expand to full width',
+                  className: 'flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-5 rounded-xl transition-colors',
+                },
+                React.createElement(
+                  'svg',
+                  { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2 },
+                  fullWidth
+                    ? React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M9 9L4 4m0 0h5m-5 0v5M15 9l5-5m0 0h-5m5 0v5M9 15l-5 5m0 0h5m-5 0v-5M15 15l5 5m0 0h-5m5 0v-5' })
+                    : React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M4 8V4m0 0h4M4 4l5 5M20 8V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5M20 16v4m0 0h-4m4 0l-5-5' })
+                ),
+                fullWidth ? 'Collapse' : 'Expand width'
+              ),
               React.createElement(
                 'a',
                 {
