@@ -10,6 +10,24 @@ function parseISO8601Duration(iso) {
   return (parseInt(m[1] || 0, 10) * 3600) + (parseInt(m[2] || 0, 10) * 60) + parseInt(m[3] || 0, 10);
 }
 
+/**
+ * Returns { channelId, channelTitle } for a YouTube video ID, or null on failure.
+ * One API call: videos?id=VIDEO_ID&part=snippet
+ */
+export async function fetchVideoChannelInfo(videoId) {
+  const res = await fetchGoogleApisGet(
+    `/youtube/v3/videos?id=${encodeURIComponent(videoId)}&part=snippet`
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  const item = data.items?.[0];
+  if (!item) return null;
+  return {
+    channelId: item.snippet.channelId,
+    channelTitle: item.snippet.channelTitle || '',
+  };
+}
+
 export async function resolveChannelId(urlOrHandle) {
   const chanMatch = urlOrHandle.match(CHANNEL_ID_RE);
   if (chanMatch) {

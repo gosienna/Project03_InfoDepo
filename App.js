@@ -285,6 +285,8 @@ const App = () => {
             onAddImage: addImage,
             onGetImages: getImagesForNote,
             readOnly: false,
+            onSelectChannel: handleSelectChannel,
+            onAddChannel: addChannel,
           })
         : React.createElement(
             "div",

@@ -25,6 +25,8 @@ export const Reader = ({
   onAddImage,
   onGetImages,
   readOnly,
+  onSelectChannel,
+  onAddChannel,
 }) => {
   const fileExtension = useMemo(() => {
     const ext = getFileExtension(video.name);
@@ -127,7 +129,7 @@ export const Reader = ({
       case 'md':
         return React.createElement(MarkdownEditor, { video, onUpdateItem, onAddImage, onGetImages, readOnly });
       case 'youtube':
-        return React.createElement(YoutubeViewer, { video });
+        return React.createElement(YoutubeViewer, { video, onSelectChannel, onAddChannel });
       default:
         return React.createElement(UnsupportedViewer, { filename: video.name });
     }
