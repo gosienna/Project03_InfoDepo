@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
+import { ImageEditor } from './ImageEditor.js';
 
 // \x00 is a transient cursor marker inserted at cursorPos before rendering; never saved to disk.
 const CURSOR_SPAN = '<span data-cursor="1" style="display:inline-block;width:2px;height:1.1em;background:#a5b4fc;border-radius:1px;animation:md-blink 1.2s step-end infinite;vertical-align:text-bottom"></span>';
@@ -19,7 +20,7 @@ const inlineMarkdown = (text, assetUrls) =>
       const sizeStyle = sizeMatch
         ? `width:${sizeMatch[1]}px;${sizeMatch[2] ? `height:${sizeMatch[2]}px;object-fit:cover;` : ''}max-width:100%;`
         : 'max-width:100%;';
-      const imgHtml = `<img alt="${escapeHtml(displayAlt)}" src="${url}" style="${sizeStyle}border-radius:6px;margin:4px 0;display:block" />`;
+      const imgHtml = `<img data-img-file="${escapeHtml(cleanSrc)}" alt="${escapeHtml(displayAlt)}" src="${url}" style="${sizeStyle}border-radius:6px;margin:4px 0;display:block" />`;
       return hasCursor ? imgHtml + CURSOR_SPAN : imgHtml;
     })
     .replace(/`([^`]+)`/g, '<code style="background:#374151;padding:2px 5px;border-radius:3px;font-size:.9em">$1</code>')
@@ -225,6 +226,9 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   const [showRaw,   setShowRaw]   = useState(false);
   const [cursorPos, setCursorPos] = useState(0);
   const [isFocused, setIsFocused] = useState(false);
+  const [hoveredImg, setHoveredImg] = useState(null); // { filename, rect } | null
+  const [editingImg, setEditingImg] = useState(null); // { src, filename } | null
+  const hoveredImgClearTimer = useRef(null);
   const imageInputRef        = useRef(null);
   const textareaRef          = useRef(null);
   const previewRef           = useRef(null);
@@ -803,6 +807,22 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
             requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = pos; updateCursor(); });
           }
         },
+        onMouseMove: (e) => {
+          if (hoveredImgClearTimer.current) { clearTimeout(hoveredImgClearTimer.current); hoveredImgClearTimer.current = null; }
+          const img = e.target.closest('img[data-img-file]');
+          if (img) {
+            const filename = img.dataset.imgFile;
+            const rect = img.getBoundingClientRect();
+            setHoveredImg(prev =>
+              prev && prev.filename === filename && Math.abs(prev.rect.top - rect.top) < 1 ? prev : { filename, rect }
+            );
+          } else {
+            setHoveredImg(null);
+          }
+        },
+        onMouseLeave: () => {
+          hoveredImgClearTimer.current = setTimeout(() => setHoveredImg(null), 120);
+        },
         onDragOver: (e) => e.preventDefault(),
         onDrop: (e) => {
           e.preventDefault();
@@ -896,6 +916,54 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       })
     )
 
-  )  // end outer flex
+  ),  // end outer flex
+
+  // ── Image hover overlay button ─────────────────────────────────
+  hoveredImg && React.createElement(
+    'button',
+    {
+      style: {
+        position: 'fixed',
+        top:  hoveredImg.rect.top + 6,
+        left: hoveredImg.rect.right - 80,
+        zIndex: 100,
+        pointerEvents: 'auto',
+      },
+      className: 'flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg transition-colors',
+      onMouseEnter: () => { if (hoveredImgClearTimer.current) { clearTimeout(hoveredImgClearTimer.current); hoveredImgClearTimer.current = null; } },
+      onMouseLeave: () => { hoveredImgClearTimer.current = setTimeout(() => setHoveredImg(null), 80); },
+      onClick: (e) => {
+        e.stopPropagation();
+        const { filename } = hoveredImg;
+        setEditingImg({ src: assetUrls[filename] || filename, filename });
+        setHoveredImg(null);
+      },
+    },
+    React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', className: 'h-3 w-3', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+      React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z' })
+    ),
+    'Edit'
+  ),
+
+  // ── ImageEditor modal ──────────────────────────────────────────
+  editingImg && React.createElement(ImageEditor, {
+    src:      editingImg.src,
+    filename: editingImg.filename,
+    onSave:   async (blob, fname) => {
+      try {
+        await onAddImage(video.id, fname, blob, 'image/png');
+        const newUrl = URL.createObjectURL(blob);
+        setAssetUrls(prev => {
+          if (prev[fname]) URL.revokeObjectURL(prev[fname]);
+          return { ...prev, [fname]: newUrl };
+        });
+      } catch (err) {
+        console.error('ImageEditor save failed:', err);
+      }
+      setEditingImg(null);
+    },
+    onClose: () => setEditingImg(null),
+  })
+
   );
 };
