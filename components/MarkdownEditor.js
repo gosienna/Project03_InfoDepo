@@ -415,6 +415,28 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
           return;
         }
       }
+
+      // Case 3: unindent one level when cursor is inside the indent spaces OR
+      //         the entire line is an empty nested list item (cursor anywhere after lineStart).
+      //         Covers the common case where Enter-on-empty-nested leaves the cursor
+      //         right after the marker — e.g. "    - |" — which is outside the indent range.
+      const nestMatch = currentLine.match(/^((?:    )+)([-*]|\d+\.) (.*)/);
+      if (nestMatch && pos > lineStart) {
+        const isEmptyItem    = nestMatch[3].trim() === '';
+        const cursorInIndent = pos <= lineStart + nestMatch[1].length;
+        if (isEmptyItem || cursorInIndent) {
+          e.preventDefault();
+          const newLine    = currentLine.slice(4);
+          const lineEndIdx = lineEnd === -1 ? val.length : lineEnd;
+          const newText3   = val.slice(0, lineStart) + newLine + val.slice(lineEndIdx);
+          // For empty items, place cursor at end of unindented marker; otherwise shift back 4.
+          const newPos3    = isEmptyItem ? lineStart + newLine.length : Math.max(lineStart, pos - 4);
+          setText(newText3);
+          setIsDirty(true);
+          requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos3; ta.focus(); pushHistory(newText3, newPos3); });
+          return;
+        }
+      }
     }
 
     if (slashMenu !== null) {
