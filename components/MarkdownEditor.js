@@ -136,6 +136,21 @@ const renderMarkdown = (text, assetUrls) => {
 const escapeHtml = (str) =>
   str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function setImageWidthInMarkdown(markdown, filename, widthPx) {
+  const safeName = escapeRegExp(filename);
+  const imageRe = new RegExp(`!\\[([^\\]]*)\\]\\(${safeName}\\)`, 'g');
+  let replaced = false;
+  return markdown.replace(imageRe, (full, alt) => {
+    if (replaced) return full;
+    replaced = true;
+    const cleanAlt = (alt || '').replace(/\|\d+(?:x\d+)?$/, '').trim();
+    const nextAlt = `${(cleanAlt || filename)}|${widthPx}`;
+    return `![${nextAlt}](${filename})`;
+  });
+}
+
 // Maps a viewport click (x, y) inside previewEl to a character offset in raw markdown text.
 function clickToMarkdownPos(previewEl, x, y, text) {
   let domNode = null, domOffset = 0;
@@ -227,8 +242,10 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   const [cursorPos, setCursorPos] = useState(0);
   const [isFocused, setIsFocused] = useState(false);
   const [hoveredImg, setHoveredImg] = useState(null); // { filename, rect } | null
+  const [resizingImg, setResizingImg] = useState(null); // { filename, startX, startWidth, width } | null
   const [editingImg, setEditingImg] = useState(null); // { src, filename } | null
   const hoveredImgClearTimer = useRef(null);
+  const textRef              = useRef('');
   const imageInputRef        = useRef(null);
   const textareaRef          = useRef(null);
   const previewRef           = useRef(null);
@@ -236,6 +253,10 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   const pendingImageSize     = useRef(undefined); // null = full width, number = px width
   const historyRef           = useRef([]);   // undo stack: [{ text, cursorPos }, ...]
   const historyIdxRef        = useRef(-1);   // current position in stack
+
+  useEffect(() => {
+    textRef.current = text;
+  }, [text]);
 
   // Load note text + assets
   useEffect(() => {
@@ -330,6 +351,47 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     if (historyRef.current.length > 200) historyRef.current.shift(); // cap size
     else historyIdxRef.current++;
   };
+
+  useEffect(() => {
+    if (!resizingImg) return;
+    const minWidth = 120;
+    const maxWidth = 1600;
+
+    const onMove = (e) => {
+      const delta = e.clientX - resizingImg.startX;
+      const next = Math.max(minWidth, Math.min(maxWidth, Math.round(resizingImg.startWidth + delta)));
+      setResizingImg(prev => (prev ? { ...prev, width: next } : prev));
+      if (previewRef.current) {
+        const selector = `img[data-img-file="${CSS.escape(resizingImg.filename)}"]`;
+        const img = previewRef.current.querySelector(selector);
+        if (img) {
+          img.style.width = `${next}px`;
+          img.style.maxWidth = 'none';
+        }
+      }
+    };
+
+    const onUp = () => {
+      const finalWidth = resizingImg.width;
+      const updated = setImageWidthInMarkdown(textRef.current, resizingImg.filename, finalWidth);
+      if (updated !== textRef.current) {
+        setText(updated);
+        setIsDirty(true);
+        requestAnimationFrame(() => {
+          const pos = textareaRef.current?.selectionStart ?? updated.length;
+          pushHistory(updated, pos);
+        });
+      }
+      setResizingImg(null);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [resizingImg]);
 
   const handleChange = (e) => {
     const val = e.target.value;
@@ -808,6 +870,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
           }
         },
         onMouseMove: (e) => {
+          if (resizingImg) return;
           if (hoveredImgClearTimer.current) { clearTimeout(hoveredImgClearTimer.current); hoveredImgClearTimer.current = null; }
           const img = e.target.closest('img[data-img-file]');
           if (img) {
@@ -821,6 +884,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
           }
         },
         onMouseLeave: () => {
+          if (resizingImg) return;
           hoveredImgClearTimer.current = setTimeout(() => setHoveredImg(null), 120);
         },
         onDragOver: (e) => e.preventDefault(),
@@ -917,6 +981,51 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     )
 
   ),  // end outer flex
+
+  // ── Image resize tab (right edge) ───────────────────────────────
+  (hoveredImg || resizingImg) && React.createElement(
+    'div',
+    {
+      style: (() => {
+        const activeFilename = resizingImg?.filename || hoveredImg?.filename;
+        if (!activeFilename) return { display: 'none' };
+        const selector = `img[data-img-file="${CSS.escape(activeFilename)}"]`;
+        const liveImg = previewRef.current?.querySelector(selector);
+        const rect = liveImg?.getBoundingClientRect() || hoveredImg?.rect;
+        if (!rect) return { display: 'none' };
+        return {
+          position: 'fixed',
+          top: rect.top + (rect.height / 2) - 16,
+          left: rect.right - 8,
+          zIndex: 120,
+          width: 16,
+          height: 32,
+          pointerEvents: 'auto',
+          cursor: 'ew-resize',
+        };
+      })(),
+      className: 'rounded-md bg-indigo-500/90 border border-indigo-200 shadow-lg hover:bg-indigo-400',
+      title: resizingImg ? `Width: ${resizingImg.width}px` : 'Drag to resize image',
+      onMouseEnter: () => {
+        if (hoveredImgClearTimer.current) { clearTimeout(hoveredImgClearTimer.current); hoveredImgClearTimer.current = null; }
+      },
+      onMouseLeave: () => {
+        if (resizingImg) return;
+        hoveredImgClearTimer.current = setTimeout(() => setHoveredImg(null), 120);
+      },
+      onMouseDown: (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!hoveredImg) return;
+        setResizingImg({
+          filename: hoveredImg.filename,
+          startX: e.clientX,
+          startWidth: Math.round(hoveredImg.rect.width),
+          width: Math.round(hoveredImg.rect.width),
+        });
+      },
+    }
+  ),
 
   // ── Image hover overlay button ─────────────────────────────────
   hoveredImg && React.createElement(

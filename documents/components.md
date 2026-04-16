@@ -368,8 +368,33 @@ videoId absent  → YouTube logo + "Open in YouTube" link (channel/playlist fall
   - **YouTube embed** — inserts `[Video Title](https://youtube.com/watch?v=)` placeholder
 - YouTube link rendering — `[text](youtube-url)` renders as an inline thumbnail card in the preview.
 - Image assets — drag-drop, paste, or slash-command insert; stored in the `images` IndexedDB store (see [data-stores.md](data-stores.md)).
+- Image size syntax follows `![alt|WIDTH](filename)` (or `|WIDTHxHEIGHT`). Width in preview is read from the `|...` suffix.
+- Image resize tab — hovering an image shows a small right-edge drag tab; dragging resizes the preview image live and persists width back into Markdown (`|WIDTH`) on mouse release.
 - Export as ZIP — `.md` file + `images/` folder.
 - Save — Ctrl+S or Save button → `onUpdateItem(id, blob)`.
+
+---
+
+### `Explorer.js`
+**Role:** In-app web extractor that previews a URL, extracts article content to Markdown via WASM, localizes images, then saves as a Markdown note + image assets.
+
+**Props:**
+| Prop | Type | Purpose |
+|------|------|---------|
+| `addItem` | `function` | Saves extracted Markdown as a note (`text/markdown`) |
+| `addImage` | `function` | Saves downloaded image assets linked to the created note |
+| `onSaved` | `function` | Callback after note + assets persist successfully |
+
+**Flow:**
+- **Go:** normalizes URL and loads iframe preview via `/api/preview-url?u=...`.
+- **Extract:** fetches raw HTML from `/api/fetch-url?u=...`, runs WASM `extract_markdown(html)`.
+- **Image localization:** finds image references in extracted Markdown (Markdown syntax + inline `<img>`), resolves relative URLs against the page URL, downloads each via `/api/fetch-image?u=...`.
+- **Rewrite:** replaces remote image URLs with local filenames and normalizes image links to MarkdownEditor format: `![alt|800](filename)` by default.
+- **Save:** creates note first, then inserts each image attachment into the `images` store.
+
+**Notes:**
+- WASM assets are loaded from `public/wasm/` (`trafilatura_wasm.js`, `trafilatura_wasm_bg.wasm`).
+- Extraction runs through Netlify function proxies to avoid browser CORS and iframe restrictions.
 
 ---
 

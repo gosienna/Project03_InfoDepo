@@ -4,6 +4,7 @@
 
 - Node.js (v18+ recommended for native `fetch` support)
 - A Google Cloud project (for Drive integration in dev mode)
+- Rust toolchain (`rustc`, `cargo`) + `wasm-pack` for web extraction WASM build
 
 ## Install & Run
 
@@ -12,6 +13,33 @@ npm install
 npm run dev
 # → http://localhost:3001
 ```
+
+## Web Extractor (WASM) Setup
+
+The web-to-Markdown extractor (`Explorer.js`) depends on the Rust WASM module in `public/wasm`.
+
+1. Install Rust and wasm-pack (one-time):
+
+```bash
+# Install Rust toolchain (cargo + rustc)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# Install wasm-pack
+cargo install wasm-pack
+```
+
+2. Build WASM artifacts:
+
+```bash
+wasm-pack build wasm-trafilatura --target web --out-dir ../public/wasm
+```
+
+3. Verify generated files:
+- `public/wasm/trafilatura_wasm.js`
+- `public/wasm/trafilatura_wasm_bg.wasm`
+
+If these files are missing, extraction will fail with `/wasm/... 404` at runtime.
 
 ## Environment Variables
 

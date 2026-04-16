@@ -21,6 +21,7 @@ App.js
 ├── Header.js               # Nav bar, back button
 ├── Library.js              # Item grid, file upload, YouTube modal, Drive browser, share filter
 │   ├── DataTile.js         # Library grid tiles (items + channels + shares; same column layout)
+│   ├── Explorer.js         # Web page preview + extract-to-Markdown flow (WASM + Netlify functions)
 │   ├── SharesEditorModal.js # Owner share editor / receiver read-only view
 │   ├── NewNoteModal.js     # Create a new Markdown note
 │   ├── NewYoutubeModal.js  # Add a YouTube video or channel link
@@ -45,6 +46,14 @@ Import (YouTube URL)
 
 Import (dev/prod Drive)
   DevDriveBrowser → OAuth → Drive API v3 → Blob → useIndexedDB.upsertDriveBook() → IndexedDB 'books' store
+
+Import (web page → Markdown note)
+  Explorer.js
+    ├── /api/preview-url?u=...  (iframe preview proxy)
+    ├── /api/fetch-url?u=...    (server-side HTML fetch)
+    ├── WASM trafilatura.extract_markdown(html)
+    ├── /api/fetch-image?u=...  (download remote images)
+    └── addItem(text/markdown) + addImage(...) → IndexedDB 'notes' + 'images'
 
 Open item
   DataTile click → App.handleSelectVideo(video)
@@ -73,9 +82,13 @@ Share (receiver)
 | `components/DataTile.js` | Grid cards for items, channels, and shares — same shell; YouTube thumb or BookIcon; tags |
 | `components/YoutubeViewer.js` | Embeds YouTube video via `youtube-nocookie.com/embed/{id}` iframe |
 | `components/NewYoutubeModal.js` | Modal to save a YouTube URL as a `application/x-youtube` JSON blob |
+| `components/Explorer.js` | In-app web extractor: preview remote pages, extract to Markdown via WASM, localize images |
 | `reader.html` | Standalone EPUB reader page, no React |
 | `utils/fileUtils.js` | File extension extraction, byte size formatting |
 | `utils/driveSync.js` | Drive sync engine — owner backup (POST/PATCH), folder pull, shared content download |
+| `netlify/functions/preview-url.js` | Preview proxy for iframe-safe remote HTML rendering |
+| `netlify/functions/fetch-url.js` | HTML fetch proxy for extraction (CORS / origin bypass) |
+| `netlify/functions/fetch-image.js` | Image fetch proxy for note asset localization |
 | `utils/sharesDriveJson.js` | Share config serialization/deserialization for Drive JSON |
 | `utils/sharesDriveFile.js` | Upload/fetch share JSON files to/from Google Drive |
 | `utils/driveSharePermissions.js` | Reconcile Drive ACLs from owner share records |
