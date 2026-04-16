@@ -60,6 +60,7 @@ export const useIndexedDB = () => {
   const [channels, setChannels] = useState([]);
   const [shares, setShares] = useState([]);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [dataReady, setDataReady] = useState(false);
 
   const initDB = useCallback(() => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -233,10 +234,11 @@ export const useIndexedDB = () => {
       const sortedChans = chans
         .map((r) => ({ ...r, tags: Array.isArray(r.tags) ? r.tags : [] }))
         .sort((a, b) => modifiedTimeSortKey(b) - modifiedTimeSortKey(a));
-      // React 18 batches these three setters → one render
+      // React 18 batches these setters → one render; dataReady flips on first load
       setItems(merged);
       setChannels(sortedChans);
       setShares(shs);
+      setDataReady(true);
     });
   }, [db]);
 
@@ -1235,7 +1237,7 @@ export const useIndexedDB = () => {
   }, [db]);
 
   return {
-    items, channels, shares, isInitialized,
+    items, channels, shares, isInitialized, dataReady,
     addItem, updateItem, deleteItem, clearAll,
     addImage, getImagesForNote, getAllImages,
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,

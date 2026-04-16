@@ -41,26 +41,19 @@ const App = () => {
     loadChannels,
     loadShares,
     loadAll,
+    dataReady,
   } = useIndexedDB();
   const [googleUserEmail, setGoogleUserEmail] = useState(null);
   const [currentVideo, setCurrentVideo] = useState(null);
   const [currentChannel, setCurrentChannel] = useState(null);
   const [view, setView] = useState('library');
-  /** Before first OAuth check completes */
-  const [oauthGatePending, setOauthGatePending] = useState(true);
   /** When true, full-screen Google sign-in is shown (Drive configured but no valid token). */
-  const [oauthGateActive, setOauthGateActive] = useState(false);
+  const [oauthGateActive, setOauthGateActive] = useState(() => needsDriveOAuthLogin());
   const [pendingChannelDelete, setPendingChannelDelete] = useState(null);
 
   const recheckDriveOAuthGate = useCallback(() => {
     setOauthGateActive(needsDriveOAuthLogin());
   }, []);
-
-  useEffect(() => {
-    if (!isInitialized) return;
-    setOauthGateActive(needsDriveOAuthLogin());
-    setOauthGatePending(false);
-  }, [isInitialized]);
 
   const handleOAuthGateSuccess = useCallback(() => {
     setOauthGateActive(false);
@@ -177,7 +170,7 @@ const App = () => {
     }
   };
 
-  if (!isInitialized) {
+  if (!isInitialized || !dataReady) {
     return React.createElement(
       "div",
       { className: "flex items-center justify-center h-screen bg-gray-900 text-white font-sans" },
@@ -185,20 +178,7 @@ const App = () => {
         "div",
         { className: "flex flex-col items-center gap-4" },
         React.createElement("div", { className: "animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500" }),
-        React.createElement("p", { className: "text-gray-400" }, "Initializing Database...")
-      )
-    );
-  }
-
-  if (oauthGatePending) {
-    return React.createElement(
-      "div",
-      { className: "flex items-center justify-center h-screen bg-gray-900 text-white font-sans" },
-      React.createElement(
-        "div",
-        { className: "flex flex-col items-center gap-4" },
-        React.createElement("div", { className: "animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500" }),
-        React.createElement("p", { className: "text-gray-400" }, "Checking Google sign-in…")
+        React.createElement("p", { className: "text-gray-400" }, "Initializing…")
       )
     );
   }

@@ -90,7 +90,6 @@ export const Library = ({
   const [isAddMenuOpen,    setIsAddMenuOpen]    = useState(false);
   const [activeShare,      setActiveShare]      = useState(null);
   const [activeShareFilter, setActiveShareFilter] = useState(null);
-  const [availableTags,    setAvailableTags]    = useState([]);
   const [pendingDelete, setPendingDelete] = useState(null);
 
   // Search state
@@ -174,7 +173,7 @@ export const Library = ({
   }, [isSystemSettingsOpen]);
 
   // Tags for card dropdowns: union of item and channel tags
-  useEffect(() => {
+  const availableTags = useMemo(() => {
     const fromAll = new Set();
     for (const it of items) {
       for (const t of it.tags || []) {
@@ -188,7 +187,7 @@ export const Library = ({
         if (n) fromAll.add(n);
       }
     }
-    setAvailableTags([...fromAll].sort());
+    return [...fromAll].sort();
   }, [items, channels]);
 
   const pickableWithDriveId = useMemo(() => {
@@ -924,30 +923,30 @@ export const Library = ({
     );
   }, [activeShareFilter]);
 
-  const filteredItems = items.filter(item => {
+  const filteredItems = useMemo(() => items.filter(item => {
     if (shareRefDriveIds) {
       if (!item.driveId || !shareRefDriveIds.has(String(item.driveId))) return false;
     }
     if (activeFilters.size > 0 && !activeFilters.has(item.idbStore)) return false;
     if (query && !matchesNameOrTags(item.name, item.tags)) return false;
     return true;
-  });
+  }), [items, shareRefDriveIds, activeFilters, query]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filteredChannels = (channels || []).filter(ch => {
+  const filteredChannels = useMemo(() => (channels || []).filter(ch => {
     if (shareRefDriveIds) {
       if (!ch.driveId || !shareRefDriveIds.has(String(ch.driveId))) return false;
     }
     if (activeFilters.size > 0 && !activeFilters.has('channels')) return false;
     if (query && !matchesNameOrTags(ch.name || ch.handle, ch.tags)) return false;
     return true;
-  });
+  }), [channels, shareRefDriveIds, activeFilters, query]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filteredShares = (shares || []).filter((s) => {
+  const filteredShares = useMemo(() => (shares || []).filter((s) => {
     if (shareRefDriveIds) return false;
     if (activeFilters.size > 0 && !activeFilters.has('shares')) return false;
     if (query && !matchesShareNameOrIncludeTags(s)) return false;
     return true;
-  });
+  }), [shares, shareRefDriveIds, activeFilters, query]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalGridCount = items.length + (channels || []).length + (shares || []).length;
   const filteredGridCount = filteredItems.length + filteredChannels.length + filteredShares.length;
