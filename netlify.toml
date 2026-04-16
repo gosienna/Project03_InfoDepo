@@ -16,3 +16,18 @@
 
 [functions]
   directory = "netlify/functions"
+
+[[redirects]]
+  from = "/api/fetch-url"
+  to = "/.netlify/functions/fetch-url"
+  status = 200
+
+[[redirects]]
+  from = "/api/fetch-image"
+  to = "/.netlify/functions/fetch-image"
+  status = 200
+
+[[redirects]]
+  from = "/api/preview-url"
+  to = "/.netlify/functions/preview-url"
+  status = 200

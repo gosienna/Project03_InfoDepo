@@ -2,7 +2,7 @@
 import React from 'react';
 import { BookIcon } from './icons/BookIcon.js';
 
-export const Header = ({ onBack, userEmail }) => {
+export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle }) => {
   return React.createElement(
     "header",
     { className: "sticky top-0 z-[100] bg-gray-800 shadow-xl p-4 flex items-center justify-between gap-4 border-b border-gray-700/50" },
@@ -34,6 +34,35 @@ export const Header = ({ onBack, userEmail }) => {
         )
       )
     ),
+    showModeToggle &&
+      React.createElement(
+        "div",
+        { className: "flex items-center gap-1 bg-gray-700 rounded-lg p-1 flex-shrink-0" },
+        React.createElement(
+          "button",
+          {
+            onClick: () => onModeChange('library'),
+            className: `px-3 py-1 text-sm rounded-md transition-colors duration-150 ${
+              mode === 'library'
+                ? 'bg-indigo-600 text-white font-medium'
+                : 'text-gray-400 hover:text-white hover:bg-gray-600'
+            }`,
+          },
+          "Library"
+        ),
+        React.createElement(
+          "button",
+          {
+            onClick: () => onModeChange('explorer'),
+            className: `px-3 py-1 text-sm rounded-md transition-colors duration-150 ${
+              mode === 'explorer'
+                ? 'bg-indigo-600 text-white font-medium'
+                : 'text-gray-400 hover:text-white hover:bg-gray-600'
+            }`,
+          },
+          "Explorer"
+        )
+      ),
     userEmail &&
       React.createElement(
         "div",

@@ -5,6 +5,7 @@ import { Library } from './components/Library.js';
 import { GoogleOAuthGate } from './components/GoogleOAuthGate.js';
 import { Reader } from './components/Reader.js';
 import { YoutubeChannelViewer } from './components/YoutubeChannelViewer.js';
+import { Explorer } from './components/Explorer.js';
 import { useIndexedDB } from './hooks/useIndexedDB.js';
 import { libraryItemKey } from './utils/libraryItemKey.js';
 import { needsDriveOAuthLogin } from './utils/driveOAuthGateCheck.js';
@@ -47,6 +48,7 @@ const App = () => {
   const [currentVideo, setCurrentVideo] = useState(null);
   const [currentChannel, setCurrentChannel] = useState(null);
   const [view, setView] = useState('library');
+  const [mode, setMode] = useState('library'); // 'library' | 'explorer'
   /** When true, full-screen Google sign-in is shown (Drive configured but no valid token). */
   const [oauthGateActive, setOauthGateActive] = useState(() => needsDriveOAuthLogin());
   const [pendingChannelDelete, setPendingChannelDelete] = useState(null);
@@ -196,11 +198,20 @@ const App = () => {
     React.createElement(Header, {
       onBack: view !== 'library' ? handleBackToLibrary : undefined,
       userEmail: googleUserEmail,
+      mode,
+      onModeChange: setMode,
+      showModeToggle: view === 'library',
     }),
     React.createElement(
       "main",
-      { className: "flex-grow flex flex-col min-h-0 p-4 sm:p-6 md:p-8" },
-      view === 'library'
+      { className: `flex-grow flex flex-col min-h-0 ${mode === 'explorer' ? '' : 'p-4 sm:p-6 md:p-8'}` },
+      mode === 'explorer'
+        ? React.createElement(Explorer, {
+            addItem,
+            addImage,
+            onSaved: () => setMode('library'),
+          })
+        : view === 'library'
         ? React.createElement(Library, {
             items,
             channels,

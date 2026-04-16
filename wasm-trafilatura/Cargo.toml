@@ -1,0 +1,16 @@
+[package]
+name = "trafilatura-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+trafilatura = { version = "0.3", features = ["markdown"] }
+
+[profile.release]
+# Minimise binary size for faster browser download
+opt-level = "z"
+lto = true

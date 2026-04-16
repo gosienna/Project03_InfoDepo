@@ -421,7 +421,7 @@ export const useIndexedDB = () => {
         tags: [],
       };
       const addRequest = tx.objectStore(store).add(record);
-      addRequest.onsuccess = () => { loadItems('addItem'); resolve(); };
+      addRequest.onsuccess = (e) => { loadItems('addItem'); resolve(e.target.result); };
       addRequest.onerror   = (e) => { console.error('Error adding item:', store, e.target.error); reject(e.target.error); };
     });
   }, [db, loadItems]);
