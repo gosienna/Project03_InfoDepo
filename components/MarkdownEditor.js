@@ -71,21 +71,26 @@ const renderMarkdown = (text, assetUrls) => {
       continue;
     }
 
-    // Unordered list item
-    if (/^([-*]) /.test(cleanLine)) {
-      const marker  = cleanLine[0];
-      const content = line.slice(2); // preserve \x00 in content
-      output.push(`<div style="margin:0"><span style="color:#6b7280">${marker} </span>${inlineMarkdown(content, assetUrls)}</div>`);
+    // Unordered list item (supports nesting via 4-space indentation)
+    const ulRenderMatch = cleanLine.match(/^((?:    )*)([-*]) /);
+    if (ulRenderMatch) {
+      const level   = ulRenderMatch[1].length / 4;
+      const marker  = ulRenderMatch[2];
+      const content = line.slice(ulRenderMatch[0].length); // preserve \x00
+      const indent  = level > 0 ? `padding-left:${level * 20}px;` : '';
+      output.push(`<div style="margin:0;${indent}"><span style="color:#6b7280">${marker} </span>${inlineMarkdown(content, assetUrls)}</div>`);
       i++;
       continue;
     }
 
-    // Ordered list item
-    if (/^\d+\. /.test(cleanLine)) {
-      const numMatch = cleanLine.match(/^(\d+\.) /);
-      const prefix   = numMatch[1];
-      const content  = line.slice(prefix.length + 1); // preserve \x00
-      output.push(`<div style="margin:0"><span style="color:#6b7280">${prefix} </span>${inlineMarkdown(content, assetUrls)}</div>`);
+    // Ordered list item (supports nesting via 4-space indentation)
+    const olRenderMatch = cleanLine.match(/^((?:    )*)(\d+\.) /);
+    if (olRenderMatch) {
+      const level   = olRenderMatch[1].length / 4;
+      const prefix  = olRenderMatch[2];
+      const content = line.slice(olRenderMatch[0].length); // preserve \x00
+      const indent  = level > 0 ? `padding-left:${level * 20}px;` : '';
+      output.push(`<div style="margin:0;${indent}"><span style="color:#6b7280">${prefix} </span>${inlineMarkdown(content, assetUrls)}</div>`);
       i++;
       continue;
     }
@@ -436,6 +441,35 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       }
     }
 
+    // Tab / Shift-Tab to indent or unindent list items
+    if (e.key === 'Tab' && slashMenu === null && ta) {
+      const pos     = ta.selectionStart;
+      const val     = ta.value;
+      const lineStart  = val.lastIndexOf('\n', pos - 1) + 1;
+      const lineEnd    = val.indexOf('\n', pos);
+      const fullLine   = val.slice(lineStart, lineEnd === -1 ? val.length : lineEnd);
+      if (/^(    )*([-*]|\d+\.) /.test(fullLine)) {
+        e.preventDefault();
+        const lineEndIdx = lineEnd === -1 ? val.length : lineEnd;
+        if (e.shiftKey) {
+          if (fullLine.startsWith('    ')) {
+            const newLine = fullLine.slice(4);
+            const newText = val.slice(0, lineStart) + newLine + val.slice(lineEndIdx);
+            const newPos  = Math.max(lineStart, pos - 4);
+            setText(newText); setIsDirty(true);
+            requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos; pushHistory(newText, newPos); });
+          }
+        } else {
+          const newLine = '    ' + fullLine;
+          const newText = val.slice(0, lineStart) + newLine + val.slice(lineEndIdx);
+          const newPos  = pos + 4;
+          setText(newText); setIsDirty(true);
+          requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos; pushHistory(newText, newPos); });
+        }
+        return;
+      }
+    }
+
     // Arrow up → end of previous line; arrow down → end of next line
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && slashMenu === null && ta) {
       e.preventDefault();
@@ -467,25 +501,38 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
         const lineEnd = val.indexOf('\n', pos);
         const fullLine = val.slice(lineStart, lineEnd === -1 ? val.length : lineEnd);
 
-        const ulMatch = fullLine.match(/^([-*]) (.*)$/);
-        const olMatch = !ulMatch && fullLine.match(/^(\d+)\. (.*)$/);
+        const ulMatch = fullLine.match(/^((?:    )*)([-*]) (.*)$/);
+        const olMatch = !ulMatch && fullLine.match(/^((?:    )*)(\d+)\. (.*)$/);
 
         if (ulMatch || olMatch) {
-          const isEmpty = ulMatch ? ulMatch[2].trim() === '' : olMatch[2].trim() === '';
+          const indent  = ulMatch ? ulMatch[1] : olMatch[1];
+          const isEmpty = ulMatch ? ulMatch[3].trim() === '' : olMatch[3].trim() === '';
 
           if (isEmpty) {
-            // Empty list item → exit list: remove marker, just insert a newline
             e.preventDefault();
-            const newText = val.slice(0, lineStart) + '\n' + val.slice(lineEnd === -1 ? val.length : lineEnd);
-            const newPos  = lineStart + 1;
-            setText(newText);
-            setIsDirty(true);
-            requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos; pushHistory(newText, newPos); });
+            if (indent.length >= 4) {
+              // Nested empty item → unindent one level
+              const newIndent  = indent.slice(4);
+              const marker     = ulMatch ? `${ulMatch[2]} ` : `${olMatch[2]}. `;
+              const lineEndIdx = lineEnd === -1 ? val.length : lineEnd;
+              const newText    = val.slice(0, lineStart) + newIndent + marker + val.slice(lineEndIdx);
+              const newPos     = lineStart + newIndent.length + marker.length;
+              setText(newText);
+              setIsDirty(true);
+              requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos; pushHistory(newText, newPos); });
+            } else {
+              // Top-level empty item → exit list
+              const newText = val.slice(0, lineStart) + '\n' + val.slice(lineEnd === -1 ? val.length : lineEnd);
+              const newPos  = lineStart + 1;
+              setText(newText);
+              setIsDirty(true);
+              requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newPos; pushHistory(newText, newPos); });
+            }
           } else {
-            // Continue list with next marker
+            // Continue list with next marker (preserving indent)
             e.preventDefault();
-            const marker  = ulMatch ? `${ulMatch[1]} ` : `${parseInt(olMatch[1]) + 1}. `;
-            const insert  = '\n' + marker;
+            const marker  = ulMatch ? `${ulMatch[2]} ` : `${parseInt(olMatch[2]) + 1}. `;
+            const insert  = '\n' + indent + marker;
             const newText = val.slice(0, pos) + insert + val.slice(pos);
             const newPos  = pos + insert.length;
             setText(newText);
