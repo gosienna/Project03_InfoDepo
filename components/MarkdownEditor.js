@@ -44,6 +44,7 @@ const inlineMarkdown = (text, assetUrls) =>
 const renderMarkdown = (text, assetUrls) => {
   const lines  = text.split('\n');
   const output = [];
+  const headingSlugSeen = new Map(); // dedup counters — must mirror extractHeadings logic
   let i = 0;
 
   while (i < lines.length) {
@@ -105,8 +106,12 @@ const renderMarkdown = (text, assetUrls) => {
         'font-weight:700;border-bottom:1px solid #4b5563;margin:0',
         'font-weight:700;color:#c7d2fe;margin:0',
       ];
-      const content = line.slice(hMatch[1].length + 1); // preserve \x00
-      output.push(`<div style="${styles[lvl - 1]}">${inlineMarkdown(content, assetUrls)}</div>`);
+      const content  = line.slice(hMatch[1].length + 1); // preserve \x00
+      const base     = slugify(stripInlineMarkdown(cleanLine.slice(hMatch[1].length + 1)));
+      const cnt      = (headingSlugSeen.get(base) || 0) + 1;
+      headingSlugSeen.set(base, cnt);
+      const slug     = cnt === 1 ? base : `${base}-${cnt}`;
+      output.push(`<div id="${slug}" style="${styles[lvl - 1]}">${inlineMarkdown(content, assetUrls)}</div>`);
       i++;
       continue;
     }
@@ -135,6 +140,28 @@ const renderMarkdown = (text, assetUrls) => {
 
 const escapeHtml = (str) =>
   str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const stripInlineMarkdown = (s) =>
+  s.replace(/\*\*(.+?)\*\*/g, '$1').replace(/\*(.+?)\*/g, '$1').replace(/`([^`]+)`/g, '$1');
+
+const slugify = (s) =>
+  s.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-') || 'section';
+
+// Returns headings with deduplicated slugs — order matches renderMarkdown's id generation.
+const extractHeadings = (text) => {
+  const seen = new Map();
+  return text.split('\n').reduce((acc, line, i) => {
+    const m = line.match(/^(#{1,3}) (.+)$/);
+    if (!m) return acc;
+    const title = stripInlineMarkdown(m[2]);
+    const base  = slugify(title);
+    const cnt   = (seen.get(base) || 0) + 1;
+    seen.set(base, cnt);
+    const slug  = cnt === 1 ? base : `${base}-${cnt}`;
+    acc.push({ level: m[1].length, title, lineIdx: i, slug });
+    return acc;
+  }, []);
+};
 
 const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -213,18 +240,20 @@ function snapCursorPos(text, cursorPos) {
 }
 
 // Slash command definitions
+// blockOnly: true  → only shown when '/' is at the very start of a line
 // imageSize: null = full width, number = pixel width for the |size suffix
 const SLASH_COMMANDS = [
-  { id: 'h1',       label: 'Title',          hint: '# Heading',    insert: '# ',  imageSize: undefined },
-  { id: 'h2',       label: 'Heading 2',      hint: '## Heading',   insert: '## ', imageSize: undefined },
-  { id: 'h3',       label: 'Heading 3',      hint: '### Heading',  insert: '### ', imageSize: undefined },
-  { id: 'ul',       label: 'List item',      hint: '- item',       insert: '- ',  imageSize: undefined },
-  { id: 'ol',       label: 'Numbered list',  hint: '1. item',      insert: '1. ', imageSize: undefined },
+  { id: 'h1',       label: 'Title',          hint: '# Heading',    insert: '# ',  imageSize: undefined, blockOnly: true },
+  { id: 'h2',       label: 'Heading 2',      hint: '## Heading',   insert: '## ', imageSize: undefined, blockOnly: true },
+  { id: 'h3',       label: 'Heading 3',      hint: '### Heading',  insert: '### ', imageSize: undefined, blockOnly: true },
+  { id: 'ul',       label: 'List item',      hint: '- item',       insert: '- ',  imageSize: undefined, blockOnly: true },
+  { id: 'ol',       label: 'Numbered list',  hint: '1. item',      insert: '1. ', imageSize: undefined, blockOnly: true },
   { id: 'image',    label: 'Image',          hint: 'full width',   insert: null,  imageSize: null  },
   { id: 'image-sm', label: 'Image — Small',  hint: '300 px',       insert: null,  imageSize: 300   },
   { id: 'image-md', label: 'Image — Medium', hint: '500 px',       insert: null,  imageSize: 500   },
   { id: 'image-lg', label: 'Image — Large',  hint: '800 px',       insert: null,  imageSize: 800   },
   { id: 'youtube',  label: 'YouTube embed',  hint: 'paste URL',    insert: '[Video Title](https://youtube.com/watch?v=)', imageSize: undefined },
+  { id: 'goto',     label: 'Go to section',  hint: 'jump to heading', insert: null, gotoSection: true, imageSize: undefined },
 ];
 
 // Saves go through onUpdateItem → useIndexedDB.updateItem (routes by `video.type`: `notes` vs `books`).
@@ -244,13 +273,17 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   const [hoveredImg, setHoveredImg] = useState(null); // { filename, rect } | null
   const [resizingImg, setResizingImg] = useState(null); // { filename, startX, startWidth, width } | null
   const [editingImg, setEditingImg] = useState(null); // { src, filename } | null
+  const [showToc,     setShowToc]     = useState(false);
+  const [headingMenu, setHeadingMenu] = useState(null); // null | { insertPos, activeIdx }
   const hoveredImgClearTimer = useRef(null);
+  const tocButtonRef         = useRef(null);
   const textRef              = useRef('');
   const imageInputRef        = useRef(null);
   const textareaRef          = useRef(null);
   const previewRef           = useRef(null);
-  const pendingSlashPos      = useRef(null); // set in keydown, consumed in onChange
-  const pendingImageSize     = useRef(undefined); // null = full width, number = px width
+  const pendingSlashPos         = useRef(null);      // set in keydown, consumed in onChange
+  const pendingSlashAtLineStart = useRef(true);      // whether the '/' was at line start
+  const pendingImageSize        = useRef(undefined); // null = full width, number = px width
   const historyRef           = useRef([]);   // undo stack: [{ text, cursorPos }, ...]
   const historyIdxRef        = useRef(-1);   // current position in stack
 
@@ -309,10 +342,11 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     if (textareaRef.current) setCursorPos(textareaRef.current.selectionStart);
   };
 
-  const filteredCommands = (filter) => {
-    if (!filter) return SLASH_COMMANDS;
+  const filteredCommands = (filter, atLineStart = true) => {
+    const pool = atLineStart ? SLASH_COMMANDS : SLASH_COMMANDS.filter(c => c.gotoSection);
+    if (!filter) return pool;
     const q = filter.toLowerCase();
-    return SLASH_COMMANDS.filter(c =>
+    return pool.filter(c =>
       c.label.toLowerCase().includes(q) || c.id.replace(/-/g, '').includes(q.replace(/-/g, ''))
     );
   };
@@ -324,6 +358,17 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     const start = slashMenu.slashPos;
 
     setSlashMenu(null);
+
+    if (cmd.gotoSection) {
+      // Remove '/' + filter text, then open heading picker at that position
+      const newText = text.slice(0, start) + text.slice(end);
+      setText(newText);
+      setIsDirty(true);
+      requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start; ta.focus(); pushHistory(newText, start); });
+      const headings = extractHeadings(newText);
+      if (headings.length > 0) setHeadingMenu({ insertPos: start, activeIdx: 0 });
+      return;
+    }
 
     if (cmd.insert === null) {
       // Image command — remove '/' + filter text, store size, open file picker
@@ -405,7 +450,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       const slashPos = pendingSlashPos.current;
       pendingSlashPos.current = null;
       if (val[slashPos] === '/') {
-        setSlashMenu({ slashPos, filter: '', activeIdx: 0 });
+        setSlashMenu({ slashPos, filter: '', activeIdx: 0, atLineStart: pendingSlashAtLineStart.current });
         return;
       }
     }
@@ -425,16 +470,15 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   const handleKeyDown = (e) => {
     const ta = textareaRef.current;
 
-    // Detect '/' at start of line — read selectionStart here before React re-renders
+    // Detect '/' anywhere on a line — read selectionStart here before React re-renders
     if (e.key === '/' && slashMenu === null) {
       if (ta) {
-        const pos = ta.selectionStart;
-        const val = ta.value;
-        const lineStart = val.lastIndexOf('\n', pos - 1) + 1;
+        const pos        = ta.selectionStart;
+        const val        = ta.value;
+        const lineStart  = val.lastIndexOf('\n', pos - 1) + 1;
         const beforeCursor = val.slice(lineStart, pos);
-        if (beforeCursor.trim() === '') {
-          pendingSlashPos.current = pos; // '/' will land at this index
-        }
+        pendingSlashPos.current    = pos;
+        pendingSlashAtLineStart.current = beforeCursor.trim() === '';
       }
     }
 
@@ -506,7 +550,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     }
 
     if (slashMenu !== null) {
-      const visible = filteredCommands(slashMenu.filter);
+      const visible = filteredCommands(slashMenu.filter, slashMenu.atLineStart);
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         setSlashMenu(prev => ({ ...prev, activeIdx: (prev.activeIdx + 1) % visible.length }));
@@ -525,6 +569,30 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       if (e.key === 'Escape') {
         e.preventDefault();
         setSlashMenu(null);
+        return;
+      }
+    }
+
+    if (headingMenu !== null) {
+      const headings = extractHeadings(text);
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setHeadingMenu(prev => ({ ...prev, activeIdx: (prev.activeIdx + 1) % headings.length }));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setHeadingMenu(prev => ({ ...prev, activeIdx: (prev.activeIdx - 1 + headings.length) % headings.length }));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        applyHeadingMenu(headings[headingMenu.activeIdx]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setHeadingMenu(null);
         return;
       }
     }
@@ -673,6 +741,24 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     }
   };
 
+  const scrollToHeading = (slug) => {
+    setShowToc(false);
+    previewRef.current?.querySelector(`#${CSS.escape(slug)}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const applyHeadingMenu = (heading) => {
+    if (!heading || !textareaRef.current) return;
+    const ta        = textareaRef.current;
+    const insertPos = headingMenu.insertPos;
+    const link      = `[go to section](#${heading.slug})`;
+    const newText   = text.slice(0, insertPos) + link + text.slice(insertPos);
+    const newCursor = insertPos + link.length;
+    setText(newText);
+    setIsDirty(true);
+    setHeadingMenu(null);
+    requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newCursor; ta.focus(); pushHistory(newText, newCursor); });
+  };
+
   const handleExport = async () => {
     const zip = new JSZip();
     const assets = await (onGetImages ? onGetImages(video.id) : Promise.resolve([]));
@@ -748,11 +834,19 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   }
 
   // Slash command dropdown — position from the rendered cursor span in the preview
-  const visible = slashMenu ? filteredCommands(slashMenu.filter) : [];
+  const visible = slashMenu ? filteredCommands(slashMenu.filter, slashMenu.atLineStart) : [];
   const coords  = (() => {
-    if (!slashMenu || !previewRef.current) return { top: 0, left: 0 };
+    if (!(slashMenu || headingMenu) || !previewRef.current) return { top: 0, left: 0 };
     const span = previewRef.current.querySelector('[data-cursor]');
-    if (!span) return { top: 0, left: 0 };
+    if (!span) {
+      // headingMenu: cursor span may not exist; fall back to textarea caret position via a temp range
+      const ta = textareaRef.current;
+      if (ta) {
+        const r = ta.getBoundingClientRect();
+        return { top: r.top + 24, left: Math.max(8, Math.min(r.left + 16, window.innerWidth - 240)) };
+      }
+      return { top: 0, left: 0 };
+    }
     const r = span.getBoundingClientRect();
     return { top: r.bottom + 4, left: Math.max(8, Math.min(r.left, window.innerWidth - 240)) };
   })();
@@ -785,6 +879,23 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
         saveMsg === 'saved' && React.createElement('span', { className: 'text-xs text-emerald-400 font-medium' }, 'Saved'),
         saveMsg === 'error' && React.createElement('span', { className: 'text-xs text-red-400 font-medium' }, 'Save failed'),
         isDirty && !saveMsg && React.createElement('span', { className: 'text-xs text-gray-500' }, 'Unsaved changes'),
+
+        // Contents / TOC
+        React.createElement(
+          'button',
+          {
+            ref: tocButtonRef,
+            onClick: () => setShowToc(v => !v),
+            title: 'Go to section',
+            className: `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${showToc ? 'bg-indigo-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-200'}`,
+          },
+          React.createElement(
+            'svg',
+            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-3.5 w-3.5', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+            React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M4 6h16M4 10h10M4 14h16M4 18h10' })
+          ),
+          'Contents'
+        ),
 
         // Export as ZIP
         React.createElement(
@@ -861,6 +972,13 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
         className: 'bg-gray-900 text-gray-100 text-sm leading-relaxed p-6 overflow-auto',
         style: { flex: 1, minWidth: 0, cursor: 'text' },
         onClick: (e) => {
+          const anchor = e.target.closest('a[href^="#"]');
+          if (anchor) {
+            e.preventDefault();
+            const slug = anchor.getAttribute('href').slice(1);
+            previewRef.current?.querySelector(`#${CSS.escape(slug)}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            return;
+          }
           const pos = clickToMarkdownPos(previewRef.current, e.clientX, e.clientY, text);
           // Set textarea selectionStart/End then focus it
           const ta = textareaRef.current;
@@ -909,7 +1027,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       onKeyDown: handleKeyDown,
       onSelect: updateCursor,
       onFocus: () => { setIsFocused(true); updateCursor(); },
-      onBlur: () => { setIsFocused(false); setTimeout(() => setSlashMenu(null), 150); },
+      onBlur: () => { setIsFocused(false); setTimeout(() => { setSlashMenu(null); setHeadingMenu(null); setShowToc(false); }, 150); },
       onPaste: (e) => {
         const item = Array.from(e.clipboardData.items).find(i => i.type.startsWith('image/'));
         if (item) { e.preventDefault(); insertImage(item.getAsFile()); }
@@ -918,6 +1036,84 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       'aria-hidden': true,
       style: { position: 'fixed', top: '-9999px', left: '-9999px', width: '1px', height: '1px', opacity: 0, overflow: 'hidden' },
     }),
+
+      // Contents / TOC dropdown
+      showToc && React.createElement(
+        'div',
+        {
+          style: (() => {
+            if (!tocButtonRef.current) return { display: 'none' };
+            const r = tocButtonRef.current.getBoundingClientRect();
+            return { position: 'fixed', top: r.bottom + 4, right: window.innerWidth - r.right, zIndex: 9999 };
+          })(),
+          className: 'bg-gray-800 border border-gray-600 rounded-xl shadow-2xl py-1 min-w-56 max-h-80 overflow-y-auto',
+          onMouseDown: (e) => e.preventDefault(),
+        },
+        React.createElement(
+          'div',
+          { className: 'px-3 py-1.5 text-xs text-gray-500 border-b border-gray-700' },
+          'Go to section'
+        ),
+        (() => {
+          const headings = extractHeadings(text);
+          if (headings.length === 0)
+            return React.createElement('div', { className: 'px-3 py-2 text-sm text-gray-500 italic' }, 'No headings found');
+          return headings.map((h) =>
+            React.createElement(
+              'button',
+              {
+                key: h.lineIdx,
+                onMouseDown: (e) => { e.preventDefault(); scrollToHeading(h.slug); },
+                className: 'w-full flex items-center px-3 py-1.5 text-sm text-gray-200 hover:bg-gray-700 text-left transition-colors',
+                style: { paddingLeft: `${(h.level - 1) * 16 + 12}px` },
+              },
+              h.level === 1
+                ? React.createElement('span', { className: 'font-bold' }, h.title)
+                : h.level === 2
+                  ? React.createElement('span', { className: 'font-medium text-gray-300' }, h.title)
+                  : React.createElement('span', { className: 'text-gray-400' }, h.title)
+            )
+          );
+        })()
+      ),
+
+      // Heading picker dropdown (triggered by /goto slash command)
+      headingMenu !== null && React.createElement(
+        'div',
+        {
+          style: { position: 'fixed', top: coords.top, left: coords.left, zIndex: 9999 },
+          className: 'bg-gray-800 border border-gray-600 rounded-xl shadow-2xl py-1 min-w-56 max-h-80 overflow-y-auto',
+          onMouseDown: (e) => e.preventDefault(),
+        },
+        React.createElement(
+          'div',
+          { className: 'px-3 py-1.5 text-xs text-gray-500 border-b border-gray-700' },
+          'Insert link to section'
+        ),
+        extractHeadings(text).map((h, i) =>
+          React.createElement(
+            'button',
+            {
+              key: h.slug,
+              onMouseDown: (e) => { e.preventDefault(); applyHeadingMenu(h); },
+              className: `w-full flex items-center px-3 py-2 text-sm transition-colors text-left ${
+                i === headingMenu.activeIdx ? 'bg-indigo-600 text-white' : 'text-gray-200 hover:bg-gray-700'
+              }`,
+              style: { paddingLeft: `${(h.level - 1) * 16 + 12}px` },
+            },
+            React.createElement(
+              'span',
+              { className: h.level === 1 ? 'font-bold' : h.level === 2 ? 'font-medium' : 'text-gray-400' },
+              h.title
+            ),
+            React.createElement(
+              'span',
+              { className: `text-xs font-mono ml-auto pl-4 ${i === headingMenu.activeIdx ? 'text-indigo-200' : 'text-gray-600'}` },
+              `#${h.slug}`
+            )
+          )
+        )
+      ),
 
       // Slash command dropdown
       slashMenu && visible.length > 0 && React.createElement(
