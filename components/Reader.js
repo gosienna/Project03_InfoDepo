@@ -27,6 +27,7 @@ export const Reader = ({
   readOnly,
   onSelectChannel,
   onAddChannel,
+  onRename,
 }) => {
   const fileExtension = useMemo(() => {
     const ext = getFileExtension(video.name);
@@ -127,7 +128,10 @@ export const Reader = ({
           storeName: video.idbStore,
         });
       case 'md':
-        return React.createElement(MarkdownEditor, { video, onUpdateItem, onAddImage, onGetImages, readOnly });
+        return React.createElement(MarkdownEditor, {
+          video, onUpdateItem, onAddImage, onGetImages, readOnly,
+          onRename: onRename && !readOnly ? (newName) => onRename(video.id, video.idbStore, newName) : null,
+        });
       case 'youtube':
         return React.createElement(YoutubeViewer, { video, onSelectChannel, onAddChannel });
       default:

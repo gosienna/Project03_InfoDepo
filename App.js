@@ -278,6 +278,7 @@ const App = () => {
             readOnly: false,
             onSelectChannel: handleSelectChannel,
             onAddChannel: addChannel,
+            onRename: renameItem,
           })
         : React.createElement(
             "div",
