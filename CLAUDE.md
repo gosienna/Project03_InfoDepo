@@ -66,7 +66,7 @@ App.js                            # View switching (library ↔ reader ↔ chann
 └── Reader.js                     # Dispatches to viewer by file extension / MIME type
     ├── PdfViewer.js
     ├── TxtViewer.js
-    ├── MarkdownEditor.js         # Markdown editor with live preview, slash commands, image assets
+    ├── MarkdownEditor.js         # Markdown editor with HTML/Markdown dual modes, slash commands, go-to-section, image assets
     ├── YoutubeViewer.js          # YouTube embed via youtube-nocookie.com iframe
     └── UnsupportedViewer.js
 

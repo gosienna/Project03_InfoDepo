@@ -2,115 +2,108 @@
 
 ## Overview
 
-InfoDepo is a fully client-side media library. No backend server. All data lives in the browser.
+InfoDepo is a browser-only app (no backend database). Content is stored in IndexedDB and optionally synchronized with Google Drive.
 
 ```
 User
  └── Browser
-      ├── React App (Vite, port 3001)
-      │    ├── Library view      — item grid, file import, YouTube links
-      │    └── Reader view       — PDF / TXT / Markdown / YouTube inline viewers
-      ├── reader.html            — standalone EPUB reader (new tab)
-      └── IndexedDB              — local item storage (shared by both pages)
+      ├── React app (Vite)
+      │    ├── Library (items/channels, sync, sharing)
+      │    ├── Reader (PDF/TXT/MD/YouTube)
+      │    └── Explorer (web page → markdown note)
+      ├── reader.html (EPUB in new tab)
+      └── IndexedDB (InfoDepo, v7)
 ```
 
-## Component Tree
+## Current component map
 
 ```
 App.js
-├── Header.js               # Nav bar, back button
-├── Library.js              # Item grid, file upload, YouTube modal, Drive browser, share filter
-│   ├── DataTile.js         # Library grid tiles (items + channels + shares; same column layout)
-│   ├── Explorer.js         # Web page preview + extract-to-Markdown flow (WASM + Netlify functions)
-│   ├── SharesEditorModal.js # Owner share editor / receiver read-only view
-│   ├── NewNoteModal.js     # Create a new Markdown note
-│   ├── NewYoutubeModal.js  # Add a YouTube video or channel link
-│   └── DevDriveBrowser.js  # Dev/prod: OAuth + Drive API folder browser
-├── YoutubeChannelViewer.js # Sortable video grid for a channel; auto-refreshes new videos on mount
-└── Reader.js               # Dispatches to viewer by file extension / MIME type
-    ├── PdfViewer.js        # PDF via pdf.js + SVG overlays; annotations saved with pdf-lib
-    ├── TxtViewer.js        # Plain text via FileReader
-    ├── MarkdownEditor.js   # Markdown editor with live preview and image assets
-    ├── YoutubeViewer.js    # YouTube embed via youtube-nocookie.com iframe
+├── GoogleLoginGate.js      # step 1: Google sign-in (all users when credentials exist)
+├── DriveFolderGate.js      # step 2: owner/editor folder setup (viewer skips)
+├── Header.js               # top bar, user email + role badge, manage users (master)
+│   └── UserConfigModal.js  # edits config.json users map
+├── Library.js              # grid, sync, upload, item-level sharedWith, peer sync for viewer
+│   ├── DataTile.js         # item/channel cards with tags + sharedWith editor
+│   ├── NewNoteModal.js
+│   ├── NewYoutubeModal.js
+│   ├── NewChannelModal.js
+│   └── DeleteContentModal.js
+├── YoutubeChannelViewer.js
+└── Reader.js
+    ├── PdfViewer.js
+    ├── TxtViewer.js
+    ├── MarkdownEditor.js
+    ├── YoutubeViewer.js
     └── UnsupportedViewer.js
 ```
 
-## Data Flow
+## Sharing model (current)
 
+Legacy share-link flow was removed. Sharing is now item-level:
+
+- each record stores `sharedWith: string[]`
+- each record stores `ownerEmail: string`
+- owner writes `_infodepo_index.json` as discovery index
+- Drive ACLs are reconciled from `sharedWith`
+- viewers run peer sync from configured peer folders and prune revoked items
+
+See [sharing-mechanism.md](sharing-mechanism.md).
+
+## Core runtime flows
+
+### Startup and role resolution
+
+1. IndexedDB initializes via `useIndexedDB`.
+2. If `VITE_CLIENT_ID` exists and token is missing, show `GoogleLoginGate`.
+3. Resolve role:
+   - `googleUserEmail === VITE_MASTER` -> `master`
+   - otherwise resolve from `config.json` (`users` map)
+4. `DriveFolderGate` runs only for `master`/`editor`.
+5. `viewer` runs peer shared-content sync on load.
+
+### Owner/editor sync
+
+`runOwnerSyncPipeline`:
+1. backup local updates to Drive
+2. pull Drive folder updates to local
+3. write owner index (`_infodepo_index.json`)
+4. sync shared content from peers (if configured)
+
+### Viewer sync
+
+`syncSharedFromPeers`:
+1. load peer list from `config.json` (`users` with `folderId`)
+2. fetch each peer `_infodepo_index.json`
+3. keep entries shared with current user
+4. prune locally cached peer-owned rows not in current shared set
+5. upsert remaining downloadable items/channels
+
+## Key files
+
+| File | Purpose |
+|------|---------|
+| `App.js` | startup gates, role resolution, main routing |
+| `hooks/useIndexedDB.js` | IndexedDB CRUD and sync helpers |
+| `components/Library.js` | sync UI, tile actions, share ACL/update orchestration |
+| `utils/driveSync.js` | backup + folder pull engine |
+| `utils/libraryDriveSync.js` | owner sync orchestration |
+| `utils/ownerIndex.js` | read/write `_infodepo_index.json` |
+| `utils/peerSync.js` | peer discovery + viewer download/prune |
+| `utils/driveSharePermissions.js` | apply/revoke Drive reader permissions |
+| `utils/userConfig.js` | parse config users map and role/folder helpers |
+
+## Current config.json shape
+
+```json
+{
+  "master": "master@example.com",
+  "users": {
+    "master@example.com": { "role": "master", "folderId": "..." },
+    "editor@example.com": { "role": "editor", "folderId": "..." },
+    "viewer@example.com": { "role": "viewer" }
+  }
+}
 ```
-Import (local file)
-  input[type=file] → File (Blob) → useIndexedDB.addItem() → IndexedDB 'books' store
 
-Import (YouTube URL)
-  NewYoutubeModal → JSON Blob (url + title) → useIndexedDB.addItem() → IndexedDB 'videos' store
-
-Import (dev/prod Drive)
-  DevDriveBrowser → OAuth → Drive API v3 → Blob → useIndexedDB.upsertDriveBook() → IndexedDB 'books' store
-
-Import (web page → Markdown note)
-  Explorer.js
-    ├── /api/preview-url?u=...  (iframe preview proxy)
-    ├── /api/fetch-url?u=...    (server-side HTML fetch)
-    ├── WASM trafilatura.extract_markdown(html)
-    ├── /api/fetch-image?u=...  (download remote images)
-    └── addItem(text/markdown) + addImage(...) → IndexedDB 'notes' + 'images'
-
-Open item
-  DataTile click → App.handleSelectVideo(video)
-    ├── EPUB    → window.open('/reader.html?id=X')
-    │             └── reader.html reads IndexedDB 'books' store by ID → EPUB.js
-    ├── PDF/TXT → Reader.js → inline viewer component
-    ├── MD      → Reader.js → MarkdownEditor
-    └── YouTube → Reader.js → YoutubeViewer (iframe embed)
-
-Share (owner)
-  New share → SharesEditorModal → addShare() → IndexedDB 'shares' store
-  Save & upload → serializeShareToDriveJson → Drive file + applyShareRecordsToDriveFiles (ACLs)
-
-Share (receiver)
-  Link share → paste Drive file ID/URL → fetchSharesJsonByFileId → addShare() → IndexedDB 'shares'
-  Click share tile → activeShareFilter → library grid filtered to explicitRefs driveIds
-                   → syncSharedFilesByDriveId downloads referenced files into IndexedDB
-```
-
-## Key Files
-
-| File | Role |
-|------|------|
-| `App.js` | Root — view state, item selection routing |
-| `hooks/useIndexedDB.js` | All IndexedDB CRUD. Six stores: `books`, `notes`, `videos`, `images`, `channels`, `shares`. See [data-stores.md](data-stores.md) |
-| `components/DataTile.js` | Grid cards for items, channels, and shares — same shell; YouTube thumb or BookIcon; tags |
-| `components/YoutubeViewer.js` | Embeds YouTube video via `youtube-nocookie.com/embed/{id}` iframe |
-| `components/NewYoutubeModal.js` | Modal to save a YouTube URL as a `application/x-youtube` JSON blob |
-| `components/Explorer.js` | In-app web extractor: preview remote pages, extract to Markdown via WASM, localize images |
-| `reader.html` | Standalone EPUB reader page, no React |
-| `utils/fileUtils.js` | File extension extraction, byte size formatting |
-| `utils/driveSync.js` | Drive sync engine — owner backup (POST/PATCH), folder pull, shared content download |
-| `netlify/functions/preview-url.js` | Preview proxy for iframe-safe remote HTML rendering |
-| `netlify/functions/fetch-url.js` | HTML fetch proxy for extraction (CORS / origin bypass) |
-| `netlify/functions/fetch-image.js` | Image fetch proxy for note asset localization |
-| `utils/sharesDriveJson.js` | Share config serialization/deserialization for Drive JSON |
-| `utils/sharesDriveFile.js` | Upload/fetch share JSON files to/from Google Drive |
-| `utils/driveSharePermissions.js` | Reconcile Drive ACLs from owner share records |
-| `utils/youtubeApi.js` | `resolveChannelId()`, `fetchChannelVideos()`, `fetchNewChannelVideos()` via YouTube Data API v3 |
-
-## Supported Content Types
-
-| Extension | MIME type | Viewer | Notes |
-|-----------|-----------|--------|-------|
-| `.epub` | `application/epub+zip` | `reader.html` (new tab) | EPUB.js |
-| `.pdf` | `application/pdf` | `PdfViewer` | pdf.js page rendering, highlight/text/line annotations, save via pdf-lib |
-| `.txt` | `text/plain` | `TxtViewer` | FileReader |
-| `.md` | `text/markdown` | `MarkdownEditor` | Live preview, slash commands, image assets |
-| `.youtube` | `application/x-youtube` | `YoutubeViewer` | JSON blob `{url, title}` — iframe embed |
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Framework | React 18.3.1 (no JSX — uses `React.createElement()`) |
-| Build | Vite 6.2.0 |
-| Styling | Tailwind CSS (CDN) |
-| Storage | IndexedDB (`InfoDepo` database, schema version 6, stores: `books`, `notes`, `videos`, `images`, `channels`, `shares`, `pdfAnnotations`) |
-| EPUB rendering | EPUB.js (CDN) |
-| Auth (dev only) | Google OAuth 2.0 via Google Identity Services |
+`viewer` rows do not require `folderId`; owner/editor rows should include it for peer sync.

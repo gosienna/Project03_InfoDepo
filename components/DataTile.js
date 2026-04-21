@@ -22,6 +22,7 @@ function formatViewCount(n) {
 }
 
 /** Shared by `item` and `channel` tiles so width/height track the same layout (grid column + `h-40` hero). */
+
 const DATA_TILE_SHELL =
   'bg-gray-800 rounded-lg shadow-lg overflow-hidden cursor-pointer w-full group transition-all duration-300 transform hover:-translate-y-1 hover:shadow-indigo-500/30';
 
@@ -71,33 +72,33 @@ const UploadButton = ({ status, onClick }) => {
 };
 
 /**
- * Library tile: merged books / notes / videos (`tileType: 'item'`), YouTube channel (`tileType: 'channel'`), or Drive share (`tileType: 'share'`).
+ * Library tile: merged books / notes / videos (`tileType: 'item'`) or YouTube channel (`tileType: 'channel'`).
  */
 export const DataTile = ({
   tileType,
   item,
   channel,
-  share,
   onSelect,
   onDelete,
   onUpload,
   uploadStatus,
   onSetTags,
+  onSetSharedWith,
+  canShare,
+  shareableEmails,
   onRename,
   readOnly,
   availableTags,
 }) => {
   const isChannel = tileType === 'channel';
-  const isShare = tileType === 'share';
   const video = item;
   const ch = channel;
-  const sh = share;
-  const record = isChannel ? ch : isShare ? sh : video;
+  const record = isChannel ? ch : video;
   const recordId = record?.id;
 
   const fileExtension = !isChannel && video?.name ? getFileExtension(video.name) : '';
   const isYoutube = !isChannel && video?.type === 'application/x-youtube';
-  const isBookTile = !isChannel && !isShare && video?.idbStore === 'books';
+  const isBookTile = !isChannel && video?.idbStore === 'books';
   const isPdfBook =
     isBookTile &&
     (video?.type === 'application/pdf' || (typeof video?.name === 'string' && /\.pdf$/i.test(video.name)));
@@ -117,9 +118,11 @@ export const DataTile = ({
 
   const tags = Array.isArray(record?.tags) ? record.tags : [];
   const tagSuggestions = (availableTags || []).filter((t) => !tags.includes(t));
+  const sharedWith = Array.isArray(record?.sharedWith) ? record.sharedWith : [];
+  const shareSuggestions = (shareableEmails || []).filter((email) => !sharedWith.includes(email));
 
   useEffect(() => {
-    if (isChannel || isShare || !isYoutube || !video?.data) {
+    if (isChannel || !isYoutube || !video?.data) {
       setThumbVideoId(null);
       return;
     }
@@ -132,7 +135,7 @@ export const DataTile = ({
       } catch {}
     };
     reader.readAsText(video.data);
-  }, [isChannel, isShare, video?.id, video?.type, isYoutube, video?.size, video?.data]);
+  }, [isChannel, video?.id, video?.type, isYoutube, video?.size, video?.data]);
 
   useEffect(() => {
     if (!isChannel) {
@@ -262,11 +265,26 @@ export const DataTile = ({
     onSetTags(tagSubject(), tags.filter((x) => x !== tag));
   };
 
+  const addSharedUserFromSelect = async (e) => {
+    e.stopPropagation();
+    const email = String(e.target.value || '').trim().toLowerCase();
+    if (!email) return;
+    if (!onSetSharedWith) return;
+    if (sharedWith.includes(email)) return;
+    await onSetSharedWith(record, [...sharedWith, email]);
+  };
+
+  const removeSharedUser = async (e, email) => {
+    e.stopPropagation();
+    if (!onSetSharedWith) return;
+    await onSetSharedWith(record, sharedWith.filter((x) => x !== email));
+  };
+
   const renameTarget = isChannel ? ch : video;
 
   const beginRename = (e) => {
     e.stopPropagation();
-    if (readOnly || isShare || !onRename || !renameTarget) return;
+    if (readOnly || !onRename || !renameTarget) return;
     setNameInput(renameTarget.name || '');
     setIsEditingName(true);
   };
@@ -299,13 +317,12 @@ export const DataTile = ({
     }
   };
 
-  const idPrefix = isChannel ? `ch-${recordId}` : isShare ? `share-${recordId}` : `item-${recordId}`;
+  const idPrefix = isChannel ? `ch-${recordId}` : `item-${recordId}`;
 
   const addTagControlsHidden =
     'opacity-0 pointer-events-none transition-opacity duration-150 group-hover/tagadd:opacity-100 group-hover/tagadd:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto';
 
   const tagRow =
-    !isShare &&
     (tags.length > 0 || !readOnly) &&
     React.createElement(
       'div',
@@ -398,96 +415,67 @@ export const DataTile = ({
         )
     );
 
-  if (isShare) {
-    const handleShareDelete = (e) => {
-      e.stopPropagation();
-      if (!onDelete) return;
-      if (window.confirm(`Remove share "${sh.driveFileName}" from this device?`)) {
-        onDelete(sh);
-      }
-    };
-
-    const nRec = (sh.recipients || []).length;
-    const nTags = (sh.includeTags || []).length;
-    const nExplicit = (sh.explicitRefs || []).length;
-    const driveOk = !!(sh.driveFileId && String(sh.driveFileId).trim());
-
-    return React.createElement(
+  const shareRow =
+    canShare &&
+    React.createElement(
       'div',
       {
-        className: DATA_TILE_SHELL,
-        onClick: () => onSelect(sh),
+        className: 'mt-2 flex flex-wrap gap-1 items-center',
+        onClick: (e) => e.stopPropagation(),
       },
       React.createElement(
-        'div',
-        { className: 'relative p-4 bg-gray-700 h-40 flex items-center justify-center overflow-hidden' },
-        React.createElement(
-          'div',
-          { className: 'flex items-center justify-center w-full h-full' },
-          React.createElement(
-            'svg',
-            {
-              xmlns: 'http://www.w3.org/2000/svg',
-              className: 'h-20 w-20 text-teal-500/80',
-              fill: 'none',
-              viewBox: '0 0 24 24',
-              stroke: 'currentColor',
-            },
-            React.createElement('path', {
-              strokeLinecap: 'round',
-              strokeLinejoin: 'round',
-              strokeWidth: 1.5,
-              d: 'M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z',
-            })
-          )
-        ),
+        'span',
+        {
+          className: 'inline-flex items-center px-2 py-0.5 rounded-md bg-indigo-900/40 text-[10px] text-indigo-200 font-semibold',
+        },
+        'Shared with'
+      ),
+      sharedWith.map((email) =>
         React.createElement(
           'span',
           {
-            className: 'absolute top-2 right-2 bg-teal-700 text-white text-xs font-bold px-2 py-1 rounded',
+            key: email,
+            className: 'inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md bg-gray-700 text-[10px] text-gray-200 font-mono',
+            title: email,
           },
-          sh.role === 'receiver' ? 'Share · In' : 'Share'
-        ),
-        React.createElement(
-          'div',
-          { className: 'absolute bottom-2 right-2 flex items-center gap-1.5' },
-          !readOnly &&
-            onDelete &&
-            React.createElement(
-              'button',
-              {
-                type: 'button',
-                onClick: handleShareDelete,
-                className:
-                  'p-2 rounded-full bg-red-600/50 text-white opacity-0 group-hover:opacity-100 hover:bg-red-600 transition-all duration-300',
-                title: 'Remove share',
+          email,
+          React.createElement(
+            'button',
+            {
+              type: 'button',
+              onClick: (e) => {
+                removeSharedUser(e, email).catch((err) => {
+                  window.alert(err?.message || 'Could not update shared recipients.');
+                });
               },
-              React.createElement(TrashIcon, { className: 'h-4 w-4' })
-            )
+              className: 'text-gray-500 hover:text-red-400 px-0.5',
+              title: 'Remove recipient',
+            },
+            '×'
+          )
         )
       ),
       React.createElement(
-        'div',
-        { className: 'p-4' },
-        React.createElement('h3', { className: 'font-bold text-md text-gray-100 truncate', title: sh.driveFileName }, sh.driveFileName),
-        React.createElement(
-          'p',
-          { className: 'text-sm text-gray-400' },
-          sh.role === 'receiver' ? 'Receiver' : 'Owner',
-          ' · ',
-          nRec,
-          nRec === 1 ? ' recipient' : ' recipients',
-          (nTags > 0 || nExplicit > 0) &&
-            ` · ${[nTags && `${nTags} tag${nTags === 1 ? '' : 's'}`, nExplicit && `${nExplicit} pick${nExplicit === 1 ? '' : 's'}`]
-              .filter(Boolean)
-              .join(' · ')}`
-        ),
-        driveOk
-          ? React.createElement('p', { className: 'text-xs text-teal-500/90 mt-1' }, 'Linked to Drive')
-          : React.createElement('p', { className: 'text-xs text-amber-500/90 mt-1' }, 'Not uploaded yet')
+        'select',
+        {
+          id: `share-pick-${idPrefix}`,
+          key: `share-select-${idPrefix}-${sharedWith.join(',')}`,
+          value: '',
+          onChange: (e) => {
+            addSharedUserFromSelect(e).catch((err) => {
+              window.alert(err?.message || 'Could not update shared recipients.');
+            });
+          },
+          onClick: (e) => e.stopPropagation(),
+          title: 'Choose a user to share this item with',
+          className:
+            'min-w-[8rem] max-w-[16rem] bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200 cursor-pointer shrink-0',
+          'aria-label': 'Share with user',
+        },
+        React.createElement('option', { value: '' }, shareSuggestions.length ? 'Share with…' : 'No users left'),
+        shareSuggestions.map((email) => React.createElement('option', { key: email, value: email }, email))
       )
     );
-  }
 
   if (isChannel) {
     const handleChannelDelete = (e) => {
@@ -673,7 +661,8 @@ export const DataTile = ({
         ),
         ch.handle &&
           React.createElement('p', { className: 'text-xs text-gray-500 truncate mt-0.5', title: ch.handle }, ch.handle),
-        tagRow
+        tagRow,
+        shareRow
       ),
       React.createElement('div', { className: 'absolute bottom-2 right-2 z-20 pointer-events-none' }, channelOverlayThumb)
     );
@@ -847,6 +836,7 @@ export const DataTile = ({
           )
         : React.createElement('p', { className: 'text-sm text-gray-400' }, formatBytes(video.size)),
       tagRow,
+      shareRow,
       (() => {
         const mdLike =
           video.type === 'text/markdown' ||

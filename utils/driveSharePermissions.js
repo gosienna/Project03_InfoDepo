@@ -1,21 +1,7 @@
 /**
- * Drive reader ACL reconciliation: tag-share rows and/or owner share records from the `shares` IndexedDB store.
+ * Drive reader ACL reconciliation based on per-item sharedWith fields.
  */
-import {
-  buildFileToDesiredReaders,
-  collectRecipientEmailsUnion,
-  collectAllDriveFileIdsForReconcile,
-  buildFileToDesiredReadersFromShareRecords,
-  collectRecipientEmailsFromShares,
-  collectAllDriveFileIdsForShareReconcile,
-} from './shareManifest.js';
 
-/**
- * Grant a Google account view (reader) access to a single Drive file.
- * Uses Permissions API; requires OAuth scope that allows permission creation (e.g. drive.file for app-created files).
- *
- * @see https://developers.google.com/drive/api/reference/rest/v3/permissions/create
- */
 async function ensureReaderForUser(accessToken, fileId, emailAddress) {
   const email = String(emailAddress).trim().toLowerCase();
   if (!email || !fileId) return { ok: false, error: 'missing email or fileId' };
@@ -86,21 +72,24 @@ async function deletePermission(accessToken, fileId, permissionId) {
 }
 
 /**
- * Reconcile Drive ACLs with current tags + Tag sharing: revoke reader access for recipients who no
- * longer apply (tag removed from item, email removed from tag share, etc.), then grant missing readers.
- * `previousManifest` should be the manifest on Drive **before** this sync uploads a new one, so
- * recipients removed from config are still in the "universe" for revocation.
+ * Reconcile Drive ACLs from per-item `sharedWith` fields.
+ * Also grants reader on the owner's _infodepo_index.json for every recipient.
  *
- * @param {object|null} [previousManifest] — parsed v1 manifest from before upload (or null)
+ * @param {object} opts
+ * @param {string} opts.accessToken
+ * @param {Array} opts.items - library items with { driveId, sharedWith }
+ * @param {Array} opts.channels - channels with { driveId, sharedWith }
+ * @param {string} [opts.indexFileId] - Drive file ID of _infodepo_index.json
+ * @param {object} [opts.previousIndex] - previous index JSON (for revoke universe)
+ * @param {function} [opts.onProgress]
  * @returns {{ granted: number, failed: number, revoked: number, revokeFailed: number }}
  */
-export async function applyTagSharesToDriveFiles({
+export async function applySharedWithToDriveFiles({
   accessToken,
   items,
-  images,
   channels,
-  tagSharesRows,
-  previousManifest = null,
+  indexFileId,
+  previousIndex,
   onProgress,
 }) {
   const progress = onProgress || (() => {});
@@ -109,10 +98,57 @@ export async function applyTagSharesToDriveFiles({
   let revoked = 0;
   let revokeFailed = 0;
 
-  const rows = tagSharesRows || [];
-  const desired = await buildFileToDesiredReaders(rows, items, images, channels || []);
-  const recipientUniverse = collectRecipientEmailsUnion(rows, previousManifest);
-  const allFileIds = collectAllDriveFileIdsForReconcile(items, images, channels, previousManifest);
+  const desired = new Map();
+  const allRecipients = new Set();
+
+  const addDesired = (driveId, emails) => {
+    if (!driveId) return;
+    if (!desired.has(driveId)) desired.set(driveId, new Set());
+    for (const e of emails) {
+      const norm = e.trim().toLowerCase();
+      if (norm) {
+        desired.get(driveId).add(norm);
+        allRecipients.add(norm);
+      }
+    }
+  };
+
+  for (const item of items || []) {
+    const did = String(item.driveId || '').trim();
+    if (did && Array.isArray(item.sharedWith) && item.sharedWith.length > 0) {
+      addDesired(did, item.sharedWith);
+    }
+  }
+  for (const ch of channels || []) {
+    const did = String(ch.driveId || '').trim();
+    if (did && Array.isArray(ch.sharedWith) && ch.sharedWith.length > 0) {
+      addDesired(did, ch.sharedWith);
+    }
+  }
+
+  if (indexFileId && allRecipients.size > 0) {
+    addDesired(indexFileId, allRecipients);
+  }
+
+  const recipientUniverse = new Set(allRecipients);
+  if (previousIndex && Array.isArray(previousIndex.items)) {
+    for (const entry of previousIndex.items) {
+      if (Array.isArray(entry.sharedWith)) {
+        for (const e of entry.sharedWith) {
+          const norm = e.trim().toLowerCase();
+          if (norm) recipientUniverse.add(norm);
+        }
+      }
+    }
+  }
+
+  const allFileIds = new Set([...desired.keys()]);
+  if (previousIndex && Array.isArray(previousIndex.items)) {
+    for (const entry of previousIndex.items) {
+      const did = String(entry.driveId || '').trim();
+      if (did) allFileIds.add(did);
+    }
+  }
 
   for (const fileId of allFileIds) {
     const desiredForFile = desired.get(fileId) || new Set();
@@ -153,7 +189,7 @@ export async function applyTagSharesToDriveFiles({
       if (result.ok) granted++;
       else {
         failed++;
-        console.warn('[Drive share]', fileId, email, result.error);
+        console.warn('[Drive share] permission grant failed:', fileId, email, result.error);
       }
 
       await new Promise((r) => setTimeout(r, 30));
@@ -161,87 +197,8 @@ export async function applyTagSharesToDriveFiles({
   }
 
   progress('');
-  return { granted, failed, revoked, revokeFailed };
-}
-
-/**
- * Reconcile Drive ACLs from owner `shares` records (IndexedDB). Receiver rows ignored.
- * @param {object} opts
- * @param {Array<import('./sharesDriveJson.js').ShareClientRecord>} opts.shareRecords
- * @param {Array<import('./sharesDriveJson.js').SharesDrivePayload|null>} [opts.previousSharePayloads] — parsed JSON from Drive before overwrite (per owner share), same order as helpful for debugging only; union used for revoke universe
- */
-export async function applyShareRecordsToDriveFiles({
-  accessToken,
-  items,
-  images,
-  channels,
-  shareRecords,
-  previousSharePayloads = [],
-  onProgress,
-}) {
-  const progress = onProgress || (() => {});
-  let granted = 0;
-  let failed = 0;
-  let revoked = 0;
-  let revokeFailed = 0;
-
-  const owners = (shareRecords || []).filter((r) => r && r.role !== 'receiver');
-  const desired = await buildFileToDesiredReadersFromShareRecords(owners, items, images, channels || []);
-  const recipientUniverse = collectRecipientEmailsFromShares(owners, previousSharePayloads);
-  const allFileIds = await collectAllDriveFileIdsForShareReconcile(
-    items,
-    images,
-    channels,
-    previousSharePayloads,
-    owners
-  );
-
-  for (const fileId of allFileIds) {
-    const desiredForFile = desired.get(fileId) || new Set();
-
-    progress(`Drive access (revoke check): ${fileId.slice(0, 12)}…`);
-
-    const { ok, permissions } = await listReaderUserPermissions(accessToken, fileId);
-    if (!ok) {
-      revokeFailed++;
-      await new Promise((r) => setTimeout(r, 30));
-      continue;
-    }
-
-    for (const p of permissions) {
-      const email = String(p.emailAddress || '').trim().toLowerCase();
-      if (!email || !p.id) continue;
-      if (!recipientUniverse.has(email)) continue;
-      if (desiredForFile.has(email)) continue;
-
-      progress(`Drive revoke: ${email} ← ${fileId.slice(0, 12)}…`);
-      const del = await deletePermission(accessToken, fileId, p.id);
-      if (del.ok) revoked++;
-      else {
-        revokeFailed++;
-        console.warn('[Drive share revoke]', fileId, email, del.error);
-      }
-      await new Promise((r) => setTimeout(r, 30));
-    }
-
-    await new Promise((r) => setTimeout(r, 20));
+  if (failed > 0) {
+    console.warn(`[Drive share] ${failed} of ${granted + failed} permission grant(s) failed.`);
   }
-
-  for (const [fileId, emailSet] of desired.entries()) {
-    for (const email of emailSet) {
-      progress(`Drive access: ${email} ← ${fileId.slice(0, 12)}…`);
-
-      const result = await ensureReaderForUser(accessToken, fileId, email);
-      if (result.ok) granted++;
-      else {
-        failed++;
-        console.warn('[Drive share]', fileId, email, result.error);
-      }
-
-      await new Promise((r) => setTimeout(r, 30));
-    }
-  }
-
-  progress('');
   return { granted, failed, revoked, revokeFailed };
 }

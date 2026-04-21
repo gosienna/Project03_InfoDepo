@@ -2,31 +2,36 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header.js';
 import { Library } from './components/Library.js';
-import { GoogleOAuthGate } from './components/GoogleOAuthGate.js';
+import { GoogleLoginGate } from './components/GoogleLoginGate.js';
+import { DriveFolderGate } from './components/DriveFolderGate.js';
 import { Reader } from './components/Reader.js';
 import { YoutubeChannelViewer } from './components/YoutubeChannelViewer.js';
 import { Explorer } from './components/Explorer.js';
 import { useIndexedDB } from './hooks/useIndexedDB.js';
 import { libraryItemKey } from './utils/libraryItemKey.js';
-import { needsDriveOAuthLogin } from './utils/driveOAuthGateCheck.js';
+import { needsGoogleSignIn } from './utils/driveOAuthGateCheck.js';
 import { getDriveCredentials, hasGoogleApiKeyOrProxy } from './utils/driveCredentials.js';
 import { getDriveFolderId } from './utils/driveFolderStorage.js';
 import { DeleteContentModal } from './components/DeleteContentModal.js';
 import { getOwnerDriveAccessToken } from './utils/driveAccessToken.js';
 import { deleteDriveFilesForChannel } from './utils/deleteLibraryContentOnDrive.js';
+import { fetchUserConfig, resolveUserType } from './utils/userConfig.js';
+import { clearAllStoredAccessTokens } from './utils/driveOAuthStorage.js';
+import { fetchGoogleUserEmail } from './utils/googleUser.js';
 import { fetchNewChannelVideos } from './utils/youtubeApi.js';
 
 const App = () => {
   const {
-    items, channels, shares, addItem, updateItem, deleteItem, clearAll, isInitialized,
+    items, channels, addItem, updateItem, deleteItem, clearAll, isInitialized,
     addImage, getImagesForNote, getAllImages,
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
     setItemDriveId, setNoteFolderData,
     addChannel, deleteChannel, updateChannel,
     getChannelByDriveId, upsertDriveChannel,
     getBookByDriveId, getBookByName, upsertDriveBook,
-    getShareByDriveFileId, upsertDriveShare,
+    deleteItemByDriveId, deleteChannelByDriveId, getLocalRecordsByOwnerEmail,
     setRecordTags,
+    setItemSharedWith,
     renameItem,
     setItemReadingPosition,
     getPdfAnnotationSidecar,
@@ -34,32 +39,92 @@ const App = () => {
     setPdfAnnotationDriveSync,
     upsertDrivePdfAnnotation,
     getMergedLibraryItems,
-    getSharesList,
-    addShare,
-    updateShare,
-    deleteShare,
     loadItems,
     loadChannels,
-    loadShares,
     loadAll,
     dataReady,
   } = useIndexedDB();
   const [googleUserEmail, setGoogleUserEmail] = useState(null);
+  // 'loading' | 'master' | 'editor' | 'viewer' | 'unauthorized'
+  const [userType, setUserType] = useState('loading');
+  const [userConfig, setUserConfig] = useState(null);
   const [currentVideo, setCurrentVideo] = useState(null);
   const [currentChannel, setCurrentChannel] = useState(null);
   const [view, setView] = useState('library');
   const [mode, setMode] = useState('library'); // 'library' | 'explorer'
-  /** When true, full-screen Google sign-in is shown (Drive configured but no valid token). */
-  const [oauthGateActive, setOauthGateActive] = useState(() => needsDriveOAuthLogin());
+  /** Step 1 gate: Google sign-in (all users). True when credentials configured but no valid token. */
+  const [loginGateActive, setLoginGateActive] = useState(() => needsGoogleSignIn());
+  /** Step 2 gate: Drive folder setup (MASTER/EDITOR only). True until folder ID is saved. */
+  const [driveFolderReady, setDriveFolderReady] = useState(() => !!getDriveFolderId().trim());
   const [pendingChannelDelete, setPendingChannelDelete] = useState(null);
 
   const recheckDriveOAuthGate = useCallback(() => {
-    setOauthGateActive(needsDriveOAuthLogin());
+    setLoginGateActive(needsGoogleSignIn());
   }, []);
 
-  const handleOAuthGateSuccess = useCallback(() => {
-    setOauthGateActive(false);
+  const handleLoginSuccess = useCallback((email) => {
+    if (email) setGoogleUserEmail(email);
+    setLoginGateActive(false);
   }, []);
+
+  const handleDriveFolderSuccess = useCallback(() => {
+    setDriveFolderReady(true);
+  }, []);
+
+  // When credentials are not configured (no VITE_CLIENT_ID), skip all gates → full editor access.
+  useEffect(() => {
+    if (!needsGoogleSignIn() && !getDriveCredentials().clientId?.trim()) {
+      setUserType('editor');
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When gate is skipped because a cached token exists, fetch email from the stored token.
+  useEffect(() => {
+    if (loginGateActive || googleUserEmail) return;
+    if (!getDriveCredentials().clientId?.trim()) return; // no credentials → already handled above
+    let cancelled = false;
+    getOwnerDriveAccessToken()
+      .then((token) => fetchGoogleUserEmail(token))
+      .then((email) => { if (!cancelled && email) setGoogleUserEmail(email); })
+      .catch(() => { if (!cancelled) setUserType('editor'); });
+    return () => { cancelled = true; };
+  }, [loginGateActive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!googleUserEmail) return;
+    const masterEmail = (import.meta.env.VITE_MASTER || '').trim().toLowerCase();
+    const isMasterUser = googleUserEmail.trim().toLowerCase() === masterEmail;
+    if (!import.meta.env.VITE_CONFIG) {
+      setUserType(isMasterUser ? 'master' : 'editor');
+      return;
+    }
+    setUserType(isMasterUser ? 'master' : 'loading');
+    let cancelled = false;
+    getOwnerDriveAccessToken()
+      .then((token) => fetchUserConfig(token))
+      .then((config) => {
+        if (!cancelled) {
+          setUserConfig(config);
+          if (!isMasterUser) {
+            const type = resolveUserType(googleUserEmail, config);
+            setUserType(type ?? 'unauthorized');
+          } else {
+            setUserType('master');
+          }
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          if (isMasterUser) setUserType('master');
+          else setUserType('unauthorized');
+        }
+      });
+    return () => { cancelled = true; };
+  }, [googleUserEmail]);
+
+  useEffect(() => {
+    if (userType === 'viewer' && mode === 'explorer') setMode('library');
+  }, [userType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep currentChannel in sync with IndexedDB (so video list updates after a refresh).
   useEffect(() => {
@@ -185,11 +250,59 @@ const App = () => {
     );
   }
 
-  if (oauthGateActive) {
-    return React.createElement(GoogleOAuthGate, {
-      onSuccess: handleOAuthGateSuccess,
-      onGoogleUserEmail: setGoogleUserEmail,
-    });
+  // Gate 1: Google sign-in (all users, before role is known)
+  if (loginGateActive) {
+    return React.createElement(GoogleLoginGate, { onSuccess: handleLoginSuccess });
+  }
+
+  // Gate 2: Drive folder setup (MASTER/EDITOR only, after role is resolved)
+  const isEditorOrMaster = userType === 'master' || userType === 'editor';
+  if (isEditorOrMaster && !driveFolderReady) {
+    return React.createElement(DriveFolderGate, { onSuccess: handleDriveFolderSuccess, userEmail: googleUserEmail, config: userConfig });
+  }
+
+  if (userType === 'unauthorized') {
+    return React.createElement(
+      'div',
+      { className: 'min-h-screen bg-gray-900 flex items-center justify-center font-sans' },
+      React.createElement(
+        'div',
+        { className: 'text-center px-6' },
+        React.createElement(
+          'svg',
+          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-red-500 mx-auto mb-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+          React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 1.5, d: 'M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z' })
+        ),
+        React.createElement('p', { className: 'text-xl font-semibold text-red-400 mb-2' }, 'Access Denied'),
+        React.createElement(
+          'p',
+          { className: 'text-gray-400 text-sm mb-6' },
+          googleUserEmail,
+          ' is not authorized to use this app.'
+        ),
+        React.createElement(
+          'button',
+          {
+            className: 'text-indigo-400 hover:underline text-sm',
+            onClick: () => { clearAllStoredAccessTokens(); window.location.reload(); },
+          },
+          'Sign in with a different account'
+        )
+      )
+    );
+  }
+
+  if (userType === 'loading' && googleUserEmail) {
+    return React.createElement(
+      'div',
+      { className: 'flex items-center justify-center h-screen bg-gray-900 text-white font-sans' },
+      React.createElement(
+        'div',
+        { className: 'flex flex-col items-center gap-4' },
+        React.createElement('div', { className: 'animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500' }),
+        React.createElement('p', { className: 'text-gray-400' }, 'Checking access…')
+      )
+    );
   }
 
   return React.createElement(
@@ -201,6 +314,7 @@ const App = () => {
       mode,
       onModeChange: setMode,
       showModeToggle: view === 'library',
+      userType,
     }),
     React.createElement(
       "main",
@@ -215,7 +329,6 @@ const App = () => {
         ? React.createElement(Library, {
             items,
             channels,
-            shares,
             onSelectItem: handleSelectVideo,
             onSelectChannel: handleSelectChannel,
             onAddItem: addItem,
@@ -232,8 +345,9 @@ const App = () => {
             getBookByDriveId,
             getBookByName,
             upsertDriveBook,
-            getShareByDriveFileId,
-            upsertDriveShare,
+            deleteItemByDriveId,
+            deleteChannelByDriveId,
+            getLocalRecordsByOwnerEmail,
             getImageByDriveId,
             getImageByName,
             upsertDriveImage,
@@ -242,18 +356,17 @@ const App = () => {
             setPdfAnnotationDriveSync,
             upsertDrivePdfAnnotation,
             setRecordTags,
+            setItemSharedWith,
             renameItem,
             getMergedLibraryItems,
-            getSharesList,
-            addShare,
-            updateShare,
-            deleteShare,
             onGoogleUserEmail: setGoogleUserEmail,
             onDriveCredentialsChanged: recheckDriveOAuthGate,
             loadItems,
             loadChannels,
-            loadShares,
             loadAll,
+            userType,
+            userConfig,
+            googleUserEmail,
           })
         : view === 'channel' && currentChannel
         ? React.createElement(YoutubeChannelViewer, {

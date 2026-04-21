@@ -1,202 +1,95 @@
-# Google Drive Integration
+# Google Drive integration
 
 ## Overview
 
-InfoDepo uses Google Drive in two directions:
+Drive is used for:
 
-| Direction | Trigger | Scope |
-|-----------|---------|-------|
-| **Drive → Local** (Sync) | "Sync" button | Downloads new/updated files from a Drive folder into IndexedDB |
-| **Local → Drive** (Backup) | Upload button per item, or "Backup All" | Uploads local IndexedDB content to Drive in original format |
+1. owner backup and pull sync
+2. item-level sharing authorization (ACL)
+3. owner index discovery (`_infodepo_index.json`)
+4. config storage (`config.json`)
 
-Drive is a **backup and import source** — not a streaming cache. All content is always stored fully in IndexedDB (`data` blob always present). There are no metadata-only stubs or download-on-demand flows.
+There is no backend server; browser calls Drive APIs directly with OAuth tokens.
 
----
+## Credentials and scopes
 
-## Credentials
+### Environment values
 
-### OAuth 2.0 Client ID (`...apps.googleusercontent.com`)
-- Identifies the **user** — triggers a Google login popup
-- Required for any Drive read or write
-- Stored in `.env` as `VITE_TEST_CLIENT_ID` (dev) or `localStorage` (prod)
-- Safe to embed in browser code (public by design)
+- `VITE_CLIENT_ID`: OAuth client ID
+- `VITE_API_KEY`: Drive/YouTube API key
+- `VITE_CONFIG`: Drive file ID for `config.json`
+- `VITE_MASTER`: master account email
 
-### API Key (`secret…`)
-- Identifies the **application** — no user login required
-- Used only to **list folder contents** (public Drive API calls)
-- Stored in `.env` as `VITE_TEST_API_KEY` (dev) or `localStorage` (prod)
+Drive folder ID is runtime state stored in localStorage (`infodepo_drive_folder_id`).
 
-### OAuth Scopes
+### Scopes used
 
-| Scope | Used for |
-|-------|----------|
-| `drive.readonly` | Sync (downloading files from Drive) |
-| `drive.file` | Backup/upload (creating files in Drive) |
+- `OWNER_DRIVE_SCOPE`:
+  - `https://www.googleapis.com/auth/drive.file`
+  - `https://www.googleapis.com/auth/drive.readonly`
+  - `openid`
+  - `https://www.googleapis.com/auth/userinfo.email`
+- `CONFIG_MANAGE_SCOPE`:
+  - `https://www.googleapis.com/auth/drive`
+  - `openid`
+  - `https://www.googleapis.com/auth/userinfo.email`
 
-### What NOT to use
-- **OAuth Client Secret** (`GOCSPX-...`) — server-side only, never in browser code
+`CONFIG_MANAGE_SCOPE` is required for updating existing `config.json` files not created by the app.
 
----
+## Backup and pull
 
-## Credential Storage
+### Backup (`backupAllToGDrive`)
 
-| Mode | Source |
-|------|--------|
-| Dev (`import.meta.env.DEV`) | `.env` via `VITE_TEST_*` variables |
-| Production | `localStorage` key `infodepo_drive_credentials`, entered via `DriveSettingsModal` |
+- uploads new local content
+- patches existing `driveId` files when local is newer
+- persists `driveId` + Drive `modifiedTime`
 
-`utils/driveCredentials.js` abstracts this — callers don't need to know the source.
+### Pull (`syncDriveToLocal`)
 
----
+- lists owner folder files
+- downloads supported content
+- upserts by `driveId`/name
+- skips unchanged records based on timestamps
 
-## Drive → Local: Sync
+## Sharing-related Drive files
 
-### When
-User clicks the **"Sync"** button in the Library toolbar (visible when credentials are set).
+### `_infodepo_index.json`
 
-### What it syncs
-Content files (`application/epub+zip`, `application/pdf`, `text/plain`, `text/markdown`, `application/json`) and image attachments (`image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/bmp`, `image/svg+xml`). YouTube channel records are local-only and excluded from sync.
+- written by owner to linked folder
+- includes item metadata and `sharedWith`
+- consumed by peer/viewer sync for discovery
 
-### Algorithm (`utils/driveSync.js` → `syncDriveToLocal`)
+### `config.json`
 
-```
-1. GET drive/v3/files?q='FOLDER_ID' in parents
-   → Filter to ALL_SYNCABLE_MIME_TYPES (content + image types)
-   → Split into contentFiles and imageFiles
-   → Sort each list by modifiedTime descending
+- Drive file pointed to by `VITE_CONFIG`
+- stores users map, roles, and optional `folderId`
+- edited by master in `UserConfigModal`
 
-Phase 1 — Content files (books, notes, videos):
-2. For each content file:
-   a. Look up local record by driveId index
-   b. Fallback: look up by filename
-   c. Compare modifiedTime — is Drive newer?
-   d. If local exists + up to date → skip (backfill driveId if missing)
-   e. If Drive is newer (or no local record) → download blob → upsertDriveBook(file, blob)
+## ACL synchronization
 
-Phase 2 — Image files:
-3. Scan all local notes' markdown content for ![...](filename) references
-   → Build Map<imageName, noteId> for noteId resolution
-4. For each image file:
-   a. Look up local image by driveId, then by name
-   b. Compare modifiedTime — is Drive newer?
-   c. If up to date → skip
-   d. If newer → download blob → upsertDriveImage(file, blob, noteId)
-      noteId comes from the Map, or from the existing record, or 0 if unresolved
+`applySharedWithToDriveFiles` reconciles file readers from `sharedWith`:
 
-5. Return { added, updated, skipped }
-```
+- grant readers newly added to `sharedWith`
+- revoke readers removed from `sharedWith`
+- can run targeted for a single item/channel
 
-### Result banner
-```
-Sync complete — 2 added, 1 updated, 5 unchanged
-```
+Library triggers this reconcile immediately after tile-level sharing edits.
 
-### `upsertDriveBook(driveFile, blob)`
-- If record found by `driveId` or `name`: updates `driveId`, `modifiedTime`, `data`, `size`
-- If no record: inserts new record with `driveId` set and full blob
-- Always requires a blob — metadata-only stubs are not created
+## Viewer access flow
 
-### `upsertDriveImage(driveFile, blob, noteId)`
-- If record found by `driveId` or `name`: updates blob, `driveId`, `modifiedTime`, and optionally `noteId`
-- If no record: inserts new image record into the `images` store with the resolved `noteId`
-- `noteId` is resolved by scanning notes for `![...](filename)` markdown references
+Viewer does not need own folder gate. They:
 
----
+1. sign in and resolve role
+2. read peer folder IDs from `config.json`
+3. fetch peer `_infodepo_index.json`
+4. download files shared with viewer
+5. prune previously cached peer-owned files no longer shared
 
-## Local → Drive: Backup
+## Related files
 
-### Per-item upload
-Each card in the library has an upload button (↑). Clicking it:
-1. Acquires OAuth token with `drive.file` scope (cached per session)
-2. Uploads as multipart:
-   - **POST** `drive/v3/files?uploadType=multipart` when `driveId` is empty (create new Drive file)
-   - **PATCH** `drive/v3/files/{driveId}?uploadType=multipart` when `driveId` exists (update same Drive file ID)
-3. On success: calls `setItemDriveId(id, idbStore, driveFileId, { modifiedTime })` to persist Drive ID and sync timestamps
-4. Card icon changes to green ✓
-
-### Backup All
-The **Sync/Backup pipeline** (`backupAllToGDrive` in `utils/driveSync.js`) uploads every item that needs backup (new item or local changes newer than known Drive revision):
-
-```
-For each item in (books + notes + videos) where backup is needed:
-  if driveId exists:
-    PATCH existing Drive file
-  else:
-    POST new Drive file
-  Call setItemDriveId(id, idbStore, driveFileId, { modifiedTime })
-
-For markdown note assets:
-  POST new asset files for assets that do not yet have driveId
-  keep existing asset driveIds unchanged
-
-Return { backed: N, failed: M }
-```
-
-### Drive file format per content type
-
-| Content type | Local filename | Drive filename | Drive MIME type |
-|-------------|---------------|----------------|-----------------|
-| EPUB | `MyBook.epub` | `MyBook.epub` | `application/epub+zip` |
-| PDF | `Report.pdf` | `Report.pdf` | `application/pdf` |
-| TXT | `Notes.txt` | `Notes.txt` | `text/plain` |
-| Markdown | `My Note.md` | `My Note.md` | `text/markdown` |
-| YouTube link | `Rick Roll.youtube` | `Rick Roll.json` | `application/json` |
-| Image | `screenshot.png` | `screenshot.png` | `image/png` |
-
-YouTube items are converted from `.youtube`/`application/x-youtube` to `.json`/`application/json` so Drive can display the content as readable text.
-
-### `setItemDriveId(id, storeName, driveId)`
-Updates the `driveId` field on any IndexedDB record after a successful upload. Works across all four stores by taking an explicit `storeName`.
-
----
-
-## driveId Field
-
-Every record in every store has a `driveId` field:
-
-| Value | Meaning |
-|-------|---------|
-| `''` (empty string) | Not yet backed up to Drive |
-| `'1BxiMVs0XRA...'` | Backed up; this string is the Drive file ID |
-
-This field is the single source of truth for backup status. There is no `isMetadataOnly` flag or separate metadata-only path.
-
----
-
-## Google Cloud Setup
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Create or select a project
-3. Enable **Google Drive API** — APIs & Services → Library → search "Google Drive API"
-4. Create **OAuth 2.0 Client ID**:
-   - Type: Web application
-   - Authorized JavaScript origins: `http://localhost:3001` (dev) and your production domain
-5. Create **API Key**:
-   - APIs & Services → Credentials → + Create Credentials → API key
-   - Optionally restrict to Google Drive API
-6. Fill credentials into `.env` (dev) or enter via the **Drive Folder** settings modal (prod)
-7. Share the Drive folder as "Anyone with the link can view" for sync to work without user auth on listing
-
----
-
-## Key Files
-
-| File | Role |
-|------|------|
-| `utils/driveAuth.js` | `getOAuthToken(clientId, scope)` — reusable OAuth token helper |
-| `utils/driveSync.js` | `syncDriveToLocal()` (Drive→Local) + `backupAllToGDrive()` (Local→Drive) |
-| `utils/driveCredentials.js` | Abstracts `.env` vs `localStorage` credential source |
-| `components/DevDriveBrowser.js` | Drive folder browser UI (dev + prod) |
-| `components/DriveSettingsModal.js` | Production UI to enter/save Drive credentials |
-| `components/Library.js` | Upload button handler (`handleUpload`), Backup All trigger, Sync trigger |
-
----
-
-## Why Google Picker Was Removed
-
-The original implementation used the Google Picker API widget. It was removed because:
-- Required a separate Picker API to be enabled in Google Cloud
-- API Key validation was stricter and harder to configure
-- Error messages were unclear
-
-Replaced with `DevDriveBrowser.js` — a custom folder browser using Drive API v3 directly.
+- `utils/driveSync.js`
+- `utils/libraryDriveSync.js`
+- `utils/ownerIndex.js`
+- `utils/peerSync.js`
+- `utils/driveSharePermissions.js`
+- `utils/driveScopes.js`

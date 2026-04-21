@@ -1,528 +1,84 @@
 # Web App Structure & React Components
 
-## Startup Sequence
+## Startup sequence
 
-### 1. Browser loads `index.html`
+1. `index.js` mounts `App`.
+2. `useIndexedDB()` initializes `InfoDepo` (schema v7), loads merged `items` and `channels`.
+3. If Google credentials are configured and no valid token exists, show `GoogleLoginGate`.
+4. Resolve user role from `VITE_MASTER` + `config.json` users map.
+5. For `master`/`editor`, run `DriveFolderGate` until folder ID exists.
+6. Render `Header` + `Library`/`Reader`/`YoutubeChannelViewer`.
 
-```
-index.html
-├── <script> Tailwind CSS (CDN)
-├── <script> JSZip (CDN)
-├── <script> EPUB.js (CDN)
-├── <script> Google Identity Services — gsi/client (CDN, async)
-├── <script> Google API — api.js (CDN, async)
-├── <script type="importmap"> — maps React bare imports to esm.sh CDN URLs
-└── <script type="module" src="./index.js"> — app entry point
-```
-
-CDN libraries load in parallel. React is resolved via the importmap — no bundling step.
-
-### 2. `index.js` — React mount
-
-```js
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-  React.StrictMode
-    └── App
-);
-```
-
-`React.StrictMode` causes effects to run twice in development (intentional React behaviour for catching side effects).
-
-### 3. `App.js` — IndexedDB, then Google Drive gate (when configured)
-
-On mount, `useIndexedDB()` opens IndexedDB (`InfoDepo`; version from [`utils/infodepoDb.js`](../utils/infodepoDb.js)) and loads merged `items` (books + notes + videos), `channels`, and `shares` in a **single batched render** via `loadAll()`. See [data-stores.md](data-stores.md) for object stores and schema.
-
-After the database is ready, the app decides whether the user must complete **Google Drive setup** before any library UI appears:
-
-- [`utils/driveOAuthGateCheck.js`](../utils/driveOAuthGateCheck.js) — `needsDriveOAuthLogin()` returns `true` only when **both** `VITE_CLIENT_ID` and `VITE_API_KEY` are set (see [`utils/driveCredentials.js`](../utils/driveCredentials.js)) **and** either:
-  - no Drive folder ID is stored in `localStorage` ([`utils/driveFolderStorage.js`](../utils/driveFolderStorage.js), key `infodepo_drive_folder_id`), or
-  - there is no **non-expired** stored OAuth access token for the **current library mode** (owner vs shared use different scopes — [`utils/driveScopes.js`](../utils/driveScopes.js); tokens are keyed in [`utils/driveOAuthStorage.js`](../utils/driveOAuthStorage.js)).
-- If `VITE_CLIENT_ID` or `VITE_API_KEY` is missing, the gate is skipped and the library loads without that step (local-only / no env configuration).
-- When the gate is required, the user sees [`GoogleOAuthGate.js`](../components/GoogleOAuthGate.js): enter or paste the Drive folder ID, then **Save folder & continue with Google** runs Google Identity Services (GIS), stores the token, fetches profile email for the header, and only then mounts the main shell.
-
-Switching **library mode** (owner ↔ shared) can require signing in again if there is no valid token yet for the other scope.
-
-### 4. Loading states
-
-```
-isInitialized = false     →  "Initializing Database..." spinner (full screen)
-isInitialized = true      →  one frame: "Checking Google sign-in…" (oauthGatePending)
-then:
-  needsDriveOAuthLogin()  →  full-screen GoogleOAuthGate (folder + Google sign-in)
-  else                    →  Header + main (Library, or Reader / YoutubeChannelViewer by view)
-```
-
----
-
-## Page Structure
-
-### Main App (`index.html` + React)
-
-```
-<body>
-  <div id="root">                        ← React mounts here
-    <App>
-      — GoogleOAuthGate (full screen)     ← when VITE_CLIENT_ID + VITE_API_KEY and folder/token incomplete
-      — or Header + main after sign-in:
-          <Header userEmail? />
-          <main>
-            <Library />                  ← view = 'library'
-            OR <YoutubeChannelViewer />  ← view = 'channel'
-            OR <Reader />                ← currentVideo (PDF / TXT / MD / YouTube)
-          </main>
-    </App>
-  </div>
-```
-
-### EPUB Reader (`reader.html`)
-
-Standalone page, no React. Opens in a new browser tab. Reads the EPUB from the `books` IndexedDB store by `id` query param.
-
-```
-<body>
-  <header>                               ← book title, page counter, close button
-  <div id="viewer">                      ← EPUB.js renders here (full page height)
-  <div id="loading">                     ← overlay, hidden after render
-  <footer>                               ← Prev / Next buttons
-```
-
----
-
-## Component Reference
+## Top-level components
 
 ### `App.js`
-**Role:** Root component. Owns view state, library mode, OAuth gate, and selection routing.
 
-**State:**
-| State | Type | Purpose |
-|-------|------|---------|
-| `view` | `'library' \| 'reader' \| 'channel'` | `'library'` → `Library`; `'reader'` → `Reader` (`currentVideo`); `'channel'` → `YoutubeChannelViewer` (`currentChannel`) |
-| `libraryMode` | `'owner' \| 'shared'` | Persisted via `utils/libraryMode.js` — shared mode syncs files the account can read from the linked folder |
-| `currentVideo` | `object \| null` | Item being read (non-EPUB in-app) |
-| `currentChannel` | `object \| null` | Channel when `view === 'channel'` |
-| `googleUserEmail` | `string \| null` | Shown in `Header` after OAuth gate or Library refresh |
-| `oauthGatePending` | `boolean` | `true` until first post-DB check of `needsDriveOAuthLogin()` (brief "Checking Google sign-in…") |
-| `oauthGateActive` | `boolean` | `true` → render `GoogleOAuthGate` instead of main UI |
-
-**Key logic:**
-- After `isInitialized`, `needsDriveOAuthLogin()` (depends on `libraryMode`) controls whether `GoogleOAuthGate` is shown; `recheckDriveOAuthGate` is passed to `Library` so credential/folder changes can re-open the gate if needed.
-- `handleSelectVideo` / `openVideo` — EPUB opens `reader.html?id=` in a new tab; other types set `currentVideo` and show `Reader`.
-- `handleSelectChannel` — sets `currentChannel` and `view` to `'channel'` for `YoutubeChannelViewer`.
-- **Channel auto-refresh** — on `isInitialized`, iterates all channels; any channel whose `lastRefreshedAt` is absent or older than 1 hour is passed to `fetchNewChannelVideos()`. If new videos are returned they are prepended to `channel.videos` and `updateChannel()` writes the merged list + updated `lastRefreshedAt` back to IndexedDB. Errors are silently logged. Requires `VITE_API_KEY` (or proxy) to be configured.
-- **`currentChannel` sync** — a `useEffect` on `channels` keeps `currentChannel` in sync with the IDB state so `YoutubeChannelViewer` immediately reflects any video-list update without requiring re-navigation.
-- Delegates IndexedDB to `useIndexedDB` (`items`, `channels`, `shares`, CRUD, tags, share registry, Drive sync helpers).
-
----
+- Root router for `library`, `reader`, and `channel` views.
+- Owns role resolution (`master`/`editor`/`viewer`/`unauthorized`).
+- Wires all `useIndexedDB` helpers into `Library` and `Reader`.
 
 ### `Header.js`
-**Role:** Top navigation bar.
 
-**Props:**
-| Prop | Type | Purpose |
-|------|------|---------|
-| `onBack` | `function \| undefined` | If provided, shows back arrow (reader view only) |
-| `userEmail` | `string \| undefined` | Optional signed-in Google email (right side) |
+- Displays app title, back button, user email.
+- Shows role badge (`Master`, `Editor`, `Viewer`) above the email.
+- Shows `Manage Users` button for `master` only.
+- Hides Library/Explorer mode switch for `viewer`.
 
-**Renders:** App logo + title. Back button appears when not on the library view (reader or channel).
+### `UserConfigModal.js`
 
----
-
-### `GoogleOAuthGate.js`
-**Role:** Full-screen first-run (or recovery) screen when Drive OAuth is required: collect the Drive folder ID, persist it via `setDriveFolderId`, then ensure a GIS access token exists for the scope matching `libraryMode` (`getDriveScopeForLibraryMode`), save it with `saveStoredAccessToken`, call `fetchGoogleUserEmail`, invoke `onSuccess` so `App` mounts the main UI.
-
-**Props:**
-| Prop | Type | Purpose |
-|------|------|-------------|
-| `libraryMode` | `'owner' \| 'shared'` | Selects owner vs shared OAuth scope |
-| `onSuccess` | `function` | Called after folder + token (+ email fetch attempt) succeed |
-| `onGoogleUserEmail` | `function \| undefined` | `(email \| null) => void` for header display |
-
----
+- Master-only editor for Drive-hosted `config.json`.
+- Uses row-based `users` map (`email -> { role, folderId }`).
+- Viewer rows show `N/A` for folder ID.
+- Uses broad scope (`CONFIG_MANAGE_SCOPE`) so existing `config.json` can be updated.
 
 ### `Library.js`
-**Role:** Library overview — merged item grid, YouTube **channels** grid (owner mode), **shares** grid, search/filters, owner vs shared mode, Drive sync/backup, share editor (`SharesEditorModal`), and add flows (file, note, YouTube, channel, new share, link share). Clicking a receiver share activates a **share content filter** that narrows the library grid to only items referenced in the share's `explicitRefs`.
 
-**Layout:** Three sections use the **same responsive grid** (`grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6`): **channels** first (hidden in shared mode), then **shares** (hidden in shared mode and when a share filter is active), then **items**. All use [`DataTile.js`](DataTile.js).
-
-**Props (representative):**
-| Prop | Type | Purpose |
-|------|------|---------|
-| `items` | `array` | Merged books + notes + videos from `useIndexedDB` |
-| `channels` | `array` | `channels` store rows |
-| `shares` | `array` | Share configs from the `shares` store (see [data-stores.md](data-stores.md)) |
-| `libraryMode` | `'owner' \| 'shared'` | UI for owner backup vs read-only shared sync |
-| `onLibraryModeChange` | `function` | Toggle mode |
-| `onSelectItem` | `function` | Open item in reader / EPUB tab |
-| `onSelectChannel` | `function` | Open `YoutubeChannelViewer` |
-| `onAddItem` | `function` | Add local file / note / YouTube item |
-| `onDeleteItem` | `function` | Delete library item |
-| `onClearLibrary` | `function` | Wipe stores |
-| `onSetDriveId` | `function` | Persist Drive file id after upload |
-| `onAddChannel` / `onDeleteChannel` | `function` | Channel CRUD |
-| `setRecordTags` | `function` | Tag persistence (`idbStore` or `'channels'`) |
-| `getMergedLibraryItems` | `function` | Merged books + notes + videos for Drive share ACL resolution |
-| `getSharesList`, `addShare`, `updateShare`, `deleteShare` | `function` | `shares` store CRUD |
-| `onGoogleUserEmail` | `function \| undefined` | Updates app header email after GIS / userinfo |
-| `onDriveCredentialsChanged` | `function \| undefined` | Re-runs `needsDriveOAuthLogin()` after folder or token changes |
-| Plus Drive sync helpers | … | `getBookByDriveId`, `upsertDriveBook`, images, `upsertDriveChannel`, etc. |
-
-**State (representative):**
-| State | Purpose |
-|-------|---------|
-| `searchQuery`, `activeFilters` | Filter items and channels (e.g. by store type) |
-| `isDevBrowserOpen` | `DevDriveBrowser` modal — import files from the linked Drive folder |
-| `isNewNoteOpen`, `isYoutubeOpen`, `isChannelOpen` | Add modals |
-| `activeShare`, `activeShareFilter` | `activeShare`: share being edited in `SharesEditorModal`; `activeShareFilter`: share whose `explicitRefs` restrict the library grid |
-| `isSystemSettingsOpen`, `isAddMenuOpen` | Menus (system settings: folder draft, OAuth, etc.) |
-| `uploadStatuses` | Per-tile Drive upload state; keys include `libraryItemKey(item)` and `channel-${id}` for channels |
-| `credentials`, `driveFolderId`, `driveFolderDraft` | From `getDriveCredentials()` / `getDriveFolderId()`; draft edits folder before save |
-| `isSyncing`, `syncResult`, `syncProgress` | Combined sync + backup |
-| `availableTags` | Union of tags from items and channels (for `DataTile` and share editor) |
-
-**Toolbar / actions (simplified):** Drive folder browser, **Sync** (owner backup + sync), **Mode: owner / shared**, search, filter chips (Books / Notes / Videos / Channels / Shares), add menu (file, note, YouTube, channel, new share, link share), system settings, clear library.
-
-**File upload:** Hidden file input → `onAddItem(name, type, file)`.
-
-**Empty / no-results:** Placeholders when the filtered grid is empty or shared sync has nothing yet.
-
----
-
-### `SharesEditorModal.js`
-**Role:** Editor modal for a single share. **Owner** sets filename, recipient emails, include-by-tag and explicit items with `driveId`; **Save & upload** writes [`utils/sharesDriveJson.js`](../utils/sharesDriveJson.js) JSON to the linked folder via [`utils/sharesDriveFile.js`](../utils/sharesDriveFile.js) and runs [`applyShareRecordsToDriveFiles`](../utils/driveSharePermissions.js). **Receiver** view is read-only with optional refresh from Drive.
-
-Shares are listed directly in the library grid as `DataTile` tiles (`tileType: 'share'`). Clicking a **receiver** share activates the share content filter (sets `activeShareFilter`), which restricts the library grid to only items whose `driveId` appears in the share's `explicitRefs`. An amber banner shows the active share name and lets the user clear the filter or open the editor. Clicking an **owner** share opens this editor directly.
-
----
+- Unified grid for items and channels (no share tiles).
+- Handles:
+  - upload/delete/rename/tag
+  - per-item sharing (`sharedWith`) via `DataTile`
+  - Drive sync (`runOwnerSyncPipeline`)
+  - immediate ACL reconcile on sharing updates
+  - owner index write (`_infodepo_index.json`)
+  - viewer peer sync (`syncSharedFromPeers`)
+- Viewer peer sync now also prunes revoked peer-owned content from local IndexedDB.
 
 ### `DataTile.js`
-**Role:** Single component for library **items** (`tileType: 'item'`), **YouTube channels** (`tileType: 'channel'`), and **Drive shares** (`tileType: 'share'`). All use the same Tailwind shell (`DATA_TILE_SHELL` in source: rounded card, shadow, `w-full`, hover lift) so tile **width** matches whatever grid column `Library.js` assigns.
 
-**Props (`tileType: 'item'`):**
-| Prop | Type | Purpose |
-|------|------|---------|
-| `item` | `object` | `{ id, name, type, data, size, idbStore, tags?, ... }` |
-| `onSelect` | `function` | Opens the item |
-| `onDelete` | `function` | `(id, type) => void` — routed to the correct store |
-| `onUpload` | `function` | `(item) => void` — multipart upload to Drive (`POST` when no `driveId`, `PATCH` when `driveId` exists) |
-| `uploadStatus` | `null \| 'uploading' \| 'success' \| 'error'` | Drive upload state |
-| `onSetTags` | `function \| undefined` | `(item, tags) => void` — `setRecordTags(id, idbStore, tags)` |
-| `readOnly` | `boolean` | Hides upload, delete, tag editing (shared viewer) |
-| `availableTags` | `string[]` | Suggestions for the tag dropdown |
-
-**Props (`tileType: 'channel'`):**
-| Prop | Type | Purpose |
-|------|------|---------|
-| `channel` | `object` | `channels` store record (`name`, `thumbnailUrl`, `videos[]`, `tags`, `driveId`, …) |
-| `onSelect` | `function` | Opens `YoutubeChannelViewer` |
-| `onDelete` | `function` | `(id) => void` — e.g. `deleteChannel` |
-| `onUpload` | `function` | `(channel) => void` — uploads `{ _type: 'infodepo-channel', ... }` as `.channel.json` (aligned with `utils/driveSync.js` backup) |
-| `uploadStatus` | `null \| 'uploading' \| 'success' \| 'error'` | Per-channel upload state |
-| `onSetTags` | `function \| undefined` | `(channel, tags) => void` — `setRecordTags(id, 'channels', tags)` |
-| `readOnly` | `boolean` | Same as items |
-| `availableTags` | `string[]` | Tag suggestions |
-
-**Item card layout:** `h-40` media (YouTube thumb from blob URL or `BookIcon`), type badge, upload/delete on hover (bottom-right), title, size, tag chips; add-tag **dropdown / new-tag input** are hidden until **hover** on the tag row or **focus-within** (keyboard). Optional IndexedDB hint line for Markdown notes.
-
-**Channel tile layout:** Same shell as items: `h-40` cover (channel avatar or YouTube logo fallback), red **Channel** badge, upload/delete on hover, title, video count, optional handle, tag row (same hover behaviour).
-
-**Props (`tileType: 'share'`):**
-| Prop | Type | Purpose |
-|------|------|---------|
-| `share` | `object` | Share config record from IndexedDB `shares` store |
-| `onSelect` | `function` | Receiver → activates share content filter; Owner → opens editor |
-| `onDelete` | `function` | `(rec) => void` — removes share from store |
-| `readOnly` | `boolean` | Hides delete (shared viewer) |
-
-**Share tile layout:** Same shell, amber-tinted header with share icon, amber **Share** badge, role label (owner/receiver), filename, recipient count, and `explicitRefs` count.
-
-YouTube thumbnails for **items** are resolved asynchronously via `FileReader` on the JSON blob.
-
----
-
-### `YoutubeChannelViewer.js`
-**Role:** Full-page view for a saved YouTube channel — sortable, searchable list of non-Shorts videos from the `channels` record. Auto-checks for new uploads on mount and updates IndexedDB if found.
-
-**Props:**
-| Prop | Type | Purpose |
-|------|------|---------|
-| `channel` | `object` | `channels` store record |
-| `onBack` | `function` | Navigate back to Library |
-| `onSelectItem` | `function` | Opens a video in `Reader` via parent |
-| `onDeleteChannel` | `function` | Removes the channel from IDB |
-| `onRequestDeleteChannel` | `function \| undefined` | Preferred delete path (shows confirmation modal in parent) |
-| `onUpdateChannel` | `function \| undefined` | `(id, data) => void` — writes updated fields (e.g. `videos`, `lastRefreshedAt`) to IDB |
-| `readOnly` | `boolean` | Hides delete button |
-
-**Auto-refresh behaviour:**
-On mount (or when `channel.id` changes), if `onUpdateChannel` is provided and the YouTube API key is configured, the component calls `fetchNewChannelVideos(channel)`:
-- Fetches the first page (up to 50) of the channel's uploads playlist.
-- Compares video IDs against `channel.videos`; fetches details only for genuinely new IDs, filtering out Shorts (< 61 s).
-- If new videos are found, prepends them to `channel.videos` and calls `onUpdateChannel(id, { videos, lastRefreshedAt })`.
-- Writes `lastRefreshedAt` even when there are no new videos so the App.js startup check can skip re-fetching within 1 hour.
-- Each channel is refreshed at most once per session (guarded by a ref) to avoid duplicate API calls on re-renders.
-
-**Refresh status badge** (transient, auto-clears after 4 s):
-- `"Checking for new videos…"` — pulse grey, while the API call is in flight.
-- `"New videos added!"` — green, when new videos were written to IDB.
-- `"Could not check for new videos."` — red, on API error.
-
-**UI:** Header with back arrow, channel avatar, title/handle/count line, optional refresh badge, delete button; title search input with clear button; sort mode buttons (Newest / Oldest / Most Viewed / Least Viewed); paginated grid of `DataTile` (`tileType: 'item'`) with synthetic `application/x-youtube` items built from each video record.
-
----
+- Used for `tileType: 'item'` and `tileType: 'channel'`.
+- Includes tag editor and "Shared with" row when `canShare` is true.
+- Share recipient options come from `config.json` users map excluding current user.
 
 ### `Reader.js`
-**Role:** Format dispatcher. Routes to the correct viewer based on file extension or MIME type.
 
-**Props:**
-| Prop | Type | Purpose |
-|------|------|---------|
-| `video` | `object` | Full item record from IndexedDB |
-| `onUpdateItem` | `function` | Persists updated blob (e.g. Markdown saves) |
-| `onAddImage` | `function` | Saves image assets for Markdown notes |
-| `onGetImages` | `function` | Retrieves image assets for the note |
-| `readOnly` | `boolean` | Passed through to `MarkdownEditor` in shared mode |
+- Dispatches viewers by extension/MIME:
+  - EPUB -> `reader.html` (new tab)
+  - PDF -> `PdfViewer`
+  - TXT -> `TxtViewer`
+  - Markdown -> `MarkdownEditor`
+  - YouTube -> `YoutubeViewer`
 
-**Routing logic:**
-```js
-ext = getFileExtension(video.name)
-   || MIME_TO_EXT[video.type]   // fallback for Drive files without extension
+### `YoutubeChannelViewer.js`
 
-switch(ext):
-  'epub'    → EpubViewer       (legacy path, main routing goes to reader.html)
-  'pdf'     → PdfViewer
-  'txt'     → TxtViewer
-  'md'      → MarkdownEditor
-  'youtube' → YoutubeViewer
-  else      → UnsupportedViewer
-```
+- Channel detail page with sort/search.
+- Auto-checks for new channel videos when mounted.
 
-**MIME_TO_EXT map:**
-```js
-{
-  'application/epub+zip':  'epub',
-  'application/pdf':       'pdf',
-  'text/plain':            'txt',
-  'text/markdown':         'md',
-  'application/x-youtube': 'youtube',
-}
-```
+## Supporting modules
 
----
+- `utils/userConfig.js`:
+  - `fetchUserConfig`
+  - `resolveUserType`
+  - `getUserFolderId`
+  - `listPeerUsers`
+  - `listAllUserEmails`
+- `utils/ownerIndex.js`: writes/reads `_infodepo_index.json`.
+- `utils/peerSync.js`: viewer discovery, download, and prune.
+- `utils/driveSharePermissions.js`: applies Drive ACLs from `sharedWith`.
+- `utils/libraryDriveSync.js`: backup + pull + owner index + peer sync orchestration.
 
-### `YoutubeViewer.js`
-**Role:** Embeds a YouTube video or shows a link for channel/playlist URLs.
+## Notes
 
-**Props:** `video` (full item record)
+- Legacy share-link UI/files were removed.
+- Role-based behavior is centralized in `App.js` + `Library.js`.
+- For sharing details, see [sharing-mechanism.md](sharing-mechanism.md).
 
-**State:** `parsed` (object), `isLoading` (bool), `error` (string|null)
-
-**How it works:**
-```js
-FileReader.readAsText(video.data)
-  onload → JSON.parse → { url, title }
-  extractVideoId(url) → 11-char video ID (or null for channels)
-
-videoId present → 16:9 iframe (youtube-nocookie.com/embed/{id}?rel=0)
-                   + "Open in YouTube" link
-videoId absent  → YouTube logo + "Open in YouTube" link (channel/playlist fallback)
-```
-
----
-
-### `NewYoutubeModal.js`
-**Role:** Modal to save a YouTube video or channel URL.
-
-**Props:**
-| Prop | Type | Purpose |
-|------|------|---------|
-| `onSave` | `function` | Called with `(filename, 'application/x-youtube', blob)` |
-| `onClose` | `function` | Closes the modal |
-
-**Behaviour:**
-- URL input is focused on mount.
-- Validates that the URL contains `youtube.com` or `youtu.be`.
-- Creates a JSON blob: `{ url, title }`.
-- Filename: `{title}.youtube` (filesystem-unsafe chars stripped).
-
----
-
-### `MarkdownEditor.js`
-**Role:** Full-featured Markdown editor with live preview and image assets.
-
-**Props:**
-| Prop | Type | Purpose |
-|------|------|---------|
-| `video` | `object` | Note record (`id`, `name`, `data`) |
-| `onUpdateItem` | `function` | Saves updated Markdown blob |
-| `onAddImage` | `function` | Stores an image asset linked to the note |
-| `onGetImages` | `function` | Retrieves image assets for the note |
-| `readOnly` | `boolean` | Disables editing when true |
-
-**Features:**
-- Live preview — transparent textarea overlays rendered HTML; caret stays aligned.
-- Slash commands — type `/` at the start of a line for a command menu:
-  - Headings (`# `, `## `, `### `)
-  - Lists (`- `, `1. `)
-  - Images (full / 300px / 500px / 800px)
-  - **YouTube embed** — inserts `[Video Title](https://youtube.com/watch?v=)` placeholder
-- YouTube link rendering — `[text](youtube-url)` renders as an inline thumbnail card in the preview.
-- Image assets — drag-drop, paste, or slash-command insert; stored in the `images` IndexedDB store (see [data-stores.md](data-stores.md)).
-- Image size syntax follows `![alt|WIDTH](filename)` (or `|WIDTHxHEIGHT`). Width in preview is read from the `|...` suffix.
-- Image resize tab — hovering an image shows a small right-edge drag tab; dragging resizes the preview image live and persists width back into Markdown (`|WIDTH`) on mouse release.
-- Export as ZIP — `.md` file + `images/` folder.
-- Save — Ctrl+S or Save button → `onUpdateItem(id, blob)`.
-
----
-
-### `Explorer.js`
-**Role:** In-app web extractor that previews a URL, extracts article content to Markdown via WASM, localizes images, then saves as a Markdown note + image assets.
-
-**Props:**
-| Prop | Type | Purpose |
-|------|------|---------|
-| `addItem` | `function` | Saves extracted Markdown as a note (`text/markdown`) |
-| `addImage` | `function` | Saves downloaded image assets linked to the created note |
-| `onSaved` | `function` | Callback after note + assets persist successfully |
-
-**Flow:**
-- **Go:** normalizes URL and loads iframe preview via `/api/preview-url?u=...`.
-- **Extract:** fetches raw HTML from `/api/fetch-url?u=...`, runs WASM `extract_markdown(html)`.
-- **Image localization:** finds image references in extracted Markdown (Markdown syntax + inline `<img>`), resolves relative URLs against the page URL, downloads each via `/api/fetch-image?u=...`.
-- **Rewrite:** replaces remote image URLs with local filenames and normalizes image links to MarkdownEditor format: `![alt|800](filename)` by default.
-- **Save:** creates note first, then inserts each image attachment into the `images` store.
-
-**Notes:**
-- WASM assets are loaded from `public/wasm/` (`trafilatura_wasm.js`, `trafilatura_wasm_bg.wasm`).
-- Extraction runs through Netlify function proxies to avoid browser CORS and iframe restrictions.
-
----
-
-### `PdfViewer.js`
-**Role:** Renders editable PDFs page-by-page with `pdf.js`, supports in-view annotations, and saves changes back to IndexedDB as a new PDF blob.
-
-**Props:** `data` (Blob), `itemId`, `onUpdateItem`, `readOnly`
-
-**How it works:**
-- Loads the PDF with `pdfjs-dist`, renders each page to canvas, and mounts an SVG overlay per page for annotation interaction.
-- Annotation tools (owner mode):
-  - **Highlight:** click-drag rectangle
-  - **Text:** click to place text editor, then save text with selected color and size
-  - **Line:** first click sets start, mouse move previews live line, second click commits end point
-- Overlay annotations are temporary until **Save** (or autosave interval) is triggered.
-- Save flow uses `pdf-lib` to draw annotations into the PDF bytes, then calls `onUpdateItem(itemId, newBlob, 'application/pdf')`.
-- `readOnly` disables annotation controls and editing interactions.
-
----
-
-### `TxtViewer.js`
-**Role:** Reads and displays plain text.
-
-**Props:** `data` (Blob)
-
-**State:** `text` (string), `isLoading` (bool)
-
-**How it works:**
-```js
-FileReader.readAsText(data)
-  onload → setText(result) → setIsLoading(false)
-```
-
-Displays text in a `<pre>` tag with `whitespace-pre-wrap` to preserve formatting.
-
----
-
-### `DevDriveBrowser.js`
-**Role:** Modal overlay — OAuth login + file list from Google Drive folder. Used in both dev and production.
-
-**Props:**
-| Prop | Type | Purpose |
-|------|------|---------|
-| `onFileSelect` | `function` | Called with `(name, mimeType, blob)` on import |
-| `onClose` | `function` | Closes the modal |
-| `clientId` | `string` | OAuth 2.0 Client ID |
-| `apiKey` | `string` | Google API key |
-| `folderId` | `string` | Drive folder ID |
-
-**Credentials:** `clientId` and `apiKey` from `getDriveCredentials()`; `folderId` from `getDriveFolderId()` in `Library.js` (same folder as the OAuth gate).
-
-**Flow:** See [google-drive-integration.md](google-drive-integration.md).
-
----
-
-### `utils/driveCredentials.js`
-**Role:** OAuth client ID and Google API key from the Vite environment (`.env` locally, host env on Netlify). Same variable names everywhere: `VITE_CLIENT_ID`, `VITE_API_KEY`.
-
-| Export | Description |
-|--------|-------------|
-| `getDriveCredentials()` | Returns `{ clientId, apiKey }` from `import.meta.env` |
-
-The Drive **folder** ID is not part of this object; it lives in `localStorage` via [`utils/driveFolderStorage.js`](../utils/driveFolderStorage.js) (`infodepo_drive_folder_id`), including the value set on `GoogleOAuthGate`.
-
----
-
-## `useIndexedDB` Hook
-
-Located at [`hooks/useIndexedDB.js`](../hooks/useIndexedDB.js). Encapsulates all IndexedDB access.
-
-**Database:** `InfoDepo` — version `INFO_DEPO_DB_VERSION` from [`utils/infodepoDb.js`](../utils/infodepoDb.js).
-
-**Stores:** `books`, `notes`, `videos`, `images`, `channels`, `shares`. Merged **items** in the UI combine `books` + `notes` + `videos` with `idbStore` and `tags` attached for each row.
-
-**Authoritative schema, field lists, and Drive behaviour:** see **[data-stores.md](data-stores.md)** and [google-drive-integration.md](google-drive-integration.md).
-
-**Returned API (high level):**
-| | Description |
-|--|-------------|
-| `items`, `channels`, `shares` | Arrays for the library UI |
-| `addItem`, `updateItem`, `deleteItem`, `clearAll` | Item CRUD across routed stores |
-| `addChannel`, `deleteChannel`, `updateChannel`, `upsertDriveChannel`, … | Channel CRUD + Drive |
-| `addImage`, `getImagesForNote`, `getAllImages`, … | Note images |
-| `setItemDriveId`, `setRecordTags` | Drive ids and per-row tags |
-| `getSharesList`, `addShare`, `updateShare`, `deleteShare` | `shares` store CRUD (`addShare` and `updateShare` accept `{ silent }` option) |
-| `loadAll` | Loads all five stores concurrently and sets `items`, `channels`, `shares` in one React batch → **one render**. Used at startup and after every sync completes. |
-| `loadItems`, `loadChannels`, `loadShares` | Individual store loaders; still called by user-initiated mutations (add, delete, rename) so those operations keep immediate feedback. |
-| `getMergedLibraryItems` | Merged rows for Drive share ACL helpers |
-| `getBookByDriveId`, `getBookByName`, `upsertDriveBook`, … | Drive sync helpers |
-
----
-
-## State Flow Diagram
-
-```
-Browser opens app
-       │
-       ▼
-  index.html loads CDNs + importmap
-       │
-       ▼
-  index.js → ReactDOM.createRoot → renders App
-       │
-       ▼
-  App mounts → useIndexedDB opens InfoDepo and loads items + channels
-       │
-  isInitialized = false → "Initializing Database…"
-       │
-       ▼
-  isInitialized = true → brief "Checking Google sign-in…"
-       │
-       ▼
-  VITE_CLIENT_ID + VITE_API_KEY set?
-       ├── no  → main shell (Library, etc.) — no Google gate
-       └── yes → folder ID + valid token for current mode?
-                 ├── no  → GoogleOAuthGate (folder + GIS sign-in)
-                 └── yes → main shell
-       │
-       ▼
-  Library (grid: channels + shares + items) or Reader / YoutubeChannelViewer
-       │
-  ┌────┴────────────────────────────────────────────────┐
-  │                                                      │
-Add flows (owner)                                  Open from grid
-  ├── Add file / note / YouTube / channel            ├── Item card → Reader or reader.html (EPUB)
-  ├── New share / Link share                         ├── Channel card → YoutubeChannelViewer
-  └── onAddItem / addChannel / addShare → IndexedDB  ├── Share card (owner) → SharesEditorModal
-       │                                              └── Share card (receiver) → share content filter
-       ▼
-  loadAll() → setItems + setChannels + setShares batched → one render (inside hook)
-```

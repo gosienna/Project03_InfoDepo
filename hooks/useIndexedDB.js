@@ -2,7 +2,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { INFO_DEPO_DB_NAME as DB_NAME, INFO_DEPO_DB_VERSION as DB_VERSION } from '../utils/infodepoDb.js';
 import { normalizeTagsList } from '../utils/tagUtils.js';
-import { parseSharesDriveJsonText, payloadToClientRecord } from '../utils/sharesDriveJson.js';
 import { parsePdfAnnotationSidecarText, pdfAnnotationSidecarNeedsBackup, timeMs as sidecarTimeMs } from '../utils/pdfAnnotationSidecar.js';
 
 const BOOKS_STORE    = 'books';
@@ -10,7 +9,6 @@ const NOTES_STORE    = 'notes';
 const VIDEOS_STORE   = 'videos';
 const IMAGES_STORE   = 'images';
 const CHANNELS_STORE = 'channels';
-const SHARES_STORE   = 'shares';
 const PDF_ANNOTATIONS_STORE = 'pdfAnnotations';
 
 const pdfAnnotationSidecarKey = (itemId, idbStore) => `${idbStore}:${itemId}`;
@@ -58,7 +56,6 @@ export const useIndexedDB = () => {
   const [db, setDb] = useState(null);
   const [items, setItems] = useState([]);
   const [channels, setChannels] = useState([]);
-  const [shares, setShares] = useState([]);
   const [isInitialized, setIsInitialized] = useState(false);
   const [dataReady, setDataReady] = useState(false);
 
@@ -101,6 +98,7 @@ export const useIndexedDB = () => {
 
     request.onupgradeneeded = (event) => {
       const dbInstance = event.target.result;
+      const tx = event.target.transaction;
       if (event.oldVersion < 1) {
         const addStore = (name, indexSpec, opts = { keyPath: 'id', autoIncrement: true }) => {
           const s = dbInstance.createObjectStore(name, opts);
@@ -112,15 +110,34 @@ export const useIndexedDB = () => {
         addStore(VIDEOS_STORE,   [{ key: 'driveId',   path: 'driveId',   unique: false }]);
         addStore(IMAGES_STORE,   [{ key: 'noteId',    path: 'noteId',    unique: false }]);
         addStore(CHANNELS_STORE, [{ key: 'channelId', path: 'channelId', unique: true  }]);
-        addStore(SHARES_STORE,   [{ key: 'driveFileId', path: 'driveFileId', unique: false }], { keyPath: 'id' });
       }
-      // Sidecar store (not stored inside PDF blobs). Create on any upgrade if missing — avoids gaps when
-      // oldVersion checks skipped a release (e.g. DB already at v4 without this store).
       if (!dbInstance.objectStoreNames.contains(PDF_ANNOTATIONS_STORE)) {
         const s = dbInstance.createObjectStore(PDF_ANNOTATIONS_STORE, { keyPath: 'sidecarKey' });
         s.createIndex('pdfDriveId', 'pdfDriveId', { unique: false });
         s.createIndex('annotationDriveId', 'annotationDriveId', { unique: false });
         s.createIndex('itemId', 'itemId', { unique: false });
+      }
+      // v7: drop shares store, add sharedWith + ownerEmail to content stores
+      if (event.oldVersion > 0 && event.oldVersion < 7) {
+        if (dbInstance.objectStoreNames.contains('shares')) {
+          dbInstance.deleteObjectStore('shares');
+        }
+        const contentStores = [BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, CHANNELS_STORE, IMAGES_STORE];
+        for (const storeName of contentStores) {
+          if (!tx.objectStoreNames.contains(storeName)) continue;
+          const os = tx.objectStore(storeName);
+          const curReq = os.openCursor();
+          curReq.onsuccess = (e) => {
+            const cursor = e.target.result;
+            if (!cursor) return;
+            const val = cursor.value;
+            let changed = false;
+            if (val.sharedWith === undefined) { val.sharedWith = []; changed = true; }
+            if (storeName !== IMAGES_STORE && val.ownerEmail === undefined) { val.ownerEmail = ''; changed = true; }
+            if (changed) cursor.update(val);
+            cursor.continue();
+          };
+        }
       }
     };
   }, []);
@@ -192,22 +209,7 @@ export const useIndexedDB = () => {
     req.onerror = () => setChannels([]);
   }, [db]);
 
-  const loadShares = useCallback((caller = 'unknown') => {
-    console.log('[InfoDepo] loadShares called by:', caller);
-    if (!db) return;
-    let tx;
-    try {
-      tx = db.transaction(SHARES_STORE, 'readonly');
-    } catch {
-      setShares([]);
-      return;
-    }
-    const req = tx.objectStore(SHARES_STORE).getAll();
-    req.onsuccess = () => setShares(req.result || []);
-    req.onerror = () => setShares([]);
-  }, [db]);
-
-  /** Load all stores concurrently and apply all three setters in one React batch → single render. */
+  /** Load all stores concurrently and apply setters in one React batch → single render. */
   const loadAll = useCallback(() => {
     if (!db) return;
     const readStore = (storeName) =>
@@ -223,8 +225,7 @@ export const useIndexedDB = () => {
       readStore(NOTES_STORE),
       readStore(VIDEOS_STORE),
       readStore(CHANNELS_STORE),
-      readStore(SHARES_STORE),
-    ]).then(([books, notes, videos, chans, shs]) => {
+    ]).then(([books, notes, videos, chans]) => {
       const withTags = (r, store) => ({ ...r, idbStore: store, tags: Array.isArray(r.tags) ? r.tags : [] });
       const merged = [
         ...books.map((r) => withTags(r, BOOKS_STORE)),
@@ -234,56 +235,12 @@ export const useIndexedDB = () => {
       const sortedChans = chans
         .map((r) => ({ ...r, tags: Array.isArray(r.tags) ? r.tags : [] }))
         .sort((a, b) => modifiedTimeSortKey(b) - modifiedTimeSortKey(a));
-      // React 18 batches these setters → one render; dataReady flips on first load
       setItems(merged);
       setChannels(sortedChans);
-      setShares(shs);
       setDataReady(true);
     });
   }, [db]);
 
-  /** @returns {Promise<import('../utils/sharesDriveJson.js').ShareClientRecord[]>} */
-  const getSharesList = useCallback(
-    () =>
-      new Promise((resolve) => {
-        if (!db) {
-          resolve([]);
-          return;
-        }
-        let tx;
-        try {
-          tx = db.transaction(SHARES_STORE, 'readonly');
-        } catch {
-          resolve([]);
-          return;
-        }
-        const req = tx.objectStore(SHARES_STORE).getAll();
-        req.onsuccess = () => resolve(req.result || []);
-        req.onerror = () => resolve([]);
-      }),
-    [db]
-  );
-
-  const getShareById = useCallback((id) => {
-    if (!db || !id) return Promise.resolve(undefined);
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(SHARES_STORE, 'readonly');
-      const req = tx.objectStore(SHARES_STORE).get(id);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  }, [db]);
-
-  const getShareByDriveFileId = useCallback((driveFileId) => {
-    if (!db || !driveFileId) return Promise.resolve(undefined);
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(SHARES_STORE, 'readonly');
-      const ix = tx.objectStore(SHARES_STORE).index('driveFileId');
-      const req = ix.get(driveFileId);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  }, [db]);
 
   useEffect(() => {
     if (isInitialized) loadAll();
@@ -331,63 +288,6 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
-  const addShare = useCallback(
-    (record, { silent = false } = {}) => {
-      if (!db) return Promise.reject(new Error('Database not initialized'));
-      return new Promise((resolve, reject) => {
-        const tx = db.transaction(SHARES_STORE, 'readwrite');
-        const req = tx.objectStore(SHARES_STORE).put(record);
-        req.onsuccess = () => {
-          if (!silent) loadShares('addShare');
-          resolve();
-        };
-        req.onerror = () => reject(req.error);
-      });
-    },
-    [db, loadShares]
-  );
-
-  const updateShare = useCallback(
-    (id, patch, { silent = false } = {}) => {
-      if (!db) return Promise.reject(new Error('Database not initialized'));
-      return new Promise((resolve, reject) => {
-        const tx = db.transaction(SHARES_STORE, 'readwrite');
-        const os = tx.objectStore(SHARES_STORE);
-        const g = os.get(id);
-        g.onsuccess = () => {
-          const existing = g.result;
-          if (!existing) {
-            reject(new Error('Share not found'));
-            return;
-          }
-          const p = os.put({ ...existing, ...patch });
-          p.onsuccess = () => {
-            if (!silent) loadShares('updateShare');
-            resolve();
-          };
-          p.onerror = () => reject(p.error);
-        };
-        g.onerror = () => reject(g.error);
-      });
-    },
-    [db, loadShares]
-  );
-
-  const deleteShare = useCallback(
-    (id) => {
-      if (!db) return Promise.resolve();
-      return new Promise((resolve, reject) => {
-        const tx = db.transaction(SHARES_STORE, 'readwrite');
-        const req = tx.objectStore(SHARES_STORE).delete(id);
-        req.onsuccess = () => {
-          loadShares('deleteShare');
-          resolve();
-        };
-        req.onerror = () => reject(req.error);
-      });
-    },
-    [db, loadShares]
-  );
 
   const addItem = useCallback(async (name, type, data) => {
     if (!db) { console.error('Database not initialized'); return Promise.reject(new Error('Database not initialized')); }
@@ -729,6 +629,81 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
+  const deleteItemByDriveId = useCallback(async (driveId) => {
+    const normalizedDriveId = String(driveId || '').trim();
+    if (!normalizedDriveId) return false;
+    const existing = await getBookByDriveId(normalizedDriveId);
+    if (!existing) return false;
+    await deleteItem(existing.id, existing.type);
+    return true;
+  }, [getBookByDriveId, deleteItem]);
+
+  const deleteChannelByDriveId = useCallback((driveId) => {
+    const normalizedDriveId = String(driveId || '').trim();
+    if (!db || !normalizedDriveId) return Promise.resolve(false);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(CHANNELS_STORE, 'readwrite');
+      const os = tx.objectStore(CHANNELS_STORE);
+      const req = os.getAll();
+      req.onsuccess = () => {
+        const existing = (req.result || []).find((c) => String(c?.driveId || '').trim() === normalizedDriveId);
+        if (!existing) {
+          resolve(false);
+          return;
+        }
+        const delReq = os.delete(existing.id);
+        delReq.onsuccess = () => {
+          loadChannels('deleteChannelByDriveId');
+          resolve(true);
+        };
+        delReq.onerror = (e) => reject(e.target.error);
+      };
+      req.onerror = (e) => reject(e.target.error);
+    });
+  }, [db, loadChannels]);
+
+  const getLocalRecordsByOwnerEmail = useCallback((ownerEmail) => {
+    if (!db) return Promise.resolve({ items: [], channels: [] });
+    const normalizedOwnerEmail = String(ownerEmail || '').trim().toLowerCase();
+    if (!normalizedOwnerEmail) return Promise.resolve({ items: [], channels: [] });
+    return new Promise((resolve, reject) => {
+      let tx;
+      try {
+        tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, CHANNELS_STORE], 'readonly');
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      let books = [];
+      let notes = [];
+      let videos = [];
+      let channelsRows = [];
+      let remaining = 4;
+      const finish = () => {
+        remaining--;
+        if (remaining > 0) return;
+        const byOwner = (row) =>
+          String(row?.ownerEmail || '').trim().toLowerCase() === normalizedOwnerEmail;
+        resolve({
+          items: [...books, ...notes, ...videos].filter(byOwner),
+          channels: channelsRows.filter(byOwner),
+        });
+      };
+      const bReq = tx.objectStore(BOOKS_STORE).getAll();
+      bReq.onsuccess = (e) => { books = e.target.result || []; finish(); };
+      bReq.onerror = () => finish();
+      const nReq = tx.objectStore(NOTES_STORE).getAll();
+      nReq.onsuccess = (e) => { notes = e.target.result || []; finish(); };
+      nReq.onerror = () => finish();
+      const vReq = tx.objectStore(VIDEOS_STORE).getAll();
+      vReq.onsuccess = (e) => { videos = e.target.result || []; finish(); };
+      vReq.onerror = () => finish();
+      const cReq = tx.objectStore(CHANNELS_STORE).getAll();
+      cReq.onsuccess = (e) => { channelsRows = e.target.result || []; finish(); };
+      cReq.onerror = () => finish();
+    });
+  }, [db]);
+
   const getBookByName = useCallback((name) => {
     if (!db) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
@@ -783,6 +758,8 @@ export const useIndexedDB = () => {
           localModifiedAt: mt,
           data: blob, size: blob.size,
           tags: Array.isArray(existing.tags) ? existing.tags : [],
+          sharedWith: Array.isArray(existing.sharedWith) ? existing.sharedWith : [],
+          ...(driveFile.ownerEmail ? { ownerEmail: driveFile.ownerEmail } : {}),
           ...(driveFile.driveFolderId ? { driveFolderId: driveFile.driveFolderId } : {}),
           ...(Array.isArray(assets) ? { assets } : {}),
         };
@@ -798,6 +775,8 @@ export const useIndexedDB = () => {
           modifiedTime: mtNew,
           localModifiedAt: mtNew,
           tags: [],
+          sharedWith: [],
+          ownerEmail: driveFile.ownerEmail || '',
           ...(driveFile.driveFolderId ? { driveFolderId: driveFile.driveFolderId } : {}),
           ...(Array.isArray(assets) ? { assets } : {}),
         };
@@ -938,43 +917,6 @@ export const useIndexedDB = () => {
     });
   }, [db, loadChannels, getChannelByDriveId]);
 
-  /**
-   * Persist a share config from Drive (`*.share.json`) into the `shares` store.
-   * @returns {Promise<'added'|'updated'|'skipped'>}
-   */
-  const upsertDriveShare = useCallback(
-    async (driveFile, text, options = {}) => {
-      if (!db) return Promise.reject(new Error('Database not initialized'));
-      const payload = parseSharesDriveJsonText(text);
-      if (!payload) return 'skipped';
-
-      let existing = await getShareByDriveFileId(driveFile.driveId);
-      if (!existing && payload.localId) {
-        existing = await getShareById(payload.localId);
-      }
-
-      const role = existing?.role ?? options.role ?? 'owner';
-      const id =
-        existing?.id ||
-        payload.localId ||
-        (typeof crypto !== 'undefined' && crypto.randomUUID
-          ? crypto.randomUUID()
-          : `share-${Date.now()}`);
-      const rec = payloadToClientRecord(id, payload, role, driveFile.driveId);
-
-      const silent = options.silent ?? false;
-      return new Promise((resolve, reject) => {
-        const tx = db.transaction(SHARES_STORE, 'readwrite');
-        const putReq = tx.objectStore(SHARES_STORE).put(rec);
-        putReq.onsuccess = () => {
-          if (!silent) loadShares('upsertDriveShare');
-          resolve(existing ? 'updated' : 'added');
-        };
-        putReq.onerror = () => reject(putReq.error);
-      });
-    },
-    [db, loadShares, getShareByDriveFileId, getShareById]
-  );
 
   const setRecordTags = useCallback((id, storeName, tags) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
@@ -991,6 +933,29 @@ export const useIndexedDB = () => {
         putReq.onsuccess = () => {
           if (storeName === CHANNELS_STORE) loadChannels('setRecordTags');
           else if (storeName !== IMAGES_STORE) loadItems('setRecordTags');
+          resolve();
+        };
+        putReq.onerror = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  }, [db, loadItems, loadChannels]);
+
+  const setItemSharedWith = useCallback((id, storeName, emails) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    const sharedWith = (emails || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean);
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(storeName, 'readwrite'); } catch (err) { reject(err); return; }
+      const os = tx.objectStore(storeName);
+      const getReq = os.get(id);
+      getReq.onsuccess = () => {
+        const existing = getReq.result;
+        if (!existing) { reject(new Error('Record not found')); return; }
+        const putReq = os.put({ ...existing, sharedWith, localModifiedAt: new Date() });
+        putReq.onsuccess = () => {
+          if (storeName === CHANNELS_STORE) loadChannels('setItemSharedWith');
+          else if (storeName !== IMAGES_STORE) loadItems('setItemSharedWith');
           resolve();
         };
         putReq.onerror = () => reject(putReq.error);
@@ -1237,7 +1202,7 @@ export const useIndexedDB = () => {
   }, [db]);
 
   return {
-    items, channels, shares, isInitialized, dataReady,
+    items, channels, isInitialized, dataReady,
     addItem, updateItem, deleteItem, clearAll,
     addImage, getImagesForNote, getAllImages,
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
@@ -1245,8 +1210,10 @@ export const useIndexedDB = () => {
     addChannel, deleteChannel, updateChannel,
     getChannelByDriveId, upsertDriveChannel,
     getBookByDriveId, getBookByName, upsertDriveBook,
-    getShareById, getShareByDriveFileId, upsertDriveShare,
+    deleteItemByDriveId, deleteChannelByDriveId,
+    getLocalRecordsByOwnerEmail,
     setRecordTags,
+    setItemSharedWith,
     renameItem,
     setItemReadingPosition,
     getPdfAnnotationSidecar,
@@ -1254,10 +1221,6 @@ export const useIndexedDB = () => {
     setPdfAnnotationDriveSync,
     upsertDrivePdfAnnotation,
     getMergedLibraryItems,
-    loadItems, loadChannels, loadShares, loadAll,
-    getSharesList,
-    addShare,
-    updateShare,
-    deleteShare,
+    loadItems, loadChannels, loadAll,
   };
 };

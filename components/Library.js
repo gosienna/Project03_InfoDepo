@@ -15,18 +15,20 @@ import { NewNoteModal } from './NewNoteModal.js';
 import { NewYoutubeModal } from './NewYoutubeModal.js';
 import { NewChannelModal } from './NewChannelModal.js';
 import { CHANNEL_JSON_MARKER } from '../utils/driveSync.js';
-import { runOwnerSyncPipeline, syncReceiverShareContent } from '../utils/libraryDriveSync.js';
+import { runOwnerSyncPipeline } from '../utils/libraryDriveSync.js';
 import { libraryItemKey } from '../utils/libraryItemKey.js';
 import { fetchGoogleUserEmail } from '../utils/googleUser.js';
 import { normalizeTag } from '../utils/tagUtils.js';
 import { OWNER_DRIVE_SCOPE } from '../utils/driveScopes.js';
-import { SharesEditorModal } from './SharesEditorModal.js';
 import { DeleteContentModal } from './DeleteContentModal.js';
-import { uploadSharesJsonToDrive, fetchSharesJsonByFileId } from '../utils/sharesDriveFile.js';
-import { applyShareRecordsToDriveFiles } from '../utils/driveSharePermissions.js';
-import { payloadToClientRecord, normalizeExplicitRefs } from '../utils/sharesDriveJson.js';
+import { applySharedWithToDriveFiles } from '../utils/driveSharePermissions.js';
 import { getOwnerDriveAccessToken, invalidateDriveAccessTokenCache } from '../utils/driveAccessToken.js';
 import { deleteDriveFilesForMergedItem, deleteDriveFilesForChannel } from '../utils/deleteLibraryContentOnDrive.js';
+import { getIndexFileId } from '../utils/ownerIndex.js';
+import { fetchOwnerIndex } from '../utils/ownerIndex.js';
+import { writeOwnerIndex } from '../utils/ownerIndex.js';
+import { listAllUserEmails } from '../utils/userConfig.js';
+import { syncSharedFromPeers } from '../utils/peerSync.js';
 import {
   LIBRARY_DISPLAY_POLICIES,
   modifiedTimeSortMs,
@@ -37,7 +39,6 @@ import {
 
 /** Ensures startup background sync runs once per page load (survives React Strict Mode remount). */
 let ownerBackgroundSyncScheduled = false;
-let receiverBackgroundSyncScheduled = false;
 
 const channelUploadKey = (ch) => `channel-${ch?.id}`;
 
@@ -46,39 +47,41 @@ const SEARCH_SUGGEST_MAX = 15;
 const LIBRARY_PAGE_SIZE = 20;
 
 export const Library = ({
-  items, channels, shares,
+  items, channels,
   onSelectItem, onSelectChannel, onAddItem, onDeleteItem, onClearLibrary,
   onSetDriveId, onSetNoteFolderData, onGetAllImages, getImagesForNote,
   onAddChannel, onDeleteChannel,
   getChannelByDriveId, upsertDriveChannel,
   getBookByDriveId, getBookByName, upsertDriveBook,
-  getShareByDriveFileId, upsertDriveShare,
+  deleteItemByDriveId, deleteChannelByDriveId, getLocalRecordsByOwnerEmail,
   getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
   getPdfAnnotationSidecar,
   setPdfAnnotationDriveSync,
   upsertDrivePdfAnnotation,
   setRecordTags,
+  setItemSharedWith,
   renameItem,
   getMergedLibraryItems,
-  getSharesList,
-  addShare,
-  updateShare,
-  deleteShare,
   onGoogleUserEmail,
   onDriveCredentialsChanged,
   loadItems,
   loadChannels,
-  loadShares,
   loadAll,
+  userType,
+  userConfig,
+  googleUserEmail,
 }) => {
+  const isEditor = userType === 'master' || userType === 'editor';
+  const normalizedUserEmail = String(googleUserEmail || '').trim().toLowerCase();
   const fileInputRef      = useRef(null);
   const searchInputRef    = useRef(null);
   const uploadTokenRef    = useRef(null);
   const lastScopeRef      = useRef('');
   const oauthClientModeRef = useRef(null);
-  const reapplyShareAclTimerRef = useRef(null);
+  const shareAclTimerRef = useRef(null);
   const syncInFlightRef = useRef(false);
   const runOwnerSyncRef = useRef(() => {});
+  const viewerPeerSyncDoneRef = useRef(false);
   const [uploadStatuses,   setUploadStatuses]   = useState({});
   const credentials = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
@@ -88,8 +91,6 @@ export const Library = ({
   const [isYoutubeOpen,    setIsYoutubeOpen]    = useState(false);
   const [isChannelOpen,    setIsChannelOpen]    = useState(false);
   const [isAddMenuOpen,    setIsAddMenuOpen]    = useState(false);
-  const [activeShare,      setActiveShare]      = useState(null);
-  const [activeShareFilter, setActiveShareFilter] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
 
   // Search state
@@ -190,283 +191,184 @@ export const Library = ({
     return [...fromAll].sort();
   }, [items, channels]);
 
-  const pickableWithDriveId = useMemo(() => {
-    const out = [];
-    for (const it of items) {
-      if (it.driveId) {
-        out.push({
-          key: libraryItemKey(it),
-          label: it.name || 'Untitled',
-          driveId: it.driveId,
-        });
-      }
-    }
-    for (const ch of channels || []) {
-      if (ch.driveId) {
-        out.push({
-          key: `channel-${ch.id}`,
-          label: ch.name || ch.handle || 'Channel',
-          driveId: ch.driveId,
-        });
-      }
-    }
-    return out;
-  }, [items, channels]);
+  const shareableUserEmails = useMemo(() => {
+    const all = listAllUserEmails(userConfig).map((email) => String(email || '').trim().toLowerCase()).filter(Boolean);
+    if (!all.length) return [];
+    return all.filter((email) => email !== normalizedUserEmail);
+  }, [userConfig, normalizedUserEmail]);
 
-  const openNewShare = async () => {
-    const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `share-${Date.now()}`;
-    const row = {
-      id,
-      driveFileName: `share-${Date.now()}.share.json`,
-      driveFileId: '',
-      recipients: [],
-      includeTags: [],
-      explicitRefs: [],
-      role: 'owner',
-      updatedAt: new Date().toISOString(),
-    };
-    try {
-      await addShare(row);
-    } catch (e) {
-      console.error(e);
-      window.alert(e?.message || 'Could not create share.');
-      return;
-    }
-    setActiveShare(row);
+  const canEditShareForRecord = (record) => {
+    if (!isEditor) return false;
+    if (!record) return false;
+    const owner = String(record.ownerEmail || '').trim().toLowerCase();
+    // Local rows may not have ownerEmail set yet; treat them as editable by current owner.
+    if (!owner) return true;
+    return owner === normalizedUserEmail;
   };
 
-  const parseDriveFileIdFromInput = (raw) => {
-    const s = String(raw || '').trim();
-    if (!s) return '';
-    const fileD = s.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
-    if (fileD) return fileD[1];
-    const openId = s.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-    if (openId) return openId[1];
-    if (/^[a-zA-Z0-9_-]+$/.test(s) && s.length >= 10) return s;
-    return s;
-  };
-
-  const openLinkShare = async () => {
-    const raw = window.prompt(
-      'Paste a Google Drive link or file ID for the share JSON:\n\n' +
-      'Examples:\n' +
-      '  https://drive.google.com/file/d/1BxiMVs…/view\n' +
-      '  https://drive.google.com/open?id=1BxiMVs…\n' +
-      '  1BxiMVs…  (raw file ID)'
-    );
-    if (!raw || !String(raw).trim()) return;
-    const fid = parseDriveFileIdFromInput(raw);
-    if (!fid) {
-      window.alert('Could not extract a file ID from that input.');
-      return;
-    }
-    setIsAddMenuOpen(false);
-    try {
-      const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
-      const payload = await fetchSharesJsonByFileId(token, fid);
-      if (!payload) {
-        window.alert('Could not read or parse that file.');
-        return;
-      }
-      const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `recv-${Date.now()}`;
-      const rec = payloadToClientRecord(id, payload, 'receiver', String(fid).trim());
-      await addShare(rec);
-
-      const driveIds = new Set(
-        (rec.explicitRefs || []).map((r) => String(r.driveId || '').trim()).filter(Boolean)
-      );
-      if (driveIds.size > 0) {
-        setIsSyncing(true);
-        setSyncProgress('Downloading shared content…');
-        try {
-          const result = await syncReceiverShareContent({
-            accessToken: token,
-            driveIds,
-            getBookByDriveId,
-            getBookByName,
-            upsertDriveBook: (driveFile, blob, assets) =>
-              upsertDriveBook(driveFile, blob, assets, { silent: true }),
-            getShareByDriveFileId,
-            upsertDriveShare: (driveFile, text, opts = {}) =>
-              upsertDriveShare(driveFile, text, { ...opts, silent: true }),
-            getImageByDriveId,
-            getImageByName,
-            upsertDriveImage,
-            getNotes,
-            getChannelByDriveId,
-            upsertDriveChannel: (driveFile, channelData) =>
-              upsertDriveChannel(driveFile, channelData, { silent: true }),
-            upsertDrivePdfAnnotation,
-            onProgress: setSyncProgress,
-          });
-          loadAll();
-          setSyncResult({
-            added: result.added,
-            updated: result.updated,
-            skipped: result.skipped,
-            backed: 0,
-            backupFailed: 0,
-            sharedFor: '',
-          });
-        } catch (syncErr) {
-          console.warn('[InfoDepo] share content sync failed:', syncErr);
-          setSyncResult({ error: `Shared content sync failed: ${syncErr.message}` });
-        } finally {
-          setIsSyncing(false);
-          setSyncProgress('');
-        }
-      }
-
-      setActiveShareFilter(rec);
-    } catch (e) {
-      window.alert(e?.message || String(e));
-    }
-  };
-
-  /** Resolve includeTags → items/channels with driveId, merge into explicitRefs (dedup by driveId). */
-  const resolveTagsIntoExplicitRefs = (recIncludeTags, recExplicitRefs) => {
-    const tagSet = new Set((recIncludeTags || []).map((t) => normalizeTag(t)).filter(Boolean));
-    if (tagSet.size === 0) return normalizeExplicitRefs(recExplicitRefs);
-
-    const merged = new Map();
-    for (const ref of normalizeExplicitRefs(recExplicitRefs)) {
-      merged.set(ref.driveId, ref);
-    }
-    for (const it of items) {
-      if (!it.driveId) continue;
-      const itTags = (it.tags || []).map((t) => normalizeTag(t));
-      if (itTags.some((t) => tagSet.has(t))) {
-        if (!merged.has(it.driveId)) {
-          merged.set(it.driveId, { name: it.name || 'Untitled', driveId: it.driveId });
-        }
-      }
-    }
-    for (const ch of channels || []) {
-      if (!ch.driveId) continue;
-      const chTags = (ch.tags || []).map((t) => normalizeTag(t));
-      if (chTags.some((t) => tagSet.has(t))) {
-        if (!merged.has(ch.driveId)) {
-          merged.set(ch.driveId, { name: ch.name || ch.handle || 'Channel', driveId: ch.driveId });
-        }
-      }
-    }
-    return [...merged.values()];
-  };
-
-  const handleOwnerSaveShare = async (rec) => {
-    if (!hasCredentials) throw new Error('Configure Drive folder and credentials first.');
+  const reconcileShareAclNow = async ({
+    overrideRecord = null,
+    overrideStore = '',
+    overrideEmails = null,
+    previousSharedWith = null,
+    targetedOnly = false,
+  } = {}) => {
+    if (!credentials.clientId) return null;
+    console.log('[InfoDepo] ACL step: acquire token');
     const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
-    const prev = rec.driveFileId ? await fetchSharesJsonByFileId(token, rec.driveFileId) : null;
-    const mergedItems = await getMergedLibraryItems();
-    const images = onGetAllImages ? await onGetAllImages() : [];
-    const resolvedExplicitRefs = resolveTagsIntoExplicitRefs(rec.includeTags, rec.explicitRefs);
-    const enrichedRec = { ...rec, explicitRefs: resolvedExplicitRefs };
-    const result = await uploadSharesJsonToDrive({
+    let itemsForAcl = [];
+    let channelsForAcl = [];
+    if (targetedOnly && overrideRecord) {
+      if (overrideStore === 'channels') {
+        channelsForAcl = [{ ...overrideRecord, sharedWith: overrideEmails || [] }];
+      } else {
+        itemsForAcl = [{ ...overrideRecord, sharedWith: overrideEmails || [] }];
+      }
+    } else {
+      console.log('[InfoDepo] ACL step: load merged library items');
+      const mergedItems = await getMergedLibraryItems();
+      itemsForAcl =
+        overrideRecord && overrideStore !== 'channels'
+          ? mergedItems.map((it) =>
+              it.id === overrideRecord.id && it.idbStore === overrideStore
+                ? { ...it, sharedWith: overrideEmails || [] }
+                : it
+            )
+          : mergedItems;
+      channelsForAcl =
+        overrideRecord && overrideStore === 'channels'
+          ? (channels || []).map((ch) =>
+              ch.id === overrideRecord.id ? { ...ch, sharedWith: overrideEmails || [] } : ch
+            )
+          : (channels || []);
+    }
+    let indexFid = null;
+    let prevIndex = null;
+    if (targetedOnly && overrideRecord && Array.isArray(previousSharedWith)) {
+      prevIndex = {
+        items: [{ driveId: String(overrideRecord.driveId || '').trim(), sharedWith: previousSharedWith }],
+      };
+    }
+    // Index file discovery needs folderId and API-key/proxy path; ACL grant on item files does not.
+    if (!targetedOnly && String(driveFolderId || '').trim() && hasGoogleApiKeyOrProxy(credentials)) {
+      try {
+        console.log('[InfoDepo] ACL step: lookup owner index file');
+        indexFid = await getIndexFileId(token, driveFolderId);
+        console.log('[InfoDepo] ACL step: fetch previous owner index', { hasIndexFile: !!indexFid });
+        prevIndex = indexFid ? await fetchOwnerIndex({ accessToken: token, folderId: driveFolderId }) : null;
+      } catch (e) {
+        console.warn('[InfoDepo] index lookup skipped during ACL reconcile:', e);
+      }
+    }
+    console.log('[InfoDepo] ACL step: apply Drive permissions');
+    const aclPromise = applySharedWithToDriveFiles({
       accessToken: token,
-      folderId: driveFolderId,
-      record: enrichedRec,
-      existingFileId: rec.driveFileId || undefined,
-    });
-    await updateShare(rec.id, {
-      driveFileId: result.id,
-      driveFileName: rec.driveFileName,
-      recipients: rec.recipients,
-      includeTags: rec.includeTags,
-      explicitRefs: resolvedExplicitRefs,
-      updatedAt: rec.updatedAt,
-    });
-    const owners = (await getSharesList()).filter((s) => s.role !== 'receiver');
-    await applyShareRecordsToDriveFiles({
-      accessToken: token,
-      items: mergedItems,
-      images,
-      channels: channels || [],
-      shareRecords: owners,
-      previousSharePayloads: prev ? [prev] : [],
+      items: itemsForAcl,
+      channels: channelsForAcl,
+      indexFileId: indexFid,
+      previousIndex: prevIndex,
       onProgress: () => {},
     });
-  };
-
-  const handleRefreshReceiverShare = async () => {
-    if (!activeShare?.driveFileId) return;
-    const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
-    const payload = await fetchSharesJsonByFileId(token, activeShare.driveFileId);
-    if (!payload) throw new Error('Could not refresh.');
-    await updateShare(activeShare.id, {
-      driveFileName: payload.driveFileName,
-      recipients: payload.recipients,
-      includeTags: payload.includeTags,
-      explicitRefs: normalizeExplicitRefs(payload.explicitRefs),
-      updatedAt: payload.updatedAt,
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Drive authorization reconcile timed out after 20s.')), 20000);
     });
-    const row = (await getSharesList()).find((s) => s.id === activeShare.id);
-    if (row) setActiveShare(row);
+    return Promise.race([aclPromise, timeoutPromise]);
   };
 
-  const handleOpenReceiverShare = async (rec) => {
-    setActiveShareFilter(rec);
-    if (!rec.driveFileId) return;
+  const handleSetSharedWith = async (record, storeName, emails) => {
+    const previousSharedWith = Array.isArray(record?.sharedWith) ? [...record.sharedWith] : [];
+    await setItemSharedWith(record.id, storeName, emails);
+    const recordDriveId = String(record?.driveId || '').trim();
+    if (!recordDriveId) {
+      console.warn('[InfoDepo] Share updated locally, but Drive authorization skipped because this record has no driveId yet. Upload it to Google Drive first.', {
+        recordId: record?.id,
+        storeName,
+        sharedWith: emails,
+      });
+      return;
+    }
+    if (shareAclTimerRef.current) {
+      clearTimeout(shareAclTimerRef.current);
+      shareAclTimerRef.current = null;
+    }
     try {
-      const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
-      const payload = await fetchSharesJsonByFileId(token, rec.driveFileId);
-      if (payload) {
-        const updated = normalizeExplicitRefs(payload.explicitRefs);
-        await updateShare(rec.id, {
-          driveFileName: payload.driveFileName,
-          recipients: payload.recipients,
-          includeTags: payload.includeTags,
-          explicitRefs: updated,
-          updatedAt: payload.updatedAt,
+      console.log('[InfoDepo] Starting Drive authorization reconcile for sharedWith change...', {
+        recordId: record.id,
+        storeName,
+        driveId: recordDriveId,
+        sharedWith: emails,
+      });
+      const aclResult = await reconcileShareAclNow({
+        overrideRecord: record,
+        overrideStore: storeName,
+        overrideEmails: emails,
+        previousSharedWith,
+        targetedOnly: true,
+      });
+      if (aclResult) {
+        console.log('[InfoDepo] Drive authorization reconcile result:', {
+          recordId: record.id,
+          storeName,
+          sharedWith: emails,
+          granted: aclResult.granted,
+          failed: aclResult.failed,
+          revoked: aclResult.revoked,
+          revokeFailed: aclResult.revokeFailed,
         });
-        const freshRec = (await getSharesList()).find((s) => s.id === rec.id) || rec;
-        setActiveShareFilter(freshRec);
-
-        const driveIds = new Set(
-          (updated || []).map((r) => String(r.driveId || '').trim()).filter(Boolean)
-        );
-        if (driveIds.size > 0) {
-          setIsSyncing(true);
-          setSyncProgress('Downloading shared content…');
-          const result = await syncReceiverShareContent({
+      }
+      if (aclResult && aclResult.failed > 0) {
+        window.alert(`Some Google Drive permission updates failed (${aclResult.failed}). The recipient may not see this item yet.`);
+      }
+      // Ensure receivers can discover latest sharedWith changes without waiting for full Sync.
+      if (String(driveFolderId || '').trim() && hasGoogleApiKeyOrProxy(credentials)) {
+        try {
+          const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
+          const mergedItems = await getMergedLibraryItems();
+          await writeOwnerIndex({
             accessToken: token,
-            driveIds,
-            getBookByDriveId,
-            getBookByName,
-            upsertDriveBook: (driveFile, blob, assets) =>
-              upsertDriveBook(driveFile, blob, assets, { silent: true }),
-            getShareByDriveFileId,
-            upsertDriveShare: (driveFile, text, opts = {}) =>
-              upsertDriveShare(driveFile, text, { ...opts, silent: true }),
-            getImageByDriveId,
-            getImageByName,
-            upsertDriveImage,
-            getNotes,
-            getChannelByDriveId,
-            upsertDriveChannel: (driveFile, channelData) =>
-              upsertDriveChannel(driveFile, channelData, { silent: true }),
-            upsertDrivePdfAnnotation,
-            onProgress: setSyncProgress,
+            folderId: driveFolderId,
+            ownerEmail: normalizedUserEmail,
+            items: mergedItems,
+            channels: channels || [],
           });
-          loadAll();
-          setSyncResult({
-            added: result.added,
-            updated: result.updated,
-            skipped: result.skipped,
-            backed: 0,
-            backupFailed: 0,
-          });
-          setIsSyncing(false);
-          setSyncProgress('');
-          const refreshed = (await getSharesList()).find((s) => s.id === rec.id) || rec;
-          setActiveShareFilter(refreshed);
+          console.log('[InfoDepo] Owner index updated after sharedWith change.');
+        } catch (idxErr) {
+          console.warn('[InfoDepo] Failed to update owner index after sharedWith change:', idxErr);
         }
+      } else {
+        console.warn('[InfoDepo] Skipped owner index update after sharedWith change (missing folderId or API key/proxy).');
       }
     } catch (e) {
-      console.warn('[InfoDepo] receiver share open sync:', e);
-      setIsSyncing(false);
-      setSyncProgress('');
+      console.error('[InfoDepo] ACL reconcile after share change failed:', e);
+      window.alert(e?.message || 'Failed to update Google Drive permissions for this share change.');
+    } finally {
+      console.log('[InfoDepo] Drive authorization reconcile finished for sharedWith change.', {
+        recordId: record.id,
+        storeName,
+      });
     }
   };
+
+  /** Debounced helper used by upload flows to reconcile Drive ACLs. */
+  const scheduleShareAclReconcile = () => {
+    if (!hasCredentials) return;
+    if (shareAclTimerRef.current) clearTimeout(shareAclTimerRef.current);
+    shareAclTimerRef.current = setTimeout(async () => {
+      shareAclTimerRef.current = null;
+      try {
+        await reconcileShareAclNow();
+      } catch (e) {
+        console.warn('[InfoDepo] share ACL reconcile after change:', e);
+      }
+    }, 450);
+  };
+
+  useEffect(
+    () => () => {
+      if (shareAclTimerRef.current) clearTimeout(shareAclTimerRef.current);
+    },
+    []
+  );
 
   // Clear in-memory token when client ID changes.
   useEffect(() => {
@@ -521,73 +423,14 @@ export const Library = ({
       client.requestAccessToken({ prompt: '' });
     });
 
-  /** Re-resolve tags → explicitRefs for all owner shares, persist, re-upload JSON, then reapply Drive ACLs. */
-  const scheduleReapplyShareAclsAfterTagChange = () => {
-    if (!hasCredentials) return;
-    if (reapplyShareAclTimerRef.current) clearTimeout(reapplyShareAclTimerRef.current);
-    reapplyShareAclTimerRef.current = setTimeout(async () => {
-      reapplyShareAclTimerRef.current = null;
-      try {
-        let owners = (await getSharesList()).filter((s) => s.role !== 'receiver');
-        if (owners.length === 0) return;
-        const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
-        const mergedItems = await getMergedLibraryItems();
-        const images = onGetAllImages ? await onGetAllImages() : [];
 
-        for (const o of owners) {
-          const resolved = resolveTagsIntoExplicitRefs(o.includeTags, o.explicitRefs);
-          const changed = JSON.stringify(resolved) !== JSON.stringify(normalizeExplicitRefs(o.explicitRefs));
-          if (!changed) continue;
-          await updateShare(o.id, { explicitRefs: resolved, updatedAt: new Date().toISOString() });
-          if (o.driveFileId) {
-            await uploadSharesJsonToDrive({
-              accessToken: token,
-              folderId: driveFolderId,
-              record: { ...o, explicitRefs: resolved },
-              existingFileId: o.driveFileId,
-            });
-          }
-        }
-
-        owners = (await getSharesList()).filter((s) => s.role !== 'receiver');
-        const previousSharePayloads = await Promise.all(
-          owners.map((o) =>
-            o.driveFileId ? fetchSharesJsonByFileId(token, o.driveFileId) : Promise.resolve(null)
-          )
-        );
-        await applyShareRecordsToDriveFiles({
-          accessToken: token,
-          items: mergedItems,
-          images,
-          channels: channels || [],
-          shareRecords: owners,
-          previousSharePayloads,
-          onProgress: () => {},
-        });
-      } catch (e) {
-        console.warn('[InfoDepo] reapply share ACLs after tag/upload change:', e);
-      }
-    }, 450);
-  };
-
-  useEffect(
-    () => () => {
-      if (reapplyShareAclTimerRef.current) clearTimeout(reapplyShareAclTimerRef.current);
-    },
-    []
-  );
-
-  const setRecordTagsAndReapplyShares = async (id, storeName, tags) => {
-    await setRecordTags(id, storeName, tags);
-    scheduleReapplyShareAclsAfterTagChange();
-  };
+  useEffect(() => {
+    viewerPeerSyncDoneRef.current = false;
+  }, [googleUserEmail]);
 
   useEffect(() => {
     if (!onGoogleUserEmail) return;
-    if (!hasCredentials) {
-      onGoogleUserEmail(null);
-      return;
-    }
+    if (!hasCredentials) return;
     let cancelled = false;
     (async () => {
       try {
@@ -600,6 +443,70 @@ export const Library = ({
     })();
     return () => { cancelled = true; };
   }, [hasCredentials, credentials.clientId, onGoogleUserEmail]);
+
+  useEffect(() => {
+    if (userType !== 'viewer') return;
+    if (!googleUserEmail || !userConfig) return;
+    if (viewerPeerSyncDoneRef.current) return;
+    if (syncInFlightRef.current) return;
+    viewerPeerSyncDoneRef.current = true;
+
+    let cancelled = false;
+    (async () => {
+      syncInFlightRef.current = true;
+      setSyncProgress('Checking shared content from configured users...');
+      setSyncResult(null);
+      try {
+        const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
+        const peerResult = await syncSharedFromPeers({
+          accessToken: token,
+          myEmail: googleUserEmail,
+          config: userConfig,
+          getBookByDriveId,
+          upsertDriveBook: (driveFile, blob, assets) =>
+            upsertDriveBook(driveFile, blob, assets, { silent: true }),
+          getChannelByDriveId,
+          upsertDriveChannel: (driveFile, channelData) =>
+            upsertDriveChannel(driveFile, channelData, { silent: true }),
+          getLocalRecordsByOwnerEmail,
+          deleteItemByDriveId,
+          deleteChannelByDriveId,
+          onProgress: setSyncProgress,
+        });
+        if (cancelled) return;
+        loadAll();
+        setSyncResult({
+          sharedFor: googleUserEmail,
+          backed: 0,
+          backupFailed: 0,
+          added: peerResult.added,
+          updated: peerResult.updated,
+          skipped: peerResult.skipped,
+          removed: peerResult.removed || 0,
+          failed: peerResult.failed,
+          peerAdded: peerResult.added,
+          peerRemoved: peerResult.removed || 0,
+          peerFailed: peerResult.failed,
+        });
+      } catch (err) {
+        if (!cancelled) setSyncResult({ error: err?.message || 'Viewer shared-content sync failed.' });
+      } finally {
+        syncInFlightRef.current = false;
+        if (!cancelled) setSyncProgress('');
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [
+    userType,
+    googleUserEmail,
+    userConfig,
+    getBookByDriveId,
+    upsertDriveBook,
+    getChannelByDriveId,
+    upsertDriveChannel,
+    loadAll,
+  ]);
 
   const handleUpload = async (video) => {
     const uKey = libraryItemKey(video);
@@ -640,7 +547,7 @@ export const Library = ({
       const driveFile = await res.json();
       await onSetDriveId(video.id, video.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
       setStatus(uKey, 'success');
-      scheduleReapplyShareAclsAfterTagChange();
+      scheduleShareAclReconcile();
     } catch (err) {
       console.error('Upload failed:', err.message);
       uploadTokenRef.current = null;
@@ -686,7 +593,7 @@ export const Library = ({
       const driveFile = await res.json();
       await onSetDriveId(ch.id, 'channels', driveFile.id, { modifiedTime: driveFile.modifiedTime });
       setStatus(uKey, 'success');
-      scheduleReapplyShareAclsAfterTagChange();
+      scheduleShareAclReconcile();
     } catch (err) {
       console.error('Channel upload failed:', err.message);
       uploadTokenRef.current = null;
@@ -738,6 +645,8 @@ export const Library = ({
         folderId: driveFolderId,
         items,
         channels,
+        ownerEmail: googleUserEmail,
+        config: userConfig,
         onSetDriveId: (id, storeName, driveId, syncMeta = null) =>
           onSetDriveId(id, storeName, driveId, { ...(syncMeta || {}), silent: true }),
         onSetNoteFolderData: (noteId, folderId, assetDriveIds) =>
@@ -747,9 +656,6 @@ export const Library = ({
         getBookByName,
         upsertDriveBook: (driveFile, blob, assets) =>
           upsertDriveBook(driveFile, blob, assets, { silent: true }),
-        getShareByDriveFileId,
-        upsertDriveShare: (driveFile, text, opts = {}) =>
-          upsertDriveShare(driveFile, text, { ...opts, silent: true }),
         getImageByDriveId,
         getImageByName,
         upsertDriveImage,
@@ -757,6 +663,9 @@ export const Library = ({
         getChannelByDriveId,
         upsertDriveChannel: (driveFile, channelData) =>
           upsertDriveChannel(driveFile, channelData, { silent: true }),
+        getLocalRecordsByOwnerEmail,
+        deleteItemByDriveId,
+        deleteChannelByDriveId,
         getPdfAnnotationSidecar,
         setPdfAnnotationDriveSync,
         upsertDrivePdfAnnotation,
@@ -788,96 +697,6 @@ export const Library = ({
     return () => clearTimeout(t);
   }, [hasCredentials, driveFolderId]);
 
-  useEffect(() => {
-    const receiverShares = (shares || []).filter((s) => s.role === 'receiver' && String(s.driveFileId || '').trim());
-    if (!receiverShares.length) return;
-    if (!credentials.clientId || !hasGoogleApiKeyOrProxy(credentials)) return;
-    if (receiverBackgroundSyncScheduled) return;
-
-    receiverBackgroundSyncScheduled = true;
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      // Reuse the same lock so owner and receiver startup syncs do not overlap.
-      if (syncInFlightRef.current) return;
-      syncInFlightRef.current = true;
-      setIsSyncing(true);
-      setSyncResult(null);
-      setSyncProgress('Refreshing linked shares...');
-      try {
-        const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
-        let added = 0;
-        let updated = 0;
-        let skipped = 0;
-
-        for (const rec of receiverShares) {
-          if (cancelled) break;
-          const payload = await fetchSharesJsonByFileId(token, rec.driveFileId);
-          const explicitRefs = normalizeExplicitRefs(payload?.explicitRefs);
-          if (payload) {
-            await updateShare(rec.id, {
-              driveFileName: payload.driveFileName,
-              recipients: payload.recipients,
-              includeTags: payload.includeTags,
-              explicitRefs,
-              updatedAt: payload.updatedAt,
-            }, { silent: true });
-          }
-          const driveIds = new Set(
-            (explicitRefs || []).map((r) => String(r.driveId || '').trim()).filter(Boolean)
-          );
-          if (!driveIds.size) continue;
-
-          setSyncProgress(`Downloading shared content for ${payload?.driveFileName || rec.driveFileName || 'share'}...`);
-          const result = await syncReceiverShareContent({
-            accessToken: token,
-            driveIds,
-            getBookByDriveId,
-            getBookByName,
-            upsertDriveBook: (driveFile, blob, assets) =>
-              upsertDriveBook(driveFile, blob, assets, { silent: true }),
-            getShareByDriveFileId,
-            upsertDriveShare: (driveFile, text, opts = {}) =>
-              upsertDriveShare(driveFile, text, { ...opts, silent: true }),
-            getImageByDriveId,
-            getImageByName,
-            upsertDriveImage,
-            getNotes,
-            getChannelByDriveId,
-            upsertDriveChannel: (driveFile, channelData) =>
-              upsertDriveChannel(driveFile, channelData, { silent: true }),
-            upsertDrivePdfAnnotation,
-            onProgress: setSyncProgress,
-          });
-          added += result.added || 0;
-          updated += result.updated || 0;
-          skipped += result.skipped || 0;
-        }
-
-        if (!cancelled) {
-          console.log('[InfoDepo] receiverStartupSync result:', { added, updated, skipped });
-          loadAll();
-          setSyncResult({ added, updated, skipped, backed: 0, backupFailed: 0 });
-        }
-      } catch (err) {
-        if (!cancelled) {
-          console.warn('[InfoDepo] receiver startup sync failed:', err);
-          setSyncResult({ error: `Receiver startup sync failed: ${err.message}` });
-        }
-      } finally {
-        syncInFlightRef.current = false;
-        if (!cancelled) {
-          setIsSyncing(false);
-          setSyncProgress('');
-        }
-      }
-    }, 0);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [shares, credentials.clientId, updateShare]);
-
   const toggleFilter = (filter) => {
     setActiveFilters(prev => {
       const next = new Set(prev);
@@ -902,54 +721,21 @@ export const Library = ({
     return false;
   };
 
-  const matchesShareNameOrIncludeTags = (share) => {
-    if (!query) return true;
-    if ((share.driveFileName || '').toLowerCase().includes(query)) return true;
-    const nq = normalizeTag(query);
-    if (!nq) return false;
-    for (const t of share.includeTags || []) {
-      const nt = normalizeTag(t);
-      if (nt && nt.includes(nq)) return true;
-    }
-    return false;
-  };
-
-  const shareRefDriveIds = useMemo(() => {
-    if (!activeShareFilter) return null;
-    return new Set(
-      (activeShareFilter.explicitRefs || [])
-        .map((r) => String(r.driveId || '').trim())
-        .filter(Boolean)
-    );
-  }, [activeShareFilter]);
 
   const filteredItems = useMemo(() => items.filter(item => {
-    if (shareRefDriveIds) {
-      if (!item.driveId || !shareRefDriveIds.has(String(item.driveId))) return false;
-    }
     if (activeFilters.size > 0 && !activeFilters.has(item.idbStore)) return false;
     if (query && !matchesNameOrTags(item.name, item.tags)) return false;
     return true;
-  }), [items, shareRefDriveIds, activeFilters, query]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [items, activeFilters, query]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredChannels = useMemo(() => (channels || []).filter(ch => {
-    if (shareRefDriveIds) {
-      if (!ch.driveId || !shareRefDriveIds.has(String(ch.driveId))) return false;
-    }
     if (activeFilters.size > 0 && !activeFilters.has('channels')) return false;
     if (query && !matchesNameOrTags(ch.name || ch.handle, ch.tags)) return false;
     return true;
-  }), [channels, shareRefDriveIds, activeFilters, query]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [channels, activeFilters, query]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filteredShares = useMemo(() => (shares || []).filter((s) => {
-    if (shareRefDriveIds) return false;
-    if (activeFilters.size > 0 && !activeFilters.has('shares')) return false;
-    if (query && !matchesShareNameOrIncludeTags(s)) return false;
-    return true;
-  }), [shares, shareRefDriveIds, activeFilters, query]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const totalGridCount = items.length + (channels || []).length + (shares || []).length;
-  const filteredGridCount = filteredItems.length + filteredChannels.length + filteredShares.length;
+  const totalGridCount = items.length + (channels || []).length;
+  const filteredGridCount = filteredItems.length + filteredChannels.length;
 
   const sortedLibraryRows = useMemo(() => {
     const rows = [];
@@ -959,11 +745,8 @@ export const Library = ({
     for (const ch of filteredChannels) {
       rows.push({ kind: 'channel', data: ch, sortMs: modifiedTimeSortMs(ch) });
     }
-    for (const s of filteredShares) {
-      rows.push({ kind: 'share', data: s, sortMs: modifiedTimeSortMs(s) });
-    }
     return applyLibraryDisplayPolicy(rows, libraryDisplayPolicy);
-  }, [filteredItems, filteredChannels, filteredShares, libraryDisplayPolicy]);
+  }, [filteredItems, filteredChannels, libraryDisplayPolicy]);
 
   const libraryPageRows = useMemo(() => {
     const start = libraryPageIndex * LIBRARY_PAGE_SIZE;
@@ -976,7 +759,7 @@ export const Library = ({
 
   useEffect(() => {
     setLibraryPageIndex(0);
-  }, [searchQuery, activeShareFilter?.id, activeFiltersKey]);
+  }, [searchQuery, activeFiltersKey]);
 
   useEffect(() => {
     const tp = Math.max(1, Math.ceil(sortedLibraryRows.length / LIBRARY_PAGE_SIZE) || 1);
@@ -984,7 +767,7 @@ export const Library = ({
     if (libraryPageIndex > maxIdx) setLibraryPageIndex(maxIdx);
   }, [sortedLibraryRows.length, libraryPageIndex]);
 
-  const hasActiveSearch = query || activeFilters.size > 0 || !!activeShareFilter;
+  const hasActiveSearch = query || activeFilters.size > 0;
 
   const searchSuggestionPool = useMemo(() => {
     const rows = [];
@@ -1011,9 +794,6 @@ export const Library = ({
     for (const ch of channels || []) {
       addName(ch.name || ch.handle || '', 'channel');
     }
-    for (const sh of shares || []) {
-      addName(sh.driveFileName || '', 'share');
-    }
 
     const tagSeen = new Set();
     for (const t of availableTags) {
@@ -1022,17 +802,9 @@ export const Library = ({
       tagSeen.add(n);
       rows.push({ kind: 'tag', category: 'tag', label: n, value: n });
     }
-    for (const sh of shares || []) {
-      for (const t of sh.includeTags || []) {
-        const n = normalizeTag(t);
-        if (!n || tagSeen.has(n)) continue;
-        tagSeen.add(n);
-        rows.push({ kind: 'tag', category: 'share-tag', label: n, value: n });
-      }
-    }
 
     return rows;
-  }, [items, channels, shares, availableTags]);
+  }, [items, channels, availableTags]);
 
   const searchSuggestions = useMemo(() => {
     const raw = searchQuery.trim();
@@ -1089,7 +861,7 @@ export const Library = ({
     }
   };
 
-  const folderBadge = hasCredentials && React.createElement(
+  const folderBadge = hasCredentials && isEditor && React.createElement(
     'span',
     {
       className: 'flex items-center gap-1 bg-gray-800 border border-gray-600/40 text-gray-300 text-xs font-mono px-2.5 py-1.5 rounded-lg',
@@ -1103,7 +875,7 @@ export const Library = ({
     driveFolderId.length > 14 ? `${driveFolderId.slice(0, 8)}…${driveFolderId.slice(-4)}` : driveFolderId || '—',
   );
 
-  const syncButton = hasCredentials && React.createElement(
+  const syncButton = hasCredentials && isEditor && React.createElement(
     'button',
     {
       onClick: runSync,
@@ -1150,8 +922,8 @@ export const Library = ({
         // Sync button (backup local → Drive, then sync Drive → local)
         hasCredentials && syncButton,
 
-        // Add Content dropdown
-        React.createElement(
+        // Add Content dropdown (editor/master only)
+        isEditor && React.createElement(
           'div',
           { className: 'relative' },
           React.createElement(
@@ -1226,35 +998,9 @@ export const Library = ({
               React.createElement(BookIcon, { className: 'h-4 w-4 text-indigo-400' }),
               'Add File'
             ),
-            React.createElement(
-              'button',
-              {
-                onClick: () => { setIsAddMenuOpen(false); openNewShare(); },
-                className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors border-t border-gray-700'
-              },
-              React.createElement(
-                'svg',
-                { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4 text-teal-400', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
-                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z' })
-              ),
-              'New share'
-            ),
-            React.createElement(
-              'button',
-              {
-                onClick: () => { setIsAddMenuOpen(false); openLinkShare(); },
-                className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors'
-              },
-              React.createElement(
-                'svg',
-                { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4 text-amber-400', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
-                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' })
-              ),
-              'Link share…'
-            )
           )
         ),
-        React.createElement('input', {
+        isEditor && React.createElement('input', {
           ref: fileInputRef,
           type: 'file',
           accept: '.epub,.pdf,.txt,.md,application/epub+zip,application/pdf,text/plain,text/markdown',
@@ -1262,8 +1008,8 @@ export const Library = ({
           className: 'hidden'
         }),
 
-        // System settings button
-        React.createElement(
+        // System settings button (editor/master only)
+        isEditor && React.createElement(
           'button',
           {
             onClick: () => setIsSystemSettingsOpen(true),
@@ -1392,7 +1138,6 @@ export const Library = ({
           { key: 'notes',    label: 'Notes',    activeClass: 'bg-emerald-600 border-emerald-500 text-white' },
           { key: 'videos',   label: 'Videos',   activeClass: 'bg-red-600 border-red-500 text-white' },
           { key: 'channels', label: 'Channels', activeClass: 'bg-red-900 border-red-800 text-white' },
-          { key: 'shares', label: 'Shares', activeClass: 'bg-teal-800 border-teal-600 text-white' },
         ].map(({ key, label, activeClass }) =>
           React.createElement(
             'button',
@@ -1423,7 +1168,7 @@ export const Library = ({
     syncResult && React.createElement(
       'div',
       {
-        className: `mb-4 px-4 py-2 rounded-xl text-sm flex items-center justify-between ${syncResult.error ? 'bg-red-900/30 text-red-300 border border-red-800/40' : 'bg-teal-900/30 text-teal-300 border border-teal-800/40'}`,
+        className: `mb-4 px-4 py-2 rounded-xl text-sm flex items-center justify-between ${syncResult.error ? 'bg-red-900/30 text-red-300 border border-red-800/40' : syncResult.failed > 0 ? 'bg-amber-900/30 text-amber-300 border border-amber-800/40' : 'bg-teal-900/30 text-teal-300 border border-teal-800/40'}`,
       },
       syncResult.error
         ? `Sync failed: ${syncResult.error}`
@@ -1434,6 +1179,8 @@ export const Library = ({
             `${syncResult.added} added`,
             `${syncResult.updated} updated`,
             `${syncResult.skipped} unchanged`,
+            syncResult.removed > 0 && `${syncResult.removed} removed (share revoked)`,
+            syncResult.failed > 0 && `${syncResult.failed} inaccessible (owner may need to re-apply share permissions)`,
           ].filter(Boolean).join(', '),
       React.createElement(
         'button',
@@ -1442,42 +1189,6 @@ export const Library = ({
       )
     ),
 
-    // Active share filter banner
-    activeShareFilter && React.createElement(
-      'div',
-      { className: 'mb-4 px-4 py-2.5 rounded-xl text-sm flex items-center justify-between bg-amber-900/30 text-amber-200 border border-amber-800/40' },
-      React.createElement(
-        'span',
-        { className: 'flex items-center gap-2' },
-        React.createElement(
-          'svg',
-          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4 shrink-0', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
-          React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z' })
-        ),
-        `Viewing share: ${activeShareFilter.driveFileName || activeShareFilter.id}`,
-        ` (${filteredItems.length + filteredChannels.length} items)`
-      ),
-      React.createElement(
-        'div',
-        { className: 'flex items-center gap-2' },
-        React.createElement(
-          'button',
-          {
-            onClick: () => { setActiveShareFilter(null); setActiveShare(activeShareFilter); },
-            className: 'px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-800/50 hover:bg-amber-700/60 text-amber-100 transition-colors',
-          },
-          'Edit'
-        ),
-        React.createElement(
-          'button',
-          {
-            onClick: () => setActiveShareFilter(null),
-            className: 'text-current opacity-60 hover:opacity-100 text-lg leading-none',
-          },
-          '\u00d7'
-        )
-      )
-    ),
 
     // Unified grid: display order follows selected policy, 20 per page
     sortedLibraryRows.length > 0
@@ -1501,8 +1212,11 @@ export const Library = ({
                   onDelete: handleDeleteItemRequest,
                   onUpload: handleUpload,
                   uploadStatus: uploadStatuses[libraryItemKey(video)] ?? null,
-                  readOnly: false,
-                  onSetTags: (v, tags) => setRecordTagsAndReapplyShares(v.id, v.idbStore, tags),
+                  readOnly: !isEditor,
+                  onSetTags: (v, tags) => setRecordTags(v.id, v.idbStore, tags),
+                  onSetSharedWith: (v, emails) => handleSetSharedWith(v, v.idbStore, emails),
+                  canShare: canEditShareForRecord(video),
+                  shareableEmails: shareableUserEmails,
                   onRename: (v, name) => renameItem(v.id, v.idbStore, name),
                   availableTags,
                 });
@@ -1517,31 +1231,16 @@ export const Library = ({
                   onDelete: handleDeleteChannelRequest,
                   onUpload: handleChannelUpload,
                   uploadStatus: uploadStatuses[channelUploadKey(ch)] ?? null,
-                  readOnly: false,
-                  onSetTags: (c, tags) => setRecordTagsAndReapplyShares(c.id, 'channels', tags),
+                  readOnly: !isEditor,
+                  onSetTags: (c, tags) => setRecordTags(c.id, 'channels', tags),
+                  onSetSharedWith: (c, emails) => handleSetSharedWith(c, 'channels', emails),
+                  canShare: canEditShareForRecord(ch),
+                  shareableEmails: shareableUserEmails,
                   onRename: (c, name) => renameItem(c.id, 'channels', name),
                   availableTags,
                 });
               }
-              const s = row.data;
-              return React.createElement(DataTile, {
-                key: `share-${s.id}`,
-                tileType: 'share',
-                share: s,
-                onSelect: (rec) => {
-                  if (rec.role === 'receiver') {
-                    handleOpenReceiverShare(rec);
-                  } else {
-                    setActiveShare(rec);
-                  }
-                },
-                onDelete: (rec) => {
-                  deleteShare(rec.id);
-                  if (activeShare?.id === rec.id) setActiveShare(null);
-                  if (activeShareFilter?.id === rec.id) setActiveShareFilter(null);
-                },
-                readOnly: false,
-              });
+              return null;
             })
           ),
           libraryTotalPages > 1 &&
@@ -1613,17 +1312,15 @@ export const Library = ({
             React.createElement(
               'p',
               { className: 'text-gray-500 mt-2 max-w-sm mx-auto' },
-              activeShareFilter
-                ? 'None of the shared items have been synced locally yet. Try syncing first.'
-                : query ? `No items matching "${searchQuery.trim()}"` : 'No items match the selected filters'
+              query ? `No items matching "${searchQuery.trim()}"` : 'No items match the selected filters'
             ),
             React.createElement(
               'button',
               {
-                onClick: () => { setSearchQuery(''); setActiveFilters(new Set()); setActiveShareFilter(null); },
+                onClick: () => { setSearchQuery(''); setActiveFilters(new Set()); },
                 className: 'mt-4 text-indigo-400 hover:text-indigo-300 text-sm font-medium transition-colors',
               },
-              activeShareFilter ? 'Clear share filter' : 'Clear search'
+              'Clear search'
             )
           )
         : totalGridCount === 0
@@ -1641,7 +1338,7 @@ export const Library = ({
                 { className: 'text-gray-500 mt-2 max-w-sm mx-auto' },
                 'Click "Add File" to import an EPUB, PDF, TXT, or Markdown file, or "Add YouTube" to save a video link.'
               ),
-              React.createElement(
+              isEditor && React.createElement(
                 'button',
                 {
                   onClick: () => fileInputRef.current?.click(),
@@ -1670,21 +1367,6 @@ export const Library = ({
       onSave:  onAddChannel,
       onClose: () => setIsChannelOpen(false),
     }),
-
-    activeShare &&
-      React.createElement(SharesEditorModal, {
-        key: activeShare.id,
-        share: activeShare,
-        readOnly: activeShare.role === 'receiver',
-        availableTags,
-        pickableWithDriveId,
-        allItems: items,
-        allChannels: channels,
-        onClose: () => setActiveShare(null),
-        onSaveOwner: handleOwnerSaveShare,
-        onRefreshReceiver: activeShare.role === 'receiver' ? handleRefreshReceiverShare : undefined,
-      }),
-
 
     // System settings modal
     isSystemSettingsOpen && React.createElement(
