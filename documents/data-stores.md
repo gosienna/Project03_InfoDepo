@@ -53,6 +53,7 @@ Additional fields:
   id,                   // auto-increment integer
   name,                 // string
   layout,               // { [key]: { x, y } } — positions of items on the canvas
+  connections,          // optional [{ id, fromKey, toKey, route: { mode, points[] } }]
   tags,                 // string[]
   driveId,              // string | undefined — Drive file ID of backup .desk.json
   modifiedTime,         // string | undefined

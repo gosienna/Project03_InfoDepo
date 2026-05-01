@@ -9,11 +9,21 @@ const COLOR_SWATCHES = [
   '#000000', // black
 ];
 
-export const ImageEditor = ({ src, filename, onSave, onClose }) => {
+export const ImageEditor = ({
+  src,
+  filename,
+  onSave,
+  onClose,
+  isBlank = false,
+  initialWidth = 800,
+  initialHeight = 600,
+  backgroundColor = '#ffffff',
+}) => {
   const canvasRef      = useRef(null);
   const imgRef         = useRef(null);
   const isDrawingRef   = useRef(false);
   const lastPosRef     = useRef({ x: 0, y: 0 });
+  const activePointerIdRef = useRef(null);
 
   const [tool,       setTool]       = useState('pen');   // 'pen' | 'text'
   const [color,      setColor]      = useState('#ef4444');
@@ -24,8 +34,37 @@ export const ImageEditor = ({ src, filename, onSave, onClose }) => {
   const [isSaving,   setIsSaving]   = useState(false);
   const [loaded,     setLoaded]     = useState(false);
 
+  const initBlankCanvas = useCallback((w, h, keepCurrent = false) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const safeW = Math.max(64, Math.min(4096, Number(w) || 800));
+    const safeH = Math.max(64, Math.min(4096, Number(h) || 600));
+    const prev = keepCurrent ? canvas.toDataURL('image/png') : null;
+    canvas.width = safeW;
+    canvas.height = safeH;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = backgroundColor || '#ffffff';
+    ctx.fillRect(0, 0, safeW, safeH);
+    if (prev) {
+      const previous = new window.Image();
+      previous.onload = () => {
+        ctx.drawImage(previous, 0, 0, safeW, safeH);
+        setUndoStack([ctx.getImageData(0, 0, safeW, safeH)]);
+        setLoaded(true);
+      };
+      previous.src = prev;
+    } else {
+      setUndoStack([ctx.getImageData(0, 0, safeW, safeH)]);
+      setLoaded(true);
+    }
+  }, [backgroundColor]);
+
   // Load image onto canvas on mount
   useEffect(() => {
+    if (isBlank) {
+      initBlankCanvas(initialWidth, initialHeight, false);
+      return;
+    }
     const img = new window.Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
@@ -43,9 +82,9 @@ export const ImageEditor = ({ src, filename, onSave, onClose }) => {
     };
     img.onerror = () => setLoaded(true); // show blank canvas on error
     img.src = src;
-  }, [src]);
+  }, [src, isBlank, initialWidth, initialHeight, initBlankCanvas]);
 
-  // Get canvas-relative position from mouse/touch event
+  // Get canvas-relative position from pointer event
   const getCanvasPos = useCallback((e) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
@@ -66,9 +105,13 @@ export const ImageEditor = ({ src, filename, onSave, onClose }) => {
     setUndoStack(prev => [...prev, ctx.getImageData(0, 0, canvas.width, canvas.height)]);
   }, []);
 
-  // ── Pen tool handlers ──────────────────────────────────────────
-  const handleMouseDown = useCallback((e) => {
-    if (e.button !== 0) return;
+  // ── Pointer handlers (mouse/touch/stylus) ─────────────────────
+  const handlePointerDown = useCallback((e) => {
+    // Only left button for mouse; allow touch/stylus.
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    activePointerIdRef.current = e.pointerId;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     const pos = getCanvasPos(e);
 
     if (tool === 'text') {
@@ -90,8 +133,10 @@ export const ImageEditor = ({ src, filename, onSave, onClose }) => {
     ctx.lineJoin    = 'round';
   }, [tool, color, lineWidth, getCanvasPos, pushUndo]);
 
-  const handleMouseMove = useCallback((e) => {
+  const handlePointerMove = useCallback((e) => {
+    if (activePointerIdRef.current !== null && e.pointerId !== activePointerIdRef.current) return;
     if (!isDrawingRef.current) return;
+    e.preventDefault();
     const pos = getCanvasPos(e);
     const ctx = canvasRef.current?.getContext('2d');
     if (!ctx) return;
@@ -100,8 +145,11 @@ export const ImageEditor = ({ src, filename, onSave, onClose }) => {
     lastPosRef.current = pos;
   }, [getCanvasPos]);
 
-  const handleMouseUp = useCallback(() => {
+  const handlePointerUp = useCallback((e) => {
+    if (activePointerIdRef.current !== null && e.pointerId !== activePointerIdRef.current) return;
     isDrawingRef.current = false;
+    activePointerIdRef.current = null;
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
   }, []);
 
   // ── Text tool: stamp text on canvas ────────────────────────────
@@ -112,9 +160,6 @@ export const ImageEditor = ({ src, filename, onSave, onClose }) => {
     const ctx    = canvas.getContext('2d');
     ctx.font         = `bold ${fontSize}px sans-serif`;
     ctx.fillStyle    = color;
-    ctx.strokeStyle  = 'rgba(0,0,0,0.6)';
-    ctx.lineWidth    = 3;
-    ctx.strokeText(inputState.value, inputState.canvasX, inputState.canvasY);
     ctx.fillText(inputState.value, inputState.canvasX, inputState.canvasY);
     setInputState(null);
   }, [inputState, color, fontSize, pushUndo]);
@@ -185,7 +230,7 @@ export const ImageEditor = ({ src, filename, onSave, onClose }) => {
     // Backdrop
     'div',
     {
-      className: 'fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm',
+      className: 'fixed inset-0 z-[1000] flex items-start justify-center bg-black/70 backdrop-blur-sm p-4 pt-20',
       onMouseDown: (e) => { if (e.target === e.currentTarget) onClose(); },
     },
 
@@ -194,7 +239,7 @@ export const ImageEditor = ({ src, filename, onSave, onClose }) => {
       'div',
       {
         className: 'flex flex-col bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden',
-        style: { maxWidth: '92vw', maxHeight: '92vh', width: 'max-content' },
+        style: { maxWidth: '92vw', maxHeight: 'calc(100vh - 6rem)', width: 'max-content' },
         onMouseDown: (e) => e.stopPropagation(),
       },
 
@@ -353,11 +398,13 @@ export const ImageEditor = ({ src, filename, onSave, onClose }) => {
             display: loaded ? 'block' : 'none',
             cursor: tool === 'pen' ? 'crosshair' : 'text',
             maxWidth: '100%',
+            touchAction: 'none',
           },
-          onMouseDown:  handleMouseDown,
-          onMouseMove:  handleMouseMove,
-          onMouseUp:    handleMouseUp,
-          onMouseLeave: handleMouseUp,
+          onPointerDown: handlePointerDown,
+          onPointerMove: handlePointerMove,
+          onPointerUp: handlePointerUp,
+          onPointerCancel: handlePointerUp,
+          onPointerLeave: handlePointerUp,
         }),
 
         // Floating text input overlay

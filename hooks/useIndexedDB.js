@@ -1002,7 +1002,7 @@ export const useIndexedDB = () => {
       let tx;
       try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
       const now = new Date();
-      const record = { name, layout: {}, driveId: '', modifiedTime: now, localModifiedAt: now, tags: [], sharedWith: [], ownerEmail: '' };
+      const record = { name, layout: {}, connections: [], driveId: '', modifiedTime: now, localModifiedAt: now, tags: [], sharedWith: [], ownerEmail: '' };
       const req = tx.objectStore(DESKS_STORE).add(record);
       req.onsuccess = (e) => { loadDesks('addDesk'); resolve(e.target.result); };
       req.onerror = (e) => reject(e.target.error);
@@ -1031,6 +1031,28 @@ export const useIndexedDB = () => {
         if (!existing) { reject(new Error('Desk not found')); return; }
         const putReq = os.put({ ...existing, layout, localModifiedAt: new Date() });
         putReq.onsuccess = () => { loadDesks('setDeskLayout'); resolve(); };
+        putReq.onerror = () => reject(putReq.error);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }, [db, loadDesks]);
+
+  const setDeskConnections = useCallback((id, connections) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
+      const os = tx.objectStore(DESKS_STORE);
+      const req = os.get(id);
+      req.onsuccess = () => {
+        const existing = req.result;
+        if (!existing) { reject(new Error('Desk not found')); return; }
+        const putReq = os.put({
+          ...existing,
+          connections: Array.isArray(connections) ? connections : [],
+          localModifiedAt: new Date(),
+        });
+        putReq.onsuccess = () => { loadDesks('setDeskConnections'); resolve(); };
         putReq.onerror = () => reject(putReq.error);
       };
       req.onerror = () => reject(req.error);
@@ -1477,7 +1499,7 @@ export const useIndexedDB = () => {
     getBookByDriveId, getBookByName, upsertDriveBook,
     deleteItemByDriveId, deleteChannelByDriveId,
     getLocalRecordsByOwnerEmail,
-    addDesk, deleteDesk, setDeskLayout,
+    addDesk, deleteDesk, setDeskLayout, setDeskConnections,
     getDeskByDriveId, upsertDriveDesk,
     setRecordTags,
     setItemSharedWith,

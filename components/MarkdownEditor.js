@@ -359,6 +359,18 @@ function setImageWidthInMarkdown(markdown, filename, widthPx) {
   });
 }
 
+function createCanvasFilename(existing = {}) {
+  const taken = new Set(Object.keys(existing || {}));
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  let idx = 1;
+  let candidate = `canvas-${stamp}.png`;
+  while (taken.has(candidate)) {
+    candidate = `canvas-${stamp}-${idx}.png`;
+    idx += 1;
+  }
+  return candidate;
+}
+
 // Slash command definitions
 const SLASH_COMMANDS = [
   { id: 'h1',       label: 'Title',          hint: '# Heading',       insert: '# ',   blockOnly: true },
@@ -369,9 +381,7 @@ const SLASH_COMMANDS = [
   { id: 'ul-plus',  label: 'List — plus',     hint: '+ item',          insert: '+ ',   blockOnly: true, listMarker: '+'  },
   { id: 'ol',       label: 'Numbered list',   hint: '1. item',         insert: '1. ',  blockOnly: true },
   { id: 'image',    label: 'Image',          hint: 'full width',      insert: null,   imageSize: null  },
-  { id: 'image-sm', label: 'Image — Small',  hint: '300 px',          insert: null,   imageSize: 300   },
-  { id: 'image-md', label: 'Image — Medium', hint: '500 px',          insert: null,   imageSize: 500   },
-  { id: 'image-lg', label: 'Image — Large',  hint: '800 px',          insert: null,   imageSize: 800   },
+  { id: 'canvas',   label: 'Canvas',         hint: 'blank 800x600',   insert: null,   canvas: true     },
   { id: 'youtube',  label: 'YouTube embed',  hint: 'paste URL',       insert: '[Video Title](https://youtube.com/watch?v=)' },
   { id: 'goto',     label: 'Go to section',  hint: 'jump to heading', insert: null,   gotoSection: true },
 ];
@@ -388,6 +398,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   const [hoveredImg,  setHoveredImg]  = useState(null);
   const [resizingImg, setResizingImg] = useState(null);
   const [editingImg,  setEditingImg]  = useState(null);
+  const [canvasPrompt, setCanvasPrompt] = useState(null); // { filename, width, height }
   const [showToc,     setShowToc]     = useState(false);
   const [headingMenu, setHeadingMenu] = useState(null);
   const [displayName, setDisplayName] = useState(video.name);
@@ -567,6 +578,12 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     if (cmd.insert === null) {
       const newText = text.slice(0, start) + text.slice(end);
       setText(newText); setIsDirty(true);
+      if (cmd.canvas) {
+        const filename = createCanvasFilename(assetUrls);
+        setCanvasPrompt({ filename, width: 800, height: 600 });
+        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start; ta.focus(); pushHistory(newText, start); });
+        return;
+      }
       pendingImageSize.current = cmd.imageSize;
       requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start; ta.focus(); pushHistory(newText, start); });
       imageInputRef.current?.click();
@@ -828,6 +845,13 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
 
     if (cmd.insert === null && !cmd.gotoSection) {
       placeCursor(node, offset);
+      if (cmd.canvas) {
+        const filename = createCanvasFilename(assetUrls);
+        setCanvasPrompt({ filename, width: 800, height: 600 });
+        htmlPristine.current = false;
+        setIsDirty(true);
+        return;
+      }
       pendingImageSize.current = cmd.imageSize;
       imageInputRef.current?.click();
       htmlPristine.current = false;
@@ -1639,10 +1663,98 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       'Edit'
     ),
 
+    // ── Canvas size prompt ────────────────────────────────────────────
+    canvasPrompt && React.createElement(
+      'div',
+      {
+        className: 'fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4',
+        onMouseDown: () => setCanvasPrompt(null),
+      },
+      React.createElement(
+        'div',
+        {
+          className: 'w-full max-w-sm bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-4',
+          onMouseDown: (e) => e.stopPropagation(),
+        },
+        React.createElement('h3', { className: 'text-sm font-semibold text-gray-100 mb-3' }, 'Create canvas'),
+        React.createElement('p', { className: 'text-xs text-gray-400 mb-4' }, 'Set width and height before opening the editor.'),
+        React.createElement(
+          'div',
+          { className: 'grid grid-cols-2 gap-3 mb-4' },
+          React.createElement(
+            'label',
+            { className: 'text-xs text-gray-300 flex flex-col gap-1' },
+            'Width',
+            React.createElement('input', {
+              type: 'number',
+              min: 64,
+              max: 4096,
+              value: canvasPrompt.width,
+              onChange: (e) => {
+                const next = Math.max(64, Math.min(4096, Number(e.target.value) || 64));
+                setCanvasPrompt(prev => prev ? { ...prev, width: next } : prev);
+              },
+              className: 'px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-gray-100 outline-none focus:border-indigo-500',
+            })
+          ),
+          React.createElement(
+            'label',
+            { className: 'text-xs text-gray-300 flex flex-col gap-1' },
+            'Height',
+            React.createElement('input', {
+              type: 'number',
+              min: 64,
+              max: 4096,
+              value: canvasPrompt.height,
+              onChange: (e) => {
+                const next = Math.max(64, Math.min(4096, Number(e.target.value) || 64));
+                setCanvasPrompt(prev => prev ? { ...prev, height: next } : prev);
+              },
+              className: 'px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-gray-100 outline-none focus:border-indigo-500',
+            })
+          )
+        ),
+        React.createElement(
+          'div',
+          { className: 'flex justify-end gap-2' },
+          React.createElement(
+            'button',
+            {
+              onClick: () => setCanvasPrompt(null),
+              className: 'px-3 py-1.5 rounded-lg text-sm bg-gray-700 hover:bg-gray-600 text-gray-200',
+            },
+            'Cancel'
+          ),
+          React.createElement(
+            'button',
+            {
+              onClick: () => {
+                setEditingImg({
+                  src: '',
+                  filename: canvasPrompt.filename,
+                  mode: 'create-canvas',
+                  initialWidth: canvasPrompt.width,
+                  initialHeight: canvasPrompt.height,
+                  backgroundColor: '#ffffff',
+                });
+                setCanvasPrompt(null);
+              },
+              className: 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white',
+            },
+            'Open editor'
+          )
+        )
+      )
+    ),
+
     // ── ImageEditor modal ────────────────────────────────────────────
     editingImg && React.createElement(ImageEditor, {
       src:      editingImg.src,
       filename: editingImg.filename,
+      isBlank:  editingImg.mode === 'create-canvas',
+      initialWidth: editingImg.initialWidth || 800,
+      initialHeight: editingImg.initialHeight || 600,
+      backgroundColor: editingImg.backgroundColor || '#ffffff',
       onSave:   async (blob, fname) => {
         try {
           await onAddImage(video.id, fname, blob, 'image/png');
@@ -1651,7 +1763,27 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
             if (prev[fname]) URL.revokeObjectURL(prev[fname]);
             return { ...prev, [fname]: newUrl };
           });
-          if (editMode === 'html' && contentEditableRef.current) {
+          if (editingImg.mode === 'create-canvas') {
+            if (editMode === 'html' && contentEditableRef.current) {
+              const img = document.createElement('img');
+              img.setAttribute('src', newUrl);
+              img.setAttribute('alt', fname);
+              img.dataset.imgFile = fname;
+              img.style.maxWidth = '100%';
+              img.style.borderRadius = '6px';
+              const wrapper = document.createElement('div');
+              wrapper.style.margin = '0';
+              wrapper.appendChild(img);
+              contentEditableRef.current.appendChild(wrapper);
+              htmlPristine.current = false;
+              setIsDirty(true);
+            } else {
+              const newText = textRef.current + `\n![${fname}](${fname})`;
+              setText(newText);
+              setIsDirty(true);
+              pushHistory(newText, newText.length);
+            }
+          } else if (editMode === 'html' && contentEditableRef.current) {
             const img = contentEditableRef.current.querySelector(`img[data-img-file="${CSS.escape(fname)}"]`);
             if (img) { img.src = newUrl; htmlPristine.current = false; setIsDirty(true); }
           }

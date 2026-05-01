@@ -36,7 +36,7 @@ const App = () => {
     getChannelByDriveId, upsertDriveChannel,
     getBookByDriveId, getBookByName, upsertDriveBook,
     deleteItemByDriveId, deleteChannelByDriveId, getLocalRecordsByOwnerEmail,
-    addDesk, deleteDesk, setDeskLayout,
+    addDesk, deleteDesk, setDeskLayout, setDeskConnections,
     getDeskByDriveId, upsertDriveDesk,
     setRecordTags,
     setItemSharedWith,
@@ -259,7 +259,7 @@ const App = () => {
 
   const handleAddDesk = async (name) => {
     const id = await addDesk(name);
-    const newDesk = { id, name, layout: {} };
+    const newDesk = { id, name, layout: {}, connections: [] };
     setCurrentDesk(newDesk);
     setMode('desk');
     setView('library');
@@ -535,6 +535,7 @@ const App = () => {
               onSelectChannel: handleSelectChannel,
               onSelectDesk: handleSelectDesk,
               onUpdateLayout: setDeskLayout,
+              onUpdateConnections: setDeskConnections,
               onRenameDesk: (id, name) => renameItem(id, 'desks', name),
               onSetTags: (rec, storeName, tags) => setRecordTags(rec.id, storeName, tags),
               onSetSharedWith: (rec, storeName, emails) => setItemSharedWith(rec.id, storeName, emails),
