@@ -11,7 +11,6 @@ const DEFAULT_ZOOM_MIN = 0.1;
 const DEFAULT_ZOOM_MAX = 5;
 const GRID_SIZE = 40;
 const CARD_H = 220;
-const LEFT_PANEL_W = 220;
 
 const snapToGrid = (v) => Math.round(v / GRID_SIZE) * GRID_SIZE;
 const snapPoint = (p) => ({ x: snapToGrid(p.x), y: snapToGrid(p.y) });
@@ -89,6 +88,21 @@ const closestAnchors = (fromPos, toPos) => {
 const pointsToPath = (points) => {
   if (!points || points.length < 2) return '';
   return `M ${points[0].x} ${points[0].y} ${points.slice(1).map((p) => `L ${p.x} ${p.y}`).join(' ')}`;
+};
+
+const connectionPointsFor = (conn, layout) => {
+  const fromPos = layout?.[conn.fromKey];
+  const toPos = layout?.[conn.toKey];
+  if (!fromPos || !toPos) return null;
+  const anchors = closestAnchors(fromPos, toPos);
+  if (!anchors) return null;
+  const start = snapPoint(anchors.from);
+  const end = snapPoint(anchors.to);
+  if (conn.route?.mode === 'manual') {
+    const mids = Array.isArray(conn.route.points) ? conn.route.points.map(snapPoint) : [];
+    return [start, ...mids, end];
+  }
+  return autoRoute(start, end);
 };
 
 // --- Dot grid background ---
@@ -618,10 +632,21 @@ export const Desk = ({
   // --- Pan ---
   const panningRef = useRef(null);
   const spaceRef = useRef(false);
-  const [leftPanelOpen, setLeftPanelOpen] = useState(false);
   const [connectMode, setConnectMode] = useState(false);
   const [connectStartKey, setConnectStartKey] = useState(null);
+  const [selectedItemKeys, setSelectedItemKeys] = useState([]);
+  const [selectedConnectionIds, setSelectedConnectionIds] = useState([]);
+  const [selectedNodeIds, setSelectedNodeIds] = useState([]);
+  const selectedNodeIdsRef = useRef([]);
+  const mouseRef = useRef({ x: 120, y: 120 });
+  const [slashMenu, setSlashMenu] = useState({ open: false, x: 120, y: 120 });
   const lineDragRef = useRef(null);
+  useEffect(() => {
+    selectedNodeIdsRef.current = selectedNodeIds;
+  }, [selectedNodeIds]);
+
+  const marqueeRef = useRef(null);
+  const [marqueeBox, setMarqueeBox] = useState(null);
 
   useEffect(() => {
     const down = (e) => {
@@ -639,9 +664,26 @@ export const Desk = ({
       const t = e.target;
       const tag = t?.tagName?.toLowerCase?.() || '';
       if (tag === 'input' || tag === 'textarea' || t?.isContentEditable) return;
+      const key = String(e.key || '').toLowerCase();
+      if (key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        const rect = viewportRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const x = Math.max(12, Math.min(mouseRef.current.x, rect.width - 232));
+        const y = Math.max(12, Math.min(mouseRef.current.y, rect.height - 160));
+        setSlashMenu({ open: true, x, y });
+        return;
+      }
+      if ((key === 'backspace' || key === 'delete') && selectedConnectionIds.length > 0) {
+        e.preventDefault();
+        const selectedSet = new Set(selectedConnectionIds);
+        commitConnections((connectionsRef.current || []).filter((c) => !selectedSet.has(c.id)));
+        setSelectedConnectionIds([]);
+        setSelectedNodeIds([]);
+        return;
+      }
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
-      const key = String(e.key || '').toLowerCase();
       if (key === 'z' && !e.shiftKey) {
         e.preventDefault();
         undoDesk();
@@ -654,9 +696,20 @@ export const Desk = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [readOnly, redoDesk, undoDesk]);
+  }, [commitConnections, readOnly, redoDesk, selectedConnectionIds, undoDesk]);
 
   const onViewportPointerDown = useCallback((e) => {
+    if (e.target === e.currentTarget && e.button === 0 && !spaceRef.current) {
+      const rect = viewportRef.current?.getBoundingClientRect();
+      const startX = e.clientX - (rect?.left || 0);
+      const startY = e.clientY - (rect?.top || 0);
+      marqueeRef.current = { startX, startY, currentX: startX, currentY: startY, moved: false };
+      setMarqueeBox({ x: startX, y: startY, w: 0, h: 0 });
+      setSelectedConnectionIds([]);
+      setSelectedItemKeys([]);
+      setSelectedNodeIds([]);
+      setSlashMenu((prev) => prev.open ? { ...prev, open: false } : prev);
+    }
     if (e.button === 1 || (e.button === 0 && spaceRef.current)) {
       e.preventDefault();
       panningRef.current = { startX: e.clientX, startY: e.clientY, originX: panRef.current.x, originY: panRef.current.y };
@@ -665,10 +718,21 @@ export const Desk = ({
   }, []);
 
   const onViewportPointerMove = useCallback((e) => {
-    if (!readOnly && viewportRef.current) {
+    if (viewportRef.current) {
       const rect = viewportRef.current.getBoundingClientRect();
       const localX = e.clientX - rect.left;
-      setLeftPanelOpen(localX <= 14 || localX <= LEFT_PANEL_W + 14);
+      const localY = e.clientY - rect.top;
+      mouseRef.current = { x: localX, y: localY };
+      if (marqueeRef.current) {
+        marqueeRef.current.currentX = localX;
+        marqueeRef.current.currentY = localY;
+        marqueeRef.current.moved = true;
+        const x = Math.min(marqueeRef.current.startX, localX);
+        const y = Math.min(marqueeRef.current.startY, localY);
+        const w = Math.abs(localX - marqueeRef.current.startX);
+        const h = Math.abs(localY - marqueeRef.current.startY);
+        setMarqueeBox({ x, y, w, h });
+      }
     }
     if (!panningRef.current) return;
     panRef.current = {
@@ -676,9 +740,67 @@ export const Desk = ({
       y: panningRef.current.originY + (e.clientY - panningRef.current.startY),
     };
     rerender();
-  }, [readOnly, rerender]);
+  }, [rerender]);
 
-  const onViewportPointerUp = useCallback(() => { panningRef.current = null; }, []);
+  const onViewportPointerUp = useCallback(() => {
+    panningRef.current = null;
+    if (!marqueeRef.current || !viewportRef.current) return;
+    const m = marqueeRef.current;
+    marqueeRef.current = null;
+    const rect = viewportRef.current.getBoundingClientRect();
+    const x1 = Math.min(m.startX, m.currentX);
+    const y1 = Math.min(m.startY, m.currentY);
+    const x2 = Math.max(m.startX, m.currentX);
+    const y2 = Math.max(m.startY, m.currentY);
+    setMarqueeBox(null);
+    if (!m.moved || (x2 - x1 < 4 && y2 - y1 < 4)) return;
+    const worldA = { x: (x1 - panRef.current.x) / zoomRef.current, y: (y1 - panRef.current.y) / zoomRef.current };
+    const worldB = { x: (x2 - panRef.current.x) / zoomRef.current, y: (y2 - panRef.current.y) / zoomRef.current };
+    const sx = Math.min(worldA.x, worldB.x);
+    const sy = Math.min(worldA.y, worldB.y);
+    const ex = Math.max(worldA.x, worldB.x);
+    const ey = Math.max(worldA.y, worldB.y);
+
+    const itemKeys = Object.entries(layoutRef.current || {})
+      .filter(([, pos]) => {
+        const bx1 = pos.x;
+        const by1 = pos.y;
+        const bx2 = pos.x + CARD_W;
+        const by2 = pos.y + CARD_H;
+        return bx1 <= ex && bx2 >= sx && by1 <= ey && by2 >= sy;
+      })
+      .map(([key]) => key);
+    setSelectedItemKeys(itemKeys);
+
+    const connIds = (connectionsRef.current || [])
+      .map((conn) => ({ conn, points: connectionPointsFor(conn, layoutRef.current || {}) }))
+      .filter((row) => row.points && row.points.length >= 2)
+      .filter(({ points }) => {
+        const xs = points.map((p) => p.x);
+        const ys = points.map((p) => p.y);
+        const bx1 = Math.min(...xs);
+        const by1 = Math.min(...ys);
+        const bx2 = Math.max(...xs);
+        const by2 = Math.max(...ys);
+        return bx1 <= ex && bx2 >= sx && by1 <= ey && by2 >= sy;
+      })
+      .map(({ conn }) => conn.id);
+    setSelectedConnectionIds(connIds);
+    const nodeIds = [];
+    (connectionsRef.current || []).forEach((conn) => {
+      const pts = connectionPointsFor(conn, layoutRef.current || {});
+      if (!pts || pts.length < 3) return;
+      const mids = conn.route?.mode === 'manual'
+        ? (Array.isArray(conn.route?.points) ? conn.route.points : [])
+        : pts.slice(1, -1);
+      mids.forEach((p, idx) => {
+        if (p.x >= sx && p.x <= ex && p.y >= sy && p.y <= ey) {
+          nodeIds.push(`${conn.id}:${idx}`);
+        }
+      });
+    });
+    setSelectedNodeIds(nodeIds);
+  }, []);
 
   // --- Zoom ---
   const onWheel = useCallback((e) => {
@@ -719,26 +841,31 @@ export const Desk = ({
   const onHandlePointerDown = useCallback((e, key) => {
     e.stopPropagation();
     const world = pointerToWorld(e);
-    const pos = layoutRef.current[key] || { x: 0, y: 0 };
-    itemDragRef.current = { key, startWorldX: world.x, startWorldY: world.y, startItemX: pos.x, startItemY: pos.y };
+    const selected = selectedItemKeys.includes(key) ? selectedItemKeys : [key];
+    const startPositions = {};
+    selected.forEach((k) => { startPositions[k] = layoutRef.current[k] || { x: 0, y: 0 }; });
+    itemDragRef.current = { keys: selected, startWorldX: world.x, startWorldY: world.y, startPositions };
+    setSelectedItemKeys(selected);
     e.currentTarget.setPointerCapture(e.pointerId);
-  }, [pointerToWorld]);
+  }, [pointerToWorld, selectedItemKeys]);
 
   const onHandlePointerMove = useCallback((e, key) => {
     const drag = itemDragRef.current;
-    if (!drag || drag.key !== key) return;
+    if (!drag || !drag.keys.includes(key)) return;
     const world = pointerToWorld(e);
-    const rawX = drag.startItemX + world.x - drag.startWorldX;
-    const rawY = drag.startItemY + world.y - drag.startWorldY;
-    layoutRef.current = {
-      ...layoutRef.current,
-      [key]: { x: snapToGrid(rawX), y: snapToGrid(rawY) },
-    };
+    const dx = world.x - drag.startWorldX;
+    const dy = world.y - drag.startWorldY;
+    const nextLayout = { ...layoutRef.current };
+    drag.keys.forEach((k) => {
+      const base = drag.startPositions[k] || { x: 0, y: 0 };
+      nextLayout[k] = { x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
+    });
+    layoutRef.current = nextLayout;
     rerender();
   }, [pointerToWorld, rerender]);
 
   const onHandlePointerUp = useCallback((e, key) => {
-    if (!itemDragRef.current || itemDragRef.current.key !== key) return;
+    if (!itemDragRef.current || !itemDragRef.current.keys.includes(key)) return;
     commitLayout({ ...layoutRef.current });
     itemDragRef.current = null;
   }, [commitLayout]);
@@ -794,19 +921,7 @@ export const Desk = ({
   }, [items, channels]);
 
   const routePointsFor = useCallback((conn) => {
-    const layout = layoutRef.current || {};
-    const fromPos = layout[conn.fromKey];
-    const toPos = layout[conn.toKey];
-    if (!fromPos || !toPos) return null;
-    const anchors = closestAnchors(fromPos, toPos);
-    if (!anchors) return null;
-    const start = snapPoint(anchors.from);
-    const end = snapPoint(anchors.to);
-    if (conn.route?.mode === 'manual') {
-      const mids = Array.isArray(conn.route.points) ? conn.route.points.map(snapPoint) : [];
-      return [start, ...mids, end];
-    }
-    return autoRoute(start, end);
+    return connectionPointsFor(conn, layoutRef.current || {});
   }, []);
 
   const visibleConnections = useMemo(() => {
@@ -843,6 +958,21 @@ export const Desk = ({
   const beginDragLineHandle = useCallback((e, connId, handleIndex, initialPoint, kind = 'mid', edge = null) => {
     e.stopPropagation();
     const world = pointerToWorld(e);
+    const key = `${connId}:${handleIndex}`;
+    const currentSelected = selectedNodeIdsRef.current || [];
+    const activeNodeIds = currentSelected.includes(key) ? currentSelected : [key];
+    const activeHandles = activeNodeIds.map((id) => {
+      const [cid, idxStr] = id.split(':');
+      const idx = Number(idxStr);
+      const conn = (connectionsRef.current || []).find((c) => c.id === cid);
+      if (!conn || Number.isNaN(idx)) return null;
+      const pts = conn.route?.mode === 'manual'
+        ? (Array.isArray(conn.route?.points) ? conn.route.points : [])
+        : ((routePointsFor(conn) || []).slice(1, -1));
+      if (!pts[idx]) return null;
+      return { connId: cid, handleIndex: idx, initialPoint: { x: pts[idx].x, y: pts[idx].y } };
+    }).filter(Boolean);
+    setSelectedNodeIds(activeNodeIds);
     lineDragRef.current = {
       connId,
       handleIndex,
@@ -850,34 +980,30 @@ export const Desk = ({
       edge,
       startWorldX: world.x,
       startWorldY: world.y,
+      startSnap: snapPoint({ x: world.x, y: world.y }),
       initialPoint: initialPoint ? { x: initialPoint.x, y: initialPoint.y } : null,
+      activeHandles,
     };
     e.currentTarget.setPointerCapture(e.pointerId);
-  }, [pointerToWorld]);
+  }, [pointerToWorld, routePointsFor]);
 
   const moveDragLineHandle = useCallback((e) => {
     const drag = lineDragRef.current;
     if (!drag) return;
     const world = pointerToWorld(e);
     const snappedMouse = snapPoint({ x: world.x, y: world.y });
+    const dx = snappedMouse.x - drag.startSnap.x;
+    const dy = snappedMouse.y - drag.startSnap.y;
     const next = (connectionsRef.current || []).map((conn) => {
-      if (conn.id !== drag.connId) return conn;
       const points = conn.route?.mode === 'manual'
         ? (Array.isArray(conn.route?.points) ? [...conn.route.points] : [])
         : ((routePointsFor(conn) || []).slice(1, -1));
-
-      if (drag.kind === 'endpoint') {
-        if (!points.length) return conn;
-        const idx = drag.handleIndex === 0 ? 0 : points.length - 1;
-        if (!points[idx]) return conn;
-        const isVerticalEdge = drag.edge === 'left' || drag.edge === 'right';
-        points[idx] = isVerticalEdge
-          ? snapPoint({ x: snappedMouse.x, y: drag.initialPoint?.y ?? points[idx].y })
-          : snapPoint({ x: drag.initialPoint?.x ?? points[idx].x, y: snappedMouse.y });
-      } else {
-        if (!points[drag.handleIndex]) return conn;
-        points[drag.handleIndex] = snappedMouse;
-      }
+      const related = (drag.activeHandles || []).filter((h) => h.connId === conn.id);
+      if (!related.length) return conn;
+      related.forEach((h) => {
+        if (!points[h.handleIndex]) return;
+        points[h.handleIndex] = snapPoint({ x: h.initialPoint.x + dx, y: h.initialPoint.y + dy });
+      });
       return { ...conn, route: { mode: 'manual', points } };
     });
     connectionsRef.current = next;
@@ -906,6 +1032,19 @@ export const Desk = ({
     },
     // Dot grid background
     React.createElement(DotGrid, { panX, panY, zoom }),
+    marqueeBox && React.createElement('div', {
+      style: {
+        position: 'absolute',
+        left: marqueeBox.x,
+        top: marqueeBox.y,
+        width: marqueeBox.w,
+        height: marqueeBox.h,
+        border: '1px dashed #a78bfa',
+        background: 'rgba(99,102,241,0.12)',
+        pointerEvents: 'none',
+        zIndex: 34,
+      },
+    }),
     // Canvas container — transform applied here
     React.createElement(
       'div',
@@ -926,22 +1065,15 @@ export const Desk = ({
             { key: conn.id },
             React.createElement('path', {
               d: pointsToPath(points),
-              stroke: '#60a5fa',
-              strokeWidth: 2,
+              stroke: selectedConnectionIds.includes(conn.id) ? '#c4b5fd' : '#60a5fa',
+              strokeWidth: selectedConnectionIds.includes(conn.id) ? 3 : 2,
               fill: 'none',
               pointerEvents: connectMode ? 'stroke' : 'none',
               style: { pointerEvents: connectMode ? 'stroke' : 'none' },
               onPointerDown: (e) => {
                 if (readOnly || !connectMode) return;
                 e.stopPropagation();
-                const world = pointerToWorld(e);
-                const next = (connectionsRef.current || []).map((c) => {
-                  if (c.id !== conn.id) return c;
-                  const mids = Array.isArray(c.route?.points) ? [...c.route.points] : [];
-                  mids.push(snapPoint({ x: world.x, y: world.y }));
-                  return { ...c, route: { mode: 'manual', points: mids } };
-                });
-                commitConnections(next);
+                setSelectedConnectionIds([conn.id]);
               },
             }),
             !readOnly && connectMode && React.createElement('path', {
@@ -950,6 +1082,10 @@ export const Desk = ({
               strokeWidth: 16,
               fill: 'none',
               pointerEvents: 'stroke',
+              onPointerDown: (e) => {
+                e.stopPropagation();
+                setSelectedConnectionIds([conn.id]);
+              },
             }),
             !readOnly && connectMode && (conn.route?.mode === 'manual'
               ? (Array.isArray(conn.route?.points) ? conn.route.points : [])
@@ -960,33 +1096,23 @@ export const Desk = ({
                 cx: p.x,
                 cy: p.y,
                 r: 6,
-                fill: '#111827',
-                stroke: '#93c5fd',
-                strokeWidth: 2,
+                fill: selectedNodeIds.includes(`${conn.id}:${idx}`) ? '#4c1d95' : '#111827',
+                stroke: selectedNodeIds.includes(`${conn.id}:${idx}`) ? '#ddd6fe' : '#93c5fd',
+                strokeWidth: selectedNodeIds.includes(`${conn.id}:${idx}`) ? 2.6 : 2,
                 style: { cursor: 'grab', pointerEvents: 'all' },
-                onPointerDown: (e) => beginDragLineHandle(e, conn.id, idx, p),
+                onPointerDown: (e) => {
+                  setSelectedConnectionIds([conn.id]);
+                  const nodeId = `${conn.id}:${idx}`;
+                  const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+                  if (additive) {
+                    setSelectedNodeIds((prev) => prev.includes(nodeId) ? prev.filter((id) => id !== nodeId) : [...prev, nodeId]);
+                  }
+                  beginDragLineHandle(e, conn.id, idx, p);
+                },
                 onPointerMove: moveDragLineHandle,
                 onPointerUp: endDragLineHandle,
               })
-            ),
-            !readOnly && connectMode && React.createElement('circle', {
-              cx: points[0].x,
-              cy: points[0].y,
-              r: 5.5,
-              fill: '#1e293b',
-              stroke: '#60a5fa',
-              strokeWidth: 2,
-              style: { pointerEvents: 'none' },
-            }),
-            !readOnly && connectMode && React.createElement('circle', {
-              cx: points[points.length - 1].x,
-              cy: points[points.length - 1].y,
-              r: 5.5,
-              fill: '#1e293b',
-              stroke: '#60a5fa',
-              strokeWidth: 2,
-              style: { pointerEvents: 'none' },
-            })
+            )
           )
         )
       ),
@@ -995,8 +1121,20 @@ export const Desk = ({
           'div',
           {
             key,
-            style: { position: 'absolute', left: pos.x, top: pos.y, width: CARD_W, userSelect: 'none' },
+            style: {
+              position: 'absolute',
+              left: pos.x,
+              top: pos.y,
+              width: CARD_W,
+              userSelect: 'none',
+              outline: selectedItemKeys.includes(key) ? '2px solid #c4b5fd' : 'none',
+              outlineOffset: 2,
+              borderRadius: 10,
+            },
             onClick: (e) => {
+              setSelectedConnectionIds([]);
+              setSelectedNodeIds([]);
+              setSlashMenu((prev) => prev.open ? { ...prev, open: false } : prev);
               if (!connectMode) return;
               e.preventDefault();
               e.stopPropagation();
@@ -1069,6 +1207,34 @@ export const Desk = ({
               : React.createElement(DeskTile, { desk: entry, onSelect: onSelectDesk, readOnly: true })
           )
         )
+      ),
+      !readOnly && connectMode && React.createElement(
+        'svg',
+        { style: { position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' } },
+        visibleConnections.map(({ conn, points }) =>
+          React.createElement(
+            'g',
+            { key: `edge-${conn.id}` },
+            React.createElement('circle', {
+              cx: points[0].x,
+              cy: points[0].y,
+              r: 5.5,
+              fill: '#1e293b',
+              stroke: '#60a5fa',
+              strokeWidth: 2,
+              style: { pointerEvents: 'none' },
+            }),
+            React.createElement('circle', {
+              cx: points[points.length - 1].x,
+              cy: points[points.length - 1].y,
+              r: 5.5,
+              fill: '#1e293b',
+              stroke: '#60a5fa',
+              strokeWidth: 2,
+              style: { pointerEvents: 'none' },
+            })
+          )
+        )
       )
     ),
     // Top-center: desk title (always shown)
@@ -1109,25 +1275,23 @@ export const Desk = ({
         onAddFile: onOpenFile,
       })
     ),
-    // Left tools panel (hover-revealed)
-    !readOnly && React.createElement(
+    // Slash menu ("/" at mouse location)
+    !readOnly && slashMenu.open && React.createElement(
       'div',
       {
         style: {
           position: 'absolute',
-          top: 16,
-          left: leftPanelOpen ? 12 : -LEFT_PANEL_W + 8,
-          width: LEFT_PANEL_W,
+          top: slashMenu.y,
+          left: slashMenu.x,
+          width: 220,
           zIndex: 40,
-          transition: 'left 160ms ease',
           background: '#1f2937',
           border: '1px solid #374151',
           borderRadius: 10,
           padding: 10,
           boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
         },
-        onPointerEnter: () => setLeftPanelOpen(true),
-        onPointerLeave: () => setLeftPanelOpen(false),
+        onPointerDown: (e) => e.stopPropagation(),
       },
       React.createElement('p', { style: { color: '#9ca3af', fontSize: 11, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'Connections'),
       React.createElement(
@@ -1136,6 +1300,7 @@ export const Desk = ({
           onClick: () => {
             setConnectMode((v) => !v);
             setConnectStartKey(null);
+            setSlashMenu((prev) => ({ ...prev, open: false }));
           },
           style: {
             width: '100%',
@@ -1156,7 +1321,10 @@ export const Desk = ({
       connectMode && connectStartKey && React.createElement(
         'button',
         {
-          onClick: () => setConnectStartKey(null),
+          onClick: () => {
+            setConnectStartKey(null);
+            setSlashMenu((prev) => ({ ...prev, open: false }));
+          },
           style: {
             width: '100%',
             border: '1px solid #374151',
@@ -1174,7 +1342,10 @@ export const Desk = ({
       (connectionsRef.current || []).length > 0 && React.createElement(
         'button',
         {
-          onClick: () => commitConnections([]),
+          onClick: () => {
+            commitConnections([]);
+            setSlashMenu((prev) => ({ ...prev, open: false }));
+          },
           style: {
             width: '100%',
             border: '1px solid #7f1d1d',
@@ -1187,6 +1358,24 @@ export const Desk = ({
           },
         },
         'Clear All Lines'
+      ),
+      React.createElement(
+        'button',
+        {
+          onClick: () => setSlashMenu((prev) => ({ ...prev, open: false })),
+          style: {
+            width: '100%',
+            border: '1px solid #374151',
+            borderRadius: 8,
+            background: '#111827',
+            color: '#9ca3af',
+            padding: '6px 8px',
+            fontSize: 12,
+            cursor: 'pointer',
+            marginTop: 8,
+          },
+        },
+        'Close'
       )
     ),
     // Zoom indicator
