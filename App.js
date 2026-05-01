@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Header } from './components/Header.js';
 import { Library } from './components/Library.js';
 import { GoogleLoginGate } from './components/GoogleLoginGate.js';
@@ -17,6 +17,7 @@ import { DeleteContentModal } from './components/DeleteContentModal.js';
 import { getOwnerDriveAccessToken } from './utils/driveAccessToken.js';
 import { deleteDriveFilesForChannel } from './utils/deleteLibraryContentOnDrive.js';
 import { fetchUserConfig, resolveUserType } from './utils/userConfig.js';
+import { listAllUserEmails } from './utils/userConfig.js';
 import { clearAllStoredAccessTokens } from './utils/driveOAuthStorage.js';
 import { fetchGoogleUserEmail } from './utils/googleUser.js';
 import { fetchNewChannelVideos } from './utils/youtubeApi.js';
@@ -27,6 +28,7 @@ import { NewChannelModal } from './components/NewChannelModal.js';
 const App = () => {
   const {
     items, channels, desks, addItem, updateItem, deleteItem, clearAll, isInitialized,
+    setNoteCoverImage,
     addImage, getImagesForNote, getAllImages,
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
     setItemDriveId, setNoteFolderData,
@@ -240,6 +242,21 @@ const App = () => {
     touchItemVisit(desk.id, 'desks');
   };
 
+  const isEditor = userType === 'master' || userType === 'editor';
+  const normalizedUserEmail = String(googleUserEmail || '').trim().toLowerCase();
+  const shareableUserEmails = useMemo(() => {
+    const all = listAllUserEmails(userConfig).map((email) => String(email || '').trim().toLowerCase()).filter(Boolean);
+    if (!all.length) return [];
+    return all.filter((email) => email !== normalizedUserEmail);
+  }, [userConfig, normalizedUserEmail]);
+
+  const canEditShareForRecord = useCallback((record) => {
+    if (!isEditor || !record) return false;
+    const owner = String(record.ownerEmail || '').trim().toLowerCase();
+    if (!owner) return true;
+    return owner === normalizedUserEmail;
+  }, [isEditor, normalizedUserEmail]);
+
   const handleAddDesk = async (name) => {
     const id = await addDesk(name);
     const newDesk = { id, name, layout: {} };
@@ -446,6 +463,7 @@ const App = () => {
           onAddDesk: handleAddDesk,
           onDeleteDesk: deleteDesk,
           onAddItem: addItem,
+          onSetNoteCoverImage: setNoteCoverImage,
           onDeleteItem: deleteItem,
           onClearLibrary: clearAll,
           onSetDriveId: setItemDriveId,
@@ -518,6 +536,13 @@ const App = () => {
               onSelectDesk: handleSelectDesk,
               onUpdateLayout: setDeskLayout,
               onRenameDesk: (id, name) => renameItem(id, 'desks', name),
+              onSetTags: (rec, storeName, tags) => setRecordTags(rec.id, storeName, tags),
+              onSetSharedWith: (rec, storeName, emails) => setItemSharedWith(rec.id, storeName, emails),
+              canShareRecord: canEditShareForRecord,
+              shareableEmails: shareableUserEmails,
+              onRenameItem: (rec, storeName, name) => renameItem(rec.id, storeName, name),
+              onRenameChannel: (rec, storeName, name) => renameItem(rec.id, storeName, name),
+              onSetNoteCoverImage: (v, file) => setNoteCoverImage(v.id, file),
               readOnly: false,
               onOpenNewNote: () => setIsNewNoteOpen(true),
               onOpenYoutube: () => setIsYoutubeOpen(true),

@@ -81,6 +81,7 @@ export const DataTile = ({
   onSelect,
   onDelete,
   onUpload,
+  onSetNoteCoverImage,
   uploadStatus,
   onSetTags,
   onSetSharedWith,
@@ -99,6 +100,7 @@ export const DataTile = ({
   const fileExtension = !isChannel && video?.name ? getFileExtension(video.name) : '';
   const isYoutube = !isChannel && video?.type === 'application/x-youtube';
   const isBookTile = !isChannel && video?.idbStore === 'books';
+  const isMarkdownNote = !isChannel && video?.idbStore === 'notes';
   const isPdfBook =
     isBookTile &&
     (video?.type === 'application/pdf' || (typeof video?.name === 'string' && /\.pdf$/i.test(video.name)));
@@ -113,8 +115,10 @@ export const DataTile = ({
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const [isSavingName, setIsSavingName] = useState(false);
+  const [noteCoverUrl, setNoteCoverUrl] = useState(null);
   const newTagInputRef = useRef(null);
   const nameInputRef = useRef(null);
+  const noteCoverInputRef = useRef(null);
 
   const tags = Array.isArray(record?.tags) ? record.tags : [];
   const tagSuggestions = (availableTags || []).filter((t) => !tags.includes(t));
@@ -227,6 +231,21 @@ export const DataTile = ({
     }
   }, [isEditingName]);
 
+  useEffect(() => {
+    if (!isMarkdownNote || !video?.coverImage?.data) {
+      setNoteCoverUrl(null);
+      return () => {};
+    }
+    const blob = video.coverImage.data;
+    if (!(blob instanceof Blob)) {
+      setNoteCoverUrl(null);
+      return () => {};
+    }
+    const objectUrl = URL.createObjectURL(blob);
+    setNoteCoverUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [isMarkdownNote, video?.id, video?.coverImage?.data]);
+
   const tagSubject = () => record;
 
   const addTagFromSelect = (e) => {
@@ -321,6 +340,10 @@ export const DataTile = ({
 
   const addTagControlsHidden =
     'opacity-0 pointer-events-none transition-opacity duration-150 group-hover/tagadd:opacity-100 group-hover/tagadd:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto';
+  const addShareControlsHidden =
+    'opacity-0 pointer-events-none transition-opacity duration-150 group-hover/shareadd:opacity-100 group-hover/shareadd:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto';
+  const collapsibleMetaRow =
+    'overflow-hidden max-h-0 opacity-0 pointer-events-none mt-0 transition-all duration-200 group-hover:max-h-40 group-hover:opacity-100 group-hover:pointer-events-auto group-hover:mt-2 focus-within:max-h-40 focus-within:opacity-100 focus-within:pointer-events-auto focus-within:mt-2';
 
   const tagRow =
     (tags.length > 0 || !readOnly) &&
@@ -328,7 +351,7 @@ export const DataTile = ({
       'div',
       {
         className:
-          'mt-2 flex flex-wrap gap-1 items-center group/tagadd' + (!readOnly ? ' min-h-[2.25rem]' : ''),
+          `flex flex-wrap gap-1 items-center group/tagadd ${collapsibleMetaRow}`,
         onClick: (e) => e.stopPropagation(),
       },
       tags.map((tag) =>
@@ -420,7 +443,7 @@ export const DataTile = ({
     React.createElement(
       'div',
       {
-        className: 'mt-2 flex flex-wrap gap-1 items-center',
+        className: `flex flex-wrap gap-1 items-center group/shareadd ${collapsibleMetaRow}`,
         onClick: (e) => e.stopPropagation(),
       },
       React.createElement(
@@ -456,24 +479,28 @@ export const DataTile = ({
         )
       ),
       React.createElement(
-        'select',
-        {
-          id: `share-pick-${idPrefix}`,
-          key: `share-select-${idPrefix}-${sharedWith.join(',')}`,
-          value: '',
-          onChange: (e) => {
-            addSharedUserFromSelect(e).catch((err) => {
-              window.alert(err?.message || 'Could not update shared recipients.');
-            });
+        'span',
+        { className: `inline-flex items-center min-w-0 ${addShareControlsHidden}` },
+        React.createElement(
+          'select',
+          {
+            id: `share-pick-${idPrefix}`,
+            key: `share-select-${idPrefix}-${sharedWith.join(',')}`,
+            value: '',
+            onChange: (e) => {
+              addSharedUserFromSelect(e).catch((err) => {
+                window.alert(err?.message || 'Could not update shared recipients.');
+              });
+            },
+            onClick: (e) => e.stopPropagation(),
+            title: 'Choose a user to share this item with',
+            className:
+              'min-w-[8rem] max-w-[16rem] bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200 cursor-pointer shrink-0',
+            'aria-label': 'Share with user',
           },
-          onClick: (e) => e.stopPropagation(),
-          title: 'Choose a user to share this item with',
-          className:
-            'min-w-[8rem] max-w-[16rem] bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200 cursor-pointer shrink-0',
-          'aria-label': 'Share with user',
-        },
-        React.createElement('option', { value: '' }, shareSuggestions.length ? 'Share with…' : 'No users left'),
-        shareSuggestions.map((email) => React.createElement('option', { key: email, value: email }, email))
+          React.createElement('option', { value: '' }, shareSuggestions.length ? 'Share with…' : 'No users left'),
+          shareSuggestions.map((email) => React.createElement('option', { key: email, value: email }, email))
+        )
       )
     );
 
@@ -574,7 +601,8 @@ export const DataTile = ({
               },
               React.createElement(TrashIcon, { className: 'h-4 w-4' })
             )
-        )
+        ),
+        React.createElement('div', { className: 'absolute bottom-2 right-2 z-20 pointer-events-none' }, channelOverlayThumb)
       ),
       React.createElement(
         'div',
@@ -605,7 +633,11 @@ export const DataTile = ({
                 'aria-label': 'Rename channel',
                 disabled: isSavingName,
               })
-            : React.createElement('h3', { className: 'font-bold text-md text-gray-100 truncate flex-1 min-w-0', title: ch.name }, ch.name),
+            : React.createElement(
+                'h3',
+                { className: 'font-bold text-md text-gray-100 whitespace-normal break-words flex-1 min-w-0', title: ch.name },
+                ch.name
+              ),
           !readOnly &&
             onRename &&
             React.createElement(
@@ -663,8 +695,7 @@ export const DataTile = ({
           React.createElement('p', { className: 'text-xs text-gray-500 truncate mt-0.5', title: ch.handle }, ch.handle),
         tagRow,
         shareRow
-      ),
-      React.createElement('div', { className: 'absolute bottom-2 right-2 z-20 pointer-events-none' }, channelOverlayThumb)
+      )
     );
   }
 
@@ -677,6 +708,23 @@ export const DataTile = ({
   const handleUpload = (e) => {
     e.stopPropagation();
     onUpload(video);
+  };
+
+  const handlePickNoteCover = (e) => {
+    e.stopPropagation();
+    noteCoverInputRef.current?.click();
+  };
+
+  const handleNoteCoverFileChange = async (e) => {
+    e.stopPropagation();
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !onSetNoteCoverImage) return;
+    try {
+      await onSetNoteCoverImage(video, file);
+    } catch (err) {
+      window.alert(err?.message || 'Could not save note cover image.');
+    }
   };
 
   const thumbnailContent = isYoutube
@@ -704,6 +752,13 @@ export const DataTile = ({
           className: 'w-full h-full object-cover',
           loading: 'lazy',
         })
+    : isMarkdownNote && noteCoverUrl
+      ? React.createElement('img', {
+          src: noteCoverUrl,
+          alt: `${video?.name || 'Note'} cover`,
+          className: 'w-full h-full object-cover',
+          loading: 'lazy',
+        })
       : React.createElement(BookIcon, {
           className: 'h-20 w-20 text-gray-500 group-hover:text-indigo-400 transition-colors duration-300',
         });
@@ -726,6 +781,36 @@ export const DataTile = ({
             : 'absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded',
         },
         isYoutube ? 'YouTube' : fileExtension.toUpperCase()
+      ),
+      React.createElement(
+        'div',
+        { className: 'absolute bottom-2 left-2 flex items-center gap-1.5' },
+        !readOnly &&
+          isMarkdownNote &&
+          onSetNoteCoverImage &&
+          React.createElement(
+            React.Fragment,
+            null,
+            React.createElement('input', {
+              ref: noteCoverInputRef,
+              type: 'file',
+              accept: 'image/*',
+              className: 'hidden',
+              onClick: (e) => e.stopPropagation(),
+              onChange: handleNoteCoverFileChange,
+            }),
+            React.createElement(
+              'button',
+              {
+                type: 'button',
+                onClick: handlePickNoteCover,
+                className:
+                  'px-2 py-1 rounded bg-gray-900/70 text-xs text-gray-200 opacity-0 group-hover:opacity-100 hover:bg-gray-900 transition-all duration-300',
+                title: noteCoverUrl ? 'Change note cover image' : 'Add note cover image',
+              },
+              noteCoverUrl ? 'Cover' : 'Add Cover'
+            )
+          )
       ),
       React.createElement(
         'div',
@@ -775,7 +860,7 @@ export const DataTile = ({
             })
           : React.createElement(
               'h3',
-              { className: 'font-bold text-md text-gray-100 truncate flex-1 min-w-0', title: video.name },
+              { className: 'font-bold text-md text-gray-100 whitespace-normal break-words flex-1 min-w-0', title: video.name },
               isYoutube ? video.name.replace(/\.youtube$/i, '') : video.name
             ),
         !readOnly &&

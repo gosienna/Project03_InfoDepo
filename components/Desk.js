@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { DataTile } from './DataTile.js';
 import { DeskTile } from './DeskTile.js';
 import { AddContentDropdown } from './AddContentDropdown.js';
+import { normalizeTag } from '../utils/tagUtils.js';
 
 const CARD_W = 250;
 const DRAG_BAR_H = 26;
@@ -224,61 +225,105 @@ const subColor = (sub) => {
   return 'bg-gray-700 text-gray-300';
 };
 
+const FILTER_TABS = [
+  { key: 'all',     label: 'All' },
+  { key: 'books',   label: 'Books' },
+  { key: 'notes',   label: 'Notes' },
+  { key: 'videos',  label: 'Videos' },
+  { key: 'images',  label: 'Images' },
+  { key: 'channel', label: 'Channels' },
+  { key: 'desk',    label: 'Desks' },
+];
+
 const InlineAddSearch = ({ items, channels, desks, currentDeskId, currentLayout, onAdd }) => {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState('all');
+  const [tagFilters, setTagFilters] = useState([]);
+  const inputRef = useRef(null);
+
   const q = query.trim().toLowerCase();
 
-  const available = useMemo(() => {
+  const allRows = useMemo(() => {
     const inLayout = new Set(Object.keys(currentLayout));
     const rows = [];
     for (const item of items) {
       const key = itemEntryKey(item);
       if (inLayout.has(key)) continue;
       const label = (item.name || '').replace(/\.youtube$/i, '');
-      if (q && !label.toLowerCase().includes(q)) continue;
-      rows.push({ key, label, sub: item.idbStore });
+      rows.push({ key, label, sub: item.idbStore, tags: item.tags || [] });
     }
     for (const ch of channels) {
       const key = channelEntryKey(ch);
       if (inLayout.has(key)) continue;
-      const label = ch.name || ch.handle || '';
-      if (q && !label.toLowerCase().includes(q)) continue;
-      rows.push({ key, label, sub: 'channel' });
+      rows.push({ key, label: ch.name || ch.handle || '', sub: 'channel', tags: ch.tags || [] });
     }
     for (const d of (desks || [])) {
       if (d.id === currentDeskId) continue;
       const key = deskEntryKey(d);
       if (inLayout.has(key)) continue;
-      const label = d.name || 'Untitled Desk';
-      if (q && !label.toLowerCase().includes(q)) continue;
-      rows.push({ key, label, sub: 'desk' });
+      rows.push({ key, label: d.name || 'Untitled Desk', sub: 'desk', tags: d.tags || [] });
     }
-    return rows.slice(0, 8);
-  }, [items, channels, desks, currentDeskId, currentLayout, q]);
+    return rows;
+  }, [items, channels, desks, currentDeskId, currentLayout]);
 
-  const showDropdown = open && (q.length > 0 || available.length > 0);
+  // Tags matching the current query text (for suggestion pills)
+  const matchingTags = useMemo(() => {
+    if (!q) return [];
+    const set = new Set();
+    allRows.forEach((r) => r.tags.forEach((t) => { if (t.toLowerCase().includes(q)) set.add(t.toLowerCase()); }));
+    return [...set].filter((t) => !tagFilters.includes(t)).sort().slice(0, 8);
+  }, [allRows, q, tagFilters]);
+
+  const activeSubs = useMemo(() => new Set(allRows.map((r) => r.sub)), [allRows]);
+
+  const available = useMemo(() => {
+    return allRows
+      .filter((r) => filter === 'all' || r.sub === filter)
+      .filter((r) => !q || r.label.toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)))
+      .filter((r) => tagFilters.every((t) => r.tags.some((rt) => rt.toLowerCase() === t)))
+      .slice(0, 12);
+  }, [allRows, filter, q, tagFilters]);
+
+  const visibleTabs = FILTER_TABS.filter((t) => t.key === 'all' || activeSubs.has(t.key));
+  const showDropdown = open && allRows.length > 0;
+
+  const addTagFilter = (tag) => {
+    setTagFilters((prev) => prev.includes(tag) ? prev : [...prev, tag]);
+    setQuery('');
+    inputRef.current?.focus();
+  };
+
+  const removeTagFilter = (tag) => {
+    setTagFilters((prev) => prev.filter((t) => t !== tag));
+    inputRef.current?.focus();
+  };
 
   return React.createElement(
     'div',
     { style: { position: 'relative' }, onClick: (e) => e.stopPropagation() },
-    React.createElement('input', {
-      type: 'text',
-      value: query,
-      placeholder: 'Search to add items…',
-      onChange: (e) => { setQuery(e.target.value); setOpen(true); },
-      onFocus: () => setOpen(true),
-      onBlur: () => setTimeout(() => setOpen(false), 150),
-      style: {
-        background: '#1f2937', border: '1px solid #374151', borderRadius: 10,
-        padding: '8px 32px 8px 12px', fontSize: 13, color: '#e5e7eb',
-        outline: 'none', width: 210,
-      },
-    }),
     React.createElement(
-      'svg',
-      { xmlns: 'http://www.w3.org/2000/svg', width: 14, height: 14, fill: 'none', viewBox: '0 0 24 24', stroke: '#6b7280', strokeWidth: 2, style: { position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' } },
-      React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' })
+      'div',
+      { style: { position: 'relative' } },
+      React.createElement('input', {
+        ref: inputRef,
+        type: 'text',
+        value: query,
+        placeholder: 'Search by name or tag…',
+        onChange: (e) => { setQuery(e.target.value); setOpen(true); },
+        onFocus: () => setOpen(true),
+        onBlur: () => setTimeout(() => setOpen(false), 150),
+        style: {
+          background: '#1f2937', border: '1px solid #374151', borderRadius: 10,
+          padding: '8px 32px 8px 12px', fontSize: 13, color: '#e5e7eb',
+          outline: 'none', width: 210,
+        },
+      }),
+      React.createElement(
+        'svg',
+        { xmlns: 'http://www.w3.org/2000/svg', width: 14, height: 14, fill: 'none', viewBox: '0 0 24 24', stroke: '#6b7280', strokeWidth: 2, style: { position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' } },
+        React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' })
+      )
     ),
     showDropdown && React.createElement(
       'div',
@@ -287,30 +332,115 @@ const InlineAddSearch = ({ items, channels, desks, currentDeskId, currentLayout,
           position: 'absolute', top: 'calc(100% + 4px)', right: 0,
           background: '#1f2937', border: '1px solid #374151', borderRadius: 10,
           boxShadow: '0 8px 24px rgba(0,0,0,0.4)', zIndex: 50,
-          width: 260, maxHeight: 280, overflowY: 'auto',
+          width: 300,
         },
       },
-      available.length === 0
-        ? React.createElement('p', { style: { color: '#6b7280', fontSize: 13, textAlign: 'center', padding: '16px' } },
-            q ? 'No matches.' : 'All items are on this desk.')
-        : available.map(({ key, label, sub }) =>
+      // Active tag filters
+      tagFilters.length > 0 && React.createElement(
+        'div',
+        { style: { display: 'flex', flexWrap: 'wrap', gap: 4, padding: '8px 10px', borderBottom: '1px solid #111827' } },
+        tagFilters.map((t) =>
+          React.createElement(
+            'button',
+            {
+              key: t,
+              onMouseDown: (e) => { e.preventDefault(); removeTagFilter(t); },
+              style: {
+                display: 'flex', alignItems: 'center', gap: 3,
+                padding: '2px 6px', borderRadius: 5, fontSize: 11, fontWeight: 600,
+                background: '#312e81', color: '#a5b4fc', border: '1px solid #4338ca',
+                cursor: 'pointer',
+              },
+              title: 'Remove tag filter',
+            },
+            t,
+            React.createElement('span', { style: { fontSize: 10, opacity: 0.7 } }, ' ×')
+          )
+        )
+      ),
+      // Tag suggestions matching the current query
+      matchingTags.length > 0 && React.createElement(
+        'div',
+        { style: { padding: '6px 10px', borderBottom: '1px solid #111827' } },
+        React.createElement('p', { style: { fontSize: 10, color: '#6b7280', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'Tags'),
+        React.createElement(
+          'div',
+          { style: { display: 'flex', flexWrap: 'wrap', gap: 4 } },
+          matchingTags.map((t) =>
             React.createElement(
               'button',
               {
-                key,
-                onMouseDown: (e) => { e.preventDefault(); onAdd(key); setQuery(''); setOpen(false); },
+                key: t,
+                onMouseDown: (e) => { e.preventDefault(); addTagFilter(t); },
                 style: {
-                  width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '8px 12px', background: 'none', border: 'none', cursor: 'pointer',
-                  textAlign: 'left', color: '#d1d5db', fontSize: 13, borderBottom: '1px solid #111827',
+                  padding: '2px 7px', borderRadius: 5, fontSize: 11, fontWeight: 600,
+                  background: '#1e1b4b', color: '#818cf8', border: '1px solid #3730a3',
+                  cursor: 'pointer',
                 },
-                onMouseEnter: (e) => { e.currentTarget.style.background = '#374151'; },
-                onMouseLeave: (e) => { e.currentTarget.style.background = 'none'; },
               },
-              React.createElement('span', { className: `text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${subColor(sub)}` }, sub),
-              React.createElement('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, label)
+              t
             )
           )
+        )
+      ),
+      // Type filter tabs
+      visibleTabs.length > 2 && React.createElement(
+        'div',
+        { style: { display: 'flex', gap: 4, padding: '8px 8px', flexWrap: 'wrap', borderBottom: '1px solid #111827' } },
+        visibleTabs.map(({ key, label }) =>
+          React.createElement(
+            'button',
+            {
+              key,
+              onMouseDown: (e) => { e.preventDefault(); setFilter(key); },
+              style: {
+                padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+                cursor: 'pointer', border: 'none',
+                background: filter === key ? '#4f46e5' : '#374151',
+                color: filter === key ? '#fff' : '#9ca3af',
+              },
+            },
+            label
+          )
+        )
+      ),
+      // Results
+      React.createElement(
+        'div',
+        { style: { maxHeight: 240, overflowY: 'auto' } },
+        available.length === 0
+          ? React.createElement('p', { style: { color: '#6b7280', fontSize: 13, textAlign: 'center', padding: '16px' } },
+              tagFilters.length || q ? 'No matches.' : 'All items are on this desk.')
+          : available.map(({ key, label, sub, tags }) =>
+              React.createElement(
+                'button',
+                {
+                  key,
+                  onMouseDown: (e) => { e.preventDefault(); onAdd(key); setQuery(''); setTagFilters([]); setOpen(false); },
+                  style: {
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '8px 12px', background: 'none', border: 'none', cursor: 'pointer',
+                    textAlign: 'left', color: '#d1d5db', fontSize: 13, borderBottom: '1px solid #111827',
+                  },
+                  onMouseEnter: (e) => { e.currentTarget.style.background = '#374151'; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'none'; },
+                },
+                React.createElement('span', { className: `text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${subColor(sub)}` }, sub),
+                React.createElement('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, label),
+                tags.length > 0 && React.createElement(
+                  'span',
+                  { style: { display: 'flex', gap: 3, flexShrink: 0 } },
+                  tags.slice(0, 2).map((t) =>
+                    React.createElement(
+                      'span',
+                      { key: t, style: { fontSize: 10, color: '#818cf8', background: '#1e1b4b', borderRadius: 4, padding: '1px 4px' } },
+                      t
+                    )
+                  )
+                )
+              )
+            )
+      )
     )
   );
 };
@@ -327,6 +457,13 @@ export const Desk = ({
   onSelectDesk,
   onUpdateLayout,
   onRenameDesk,
+  onSetTags,
+  onSetSharedWith,
+  canShareRecord,
+  shareableEmails,
+  onRenameItem,
+  onRenameChannel,
+  onSetNoteCoverImage,
   readOnly,
   onOpenNewNote,
   onOpenYoutube,
@@ -474,6 +611,23 @@ export const Desk = ({
     }).filter(Boolean);
   }, [renderTick, items, channels, desks]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const availableTags = useMemo(() => {
+    const set = new Set();
+    for (const it of items || []) {
+      for (const t of it.tags || []) {
+        const n = normalizeTag(t);
+        if (n) set.add(n);
+      }
+    }
+    for (const ch of channels || []) {
+      for (const t of ch.tags || []) {
+        const n = normalizeTag(t);
+        if (n) set.add(n);
+      }
+    }
+    return [...set].sort();
+  }, [items, channels]);
+
   return React.createElement(
     'div',
     {
@@ -539,9 +693,32 @@ export const Desk = ({
             'div',
             { style: { borderRadius: readOnly ? 8 : '0 0 8px 8px', overflow: 'hidden' } },
             entry._entryType === 'item'
-              ? React.createElement(DataTile, { tileType: 'item', item: entry, onSelect: onSelectItem, readOnly: true })
+              ? React.createElement(DataTile, {
+                  tileType: 'item',
+                  item: entry,
+                  onSelect: onSelectItem,
+                  readOnly,
+                  onSetTags: onSetTags ? (v, tags) => onSetTags(v, v.idbStore, tags) : undefined,
+                  onSetSharedWith: onSetSharedWith ? (v, emails) => onSetSharedWith(v, v.idbStore, emails) : undefined,
+                  canShare: typeof canShareRecord === 'function' ? canShareRecord(entry) : !readOnly,
+                  shareableEmails: shareableEmails || [],
+                  onRename: onRenameItem ? (v, name) => onRenameItem(v, v.idbStore, name) : undefined,
+                  onSetNoteCoverImage: onSetNoteCoverImage,
+                  availableTags,
+                })
               : entry._entryType === 'channel'
-              ? React.createElement(DataTile, { tileType: 'channel', channel: entry, onSelect: onSelectChannel, readOnly: true })
+              ? React.createElement(DataTile, {
+                  tileType: 'channel',
+                  channel: entry,
+                  onSelect: onSelectChannel,
+                  readOnly,
+                  onSetTags: onSetTags ? (c, tags) => onSetTags(c, 'channels', tags) : undefined,
+                  onSetSharedWith: onSetSharedWith ? (c, emails) => onSetSharedWith(c, 'channels', emails) : undefined,
+                  canShare: typeof canShareRecord === 'function' ? canShareRecord(entry) : !readOnly,
+                  shareableEmails: shareableEmails || [],
+                  onRename: onRenameChannel ? (c, name) => onRenameChannel(c, 'channels', name) : undefined,
+                  availableTags,
+                })
               : React.createElement(DeskTile, { desk: entry, onSelect: onSelectDesk, readOnly: true })
           )
         )

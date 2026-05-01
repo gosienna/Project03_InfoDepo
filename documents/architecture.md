@@ -80,8 +80,10 @@ See [sharing-mechanism.md](sharing-mechanism.md).
 
 Users create named desks that hold a `layout` map of item positions (`{ [key]: { x, y } }`). Each desk is backed up to Drive as `<name>.desk.json`. Items, channels, and other desks can be placed on the canvas. Layout changes are committed to IndexedDB on drag-end and synced to Drive on the next owner pipeline run.
 
-The Desk canvas toolbar (top-right) provides two ways to add content:
-- **InlineAddSearch** — searches existing library items and places them on the canvas on click.
+**Desk title / selector** (`DeskSelector`, top-center): always shows the current desk name as a large bold title. When more than one desk exists, a chevron renders and clicking opens a dropdown listing all desks. Each row has a pencil icon for inline rename (Enter/Escape/blur to save/cancel). Switching desks calls `onSelectDesk` → `handleSelectDesk` in App, which updates `lastVisitedAt` via `touchItemVisit`. On startup the most recently visited desk is selected automatically.
+
+**Top-right toolbar** (editor/master only) provides two ways to add content:
+- **InlineAddSearch** — type filter tabs (All / Books / Notes / Videos / Images / Channels / Desks) at the top of the dropdown narrow results by store type. Text search matches item names and tag values. Typing a partial tag name surfaces matching tags as clickable suggestion pills; active tag filters stack as removable indigo pills. Click a result to place it at the viewport center.
 - **AddContentDropdown** — creates new content (note, YouTube, channel, file); newly created items are automatically placed on the current desk via `addToDeskIfActive` in `App.js`.
 
 ### Viewer sync

@@ -424,6 +424,42 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
+  const setNoteCoverImage = useCallback((noteId, file) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    if (!file) return Promise.reject(new Error('No image selected'));
+    if (!String(file.type || '').toLowerCase().startsWith('image/')) {
+      return Promise.reject(new Error('Please choose an image file.'));
+    }
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(NOTES_STORE, 'readwrite');
+      const os = tx.objectStore(NOTES_STORE);
+      const req = os.get(noteId);
+      req.onsuccess = () => {
+        const note = req.result;
+        if (!note) {
+          reject(new Error('Note not found'));
+          return;
+        }
+        const coverImage = {
+          name: String(file.name || 'cover-image'),
+          type: String(file.type || 'image/*'),
+          data: file,
+        };
+        const putReq = os.put({
+          ...note,
+          coverImage,
+          localModifiedAt: new Date(),
+        });
+        putReq.onsuccess = () => {
+          loadItems('setNoteCoverImage');
+          resolve();
+        };
+        putReq.onerror = (e) => reject(e.target.error);
+      };
+      req.onerror = (e) => reject(e.target.error);
+    });
+  }, [db, loadItems]);
+
   // Read assets from note.assets; fall back to legacy images store for old records.
   const getImagesForNote = useCallback((noteId) => {
     if (!db) return Promise.resolve([]);
@@ -1432,6 +1468,7 @@ export const useIndexedDB = () => {
   return {
     items, channels, desks, isInitialized, dataReady,
     addItem, updateItem, deleteItem, clearAll,
+    setNoteCoverImage,
     addImage, getImagesForNote, getAllImages,
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
     setItemDriveId, setNoteFolderData,

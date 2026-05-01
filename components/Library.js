@@ -50,7 +50,7 @@ const LIBRARY_PAGE_SIZE = 20;
 export const Library = ({
   items, channels, desks,
   onSelectItem, onSelectChannel, onSelectDesk, onAddDesk, onDeleteDesk,
-  onAddItem, onDeleteItem, onClearLibrary,
+  onAddItem, onSetNoteCoverImage, onDeleteItem, onClearLibrary,
   onSetDriveId, onSetNoteFolderData, onGetAllImages, getImagesForNote,
   onAddChannel, onDeleteChannel,
   getChannelByDriveId, upsertDriveChannel,
@@ -935,10 +935,10 @@ export const Library = ({
       )
     ),
 
-    // Search bar (with name + tag suggestions)
+    // Search bar (with type filters + tag suggestions inside dropdown)
     React.createElement(
       'div',
-      { className: 'mb-4 flex flex-col gap-2' },
+      { className: 'mb-4' },
       React.createElement(
         'div',
         { className: 'relative z-30' },
@@ -952,7 +952,7 @@ export const Library = ({
           type: 'search',
           autoComplete: 'off',
           'aria-autocomplete': 'list',
-          'aria-expanded': searchInputFocused && searchSuggestions.length > 0,
+          'aria-expanded': searchInputFocused,
           'aria-controls': 'library-search-suggestions',
           role: 'combobox',
           value: searchQuery,
@@ -960,15 +960,16 @@ export const Library = ({
           onFocus: () => setSearchInputFocused(true),
           onBlur: () => setSearchInputFocused(false),
           onKeyDown: handleSearchKeyDown,
-          placeholder: 'Search name, filename, or tags...',
+          placeholder: 'Search name, tags, or filter by type…',
           className: 'w-full bg-gray-800 border border-gray-700 rounded-xl pl-10 pr-10 py-2.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors',
         }),
-        searchQuery && React.createElement(
+        (searchQuery || activeFilters.size > 0) && React.createElement(
           'button',
           {
             type: 'button',
-            onClick: () => { setSearchQuery(''); setSearchSuggestIndex(-1); },
+            onClick: () => { setSearchQuery(''); setActiveFilters(new Set()); setSearchSuggestIndex(-1); },
             className: 'absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors z-10',
+            title: 'Clear search and filters',
           },
           React.createElement(
             'svg',
@@ -976,26 +977,51 @@ export const Library = ({
             React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M6 18L18 6M6 6l12 12' })
           )
         ),
-        searchInputFocused && searchSuggestions.length > 0 &&
+        // Dropdown: always shown when focused
+        searchInputFocused && React.createElement(
+          'div',
+          {
+            id: 'library-search-suggestions',
+            className: 'absolute left-0 right-0 top-full mt-1 rounded-xl border border-gray-700 bg-gray-800 shadow-xl shadow-black/40 z-50 overflow-hidden',
+          },
+          // Type filter tabs row
           React.createElement(
+            'div',
+            { className: 'flex items-center gap-1.5 flex-wrap px-3 py-2.5 border-b border-gray-700/60' },
+            [
+              { key: 'books',    label: 'Books',    activeClass: 'bg-indigo-600 border-indigo-500 text-white' },
+              { key: 'notes',    label: 'Notes',    activeClass: 'bg-emerald-600 border-emerald-500 text-white' },
+              { key: 'videos',   label: 'Videos',   activeClass: 'bg-red-600 border-red-500 text-white' },
+              { key: 'channels', label: 'Channels', activeClass: 'bg-red-900 border-red-800 text-white' },
+              { key: 'desks',    label: 'Desks',    activeClass: 'bg-violet-700 border-violet-600 text-white' },
+            ].map(({ key, label, activeClass }) =>
+              React.createElement(
+                'button',
+                {
+                  key,
+                  type: 'button',
+                  onMouseDown: (e) => { e.preventDefault(); toggleFilter(key); },
+                  className: 'px-2.5 py-0.5 rounded-md text-xs font-semibold border transition-all ' + (
+                    activeFilters.has(key)
+                      ? activeClass
+                      : 'bg-gray-700 border-gray-600 text-gray-400 hover:border-gray-500 hover:text-gray-200'
+                  ),
+                },
+                label
+              )
+            )
+          ),
+          // Suggestions list (only when there are matches)
+          searchSuggestions.length > 0 && React.createElement(
             'ul',
-            {
-              id: 'library-search-suggestions',
-              role: 'listbox',
-              className:
-                'absolute left-0 right-0 top-full mt-1 max-h-60 overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 shadow-xl shadow-black/40 py-1 z-50',
-            },
+            { role: 'listbox', className: 'max-h-52 overflow-y-auto py-1' },
             searchSuggestions.map((row, idx) => {
               const catLabel =
-                row.category === 'item'
-                  ? 'Item'
-                  : row.category === 'channel'
-                    ? 'Channel'
-                    : row.category === 'share'
-                      ? 'Share'
-                      : row.category === 'share-tag'
-                        ? 'Share tag'
-                        : 'Tag';
+                row.category === 'item'    ? 'Item'
+                : row.category === 'channel' ? 'Channel'
+                : row.category === 'share'   ? 'Share'
+                : row.category === 'share-tag' ? 'Share tag'
+                : 'Tag';
               const active = searchSuggestIndex === idx;
               return React.createElement(
                 'li',
@@ -1012,10 +1038,7 @@ export const Library = ({
                     className:
                       'w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ' +
                       (active ? 'bg-indigo-900/50 text-indigo-100' : 'text-gray-200 hover:bg-gray-700/80'),
-                    onMouseDown: (e) => {
-                      e.preventDefault();
-                      applySearchSuggestion(row);
-                    },
+                    onMouseDown: (e) => { e.preventDefault(); applySearchSuggestion(row); },
                     onMouseEnter: () => setSearchSuggestIndex(idx),
                   },
                   React.createElement(
@@ -1023,54 +1046,43 @@ export const Library = ({
                     {
                       className:
                         'shrink-0 text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ' +
-                        (row.kind === 'tag'
-                          ? 'bg-amber-900/50 text-amber-200/90'
-                          : 'bg-gray-600/80 text-gray-300'),
+                        (row.kind === 'tag' ? 'bg-amber-900/50 text-amber-200/90' : 'bg-gray-600/80 text-gray-300'),
                     },
                     catLabel
                   ),
-                  React.createElement(
-                    'span',
-                    { className: 'min-w-0 flex-1 truncate', title: row.value },
-                    row.label
-                  )
+                  React.createElement('span', { className: 'min-w-0 flex-1 truncate', title: row.value }, row.label)
                 )
               );
             })
           )
+        )
       ),
-      React.createElement(
+      // Active filter pills shown below input when not focused
+      activeFilters.size > 0 && React.createElement(
         'div',
-        { className: 'flex items-center gap-2 flex-wrap' },
-        [
-          { key: 'books',    label: 'Books',    activeClass: 'bg-indigo-600 border-indigo-500 text-white' },
-          { key: 'notes',    label: 'Notes',    activeClass: 'bg-emerald-600 border-emerald-500 text-white' },
-          { key: 'videos',   label: 'Videos',   activeClass: 'bg-red-600 border-red-500 text-white' },
-          { key: 'channels', label: 'Channels', activeClass: 'bg-red-900 border-red-800 text-white' },
-          { key: 'desks',    label: 'Desk',     activeClass: 'bg-violet-700 border-violet-600 text-white' },
-        ].map(({ key, label, activeClass }) =>
-          React.createElement(
+        { className: 'flex items-center gap-1.5 flex-wrap mt-1.5' },
+        [...activeFilters].map((key) => {
+          const labels = { books: 'Books', notes: 'Notes', videos: 'Videos', channels: 'Channels', desks: 'Desks' };
+          const colors = {
+            books: 'bg-indigo-900/50 text-indigo-300 border-indigo-700/50',
+            notes: 'bg-emerald-900/50 text-emerald-300 border-emerald-700/50',
+            videos: 'bg-red-900/50 text-red-300 border-red-700/50',
+            channels: 'bg-red-900/60 text-red-200 border-red-800/50',
+            desks: 'bg-violet-900/50 text-violet-300 border-violet-700/50',
+          };
+          return React.createElement(
             'button',
             {
               key,
+              type: 'button',
               onClick: () => toggleFilter(key),
-              className: 'px-3 py-1 rounded-lg text-xs font-semibold border transition-all ' + (
-                activeFilters.has(key)
-                  ? activeClass
-                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300'
-              ),
+              className: `flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border ${colors[key] || 'bg-gray-700 text-gray-300 border-gray-600'}`,
+              title: `Remove ${labels[key]} filter`,
             },
-            label
-          )
-        ),
-        hasActiveSearch && React.createElement(
-          'button',
-          {
-            onClick: () => { setSearchQuery(''); setActiveFilters(new Set()); },
-            className: 'px-3 py-1 rounded-lg text-xs font-semibold text-gray-500 hover:text-gray-300 transition-colors',
-          },
-          'Clear filters'
-        )
+            labels[key] || key,
+            React.createElement('span', { className: 'opacity-60 text-[10px]' }, ' ×')
+          );
+        })
       )
     ),
 
@@ -1121,6 +1133,9 @@ export const Library = ({
                   onSelect: onSelectItem,
                   onDelete: handleDeleteItemRequest,
                   onUpload: handleUpload,
+                  onSetNoteCoverImage: onSetNoteCoverImage
+                    ? (v, file) => onSetNoteCoverImage(v.id, file)
+                    : undefined,
                   uploadStatus: uploadStatuses[libraryItemKey(video)] ?? null,
                   readOnly: !isEditor,
                   onSetTags: (v, tags) => setRecordTags(v.id, v.idbStore, tags),

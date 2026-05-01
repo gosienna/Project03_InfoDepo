@@ -53,6 +53,7 @@
 - Viewer peer sync also prunes revoked peer-owned content from local IndexedDB.
 - **System Settings modal** still rendered here (uses Library-local state for Drive folder, display policy, sign-out, clear). `isSystemSettingsOpen`/`setIsSystemSettingsOpen` are lifted to App and passed as props; the trigger button lives in `Header`.
 - **System Settings → Storage**: shows a progress bar of used vs. limit, and an input to adjust the GB cap (saved via `saveSyncSettings`).
+- **Search bar**: clicking the input opens a dropdown that contains type filter tabs (Books / Notes / Videos / Channels / Desks) at the top and text/tag suggestions below. Active filters appear as removable pills below the input when the dropdown is closed. The `×` button clears both query and all active filters.
 
 ### `DataTile.js`
 
@@ -67,10 +68,11 @@
 - Zoom: wheel event toward cursor.
 - Items are placed as `DataTile` (items/channels) or `DeskTile` (nested desks) with a drag handle bar. Clicking an item opens it; clicking a nested desk switches to that desk.
 - Layout stored in a ref during drag, committed to IndexedDB on drag-end to avoid excessive writes.
-- Top-right toolbar (editor/master only) contains two controls in a row:
-  - **`InlineAddSearch`** (local component) — search input with floating dropdown; lists library items/channels/desks not yet on the canvas; click to place at the viewport center.
+- **Top-center title**: `DeskSelector` is rendered at `top: 16, left: 50%` as the desk title. Shows the current desk name in large bold text. When multiple desks exist a chevron appears and clicking opens a dropdown to switch desks. The dropdown also exposes a pencil icon per row for inline rename (Enter/Escape/blur to commit/cancel).
+- **Top-right toolbar** (editor/master only) contains two controls in a row:
+  - **`InlineAddSearch`** (local component) — search input with floating dropdown. Type filter tabs (All / Books / Notes / Videos / Images / Channels / Desks) appear in the dropdown header. Text search matches both item names and tags. Matching tags appear as clickable suggestion pills; active tag filters shown as removable indigo pills. Results show up to 2 tag chips per row. Click a result to place it at the viewport center.
   - **`AddContentDropdown`** — creates new content; newly added items are auto-placed on the current desk by `addToDeskIfActive` in App.
-- Props: `{ desk, items, channels, desks, onSelectItem, onSelectChannel, onSelectDesk, onUpdateLayout, readOnly, onOpenNewNote, onOpenYoutube, onOpenChannel, onOpenFile }`
+- Props: `{ desk, items, channels, desks, onSelectItem, onSelectChannel, onSelectDesk, onUpdateLayout, onRenameDesk, readOnly, onOpenNewNote, onOpenYoutube, onOpenChannel, onOpenFile }`
 
 ### `AddContentDropdown.js`
 
