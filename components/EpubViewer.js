@@ -207,6 +207,7 @@ export const EpubViewer = ({ data, itemId, initialReadingPosition, onSaveReading
   const renditionRef = useRef(null);
   const bookRef = useRef(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isTwoPageView, setIsTwoPageView] = useState(false);
 
   useEffect(() => {
     if (data && viewerRef.current) {
@@ -220,7 +221,7 @@ export const EpubViewer = ({ data, itemId, initialReadingPosition, onSaveReading
           const rendition = book.renderTo(viewerRef.current, {
             width: '100%',
             height: '100%',
-            spread: 'auto',
+            spread: isTwoPageView ? 'always' : 'none',
             flow: 'paginated',
             allowScriptedContent: true,
           });
@@ -253,7 +254,13 @@ export const EpubViewer = ({ data, itemId, initialReadingPosition, onSaveReading
         }
       };
     }
-  }, [data, initialReadingPosition, itemId, onSaveReadingPosition, storeName]);
+  }, [data, initialReadingPosition, itemId, isTwoPageView, onSaveReadingPosition, storeName]);
+
+  useEffect(() => {
+    if (!renditionRef.current) return;
+    renditionRef.current.spread(isTwoPageView ? 'always' : 'none');
+    renditionRef.current.resize();
+  }, [isTwoPageView]);
 
   const goToNextPage = () => {
     if (renditionRef.current) {
@@ -341,6 +348,18 @@ export const EpubViewer = ({ data, itemId, initialReadingPosition, onSaveReading
             'min-h-[44px] min-w-[44px] px-4 py-2.5 sm:py-2 bg-indigo-600 text-white text-sm sm:text-base rounded-lg hover:bg-indigo-700 transition-colors touch-manipulation',
         },
         'Next'
+      ),
+      React.createElement(
+        'button',
+        {
+          type: 'button',
+          onClick: () => setIsTwoPageView((prev) => !prev),
+          className:
+            'min-h-[44px] min-w-[44px] px-4 py-2.5 sm:py-2 bg-gray-700 text-white text-sm sm:text-base rounded-lg hover:bg-gray-600 transition-colors touch-manipulation',
+          'aria-pressed': isTwoPageView,
+          title: isTwoPageView ? 'Switch to single-page view' : 'Switch to two-page view',
+        },
+        isTwoPageView ? 'Single Page' : 'Two Pages'
       )
     )
   );

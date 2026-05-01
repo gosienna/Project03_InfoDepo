@@ -49,6 +49,9 @@
     <button id="btn-next" onclick="nextPage()"
       class="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
       disabled>Next →</button>
+    <button id="btn-layout" onclick="toggleLayoutMode()"
+      class="px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+      aria-pressed="false">Two Pages</button>
   </div>
 
   <!-- Loading overlay -->
@@ -69,6 +72,7 @@
     let shadowRoot = null;
     let dbRef = null;
     let lastSavedChapterIndex = null;
+    let isTwoPageView = false;
 
     function setLoading(msg) {
       document.getElementById('loading-msg').textContent = msg;
@@ -84,10 +88,81 @@
     }
 
     function prevPage() {
+      if (isTwoPageView) {
+        currentIndex = Math.max(0, currentIndex - 2);
+        renderChapter(currentIndex);
+        return;
+      }
       if (currentIndex > 0) renderChapter(--currentIndex);
     }
     function nextPage() {
+      if (isTwoPageView) {
+        currentIndex = Math.min(spine.length - 1, currentIndex + 2);
+        renderChapter(currentIndex);
+        return;
+      }
       if (currentIndex < spine.length - 1) renderChapter(++currentIndex);
+    }
+
+    function updateLayoutButton() {
+      const btn = document.getElementById('btn-layout');
+      if (!btn) return;
+      btn.setAttribute('aria-pressed', String(isTwoPageView));
+      btn.textContent = isTwoPageView ? 'Single Page' : 'Two Pages';
+      btn.title = isTwoPageView ? 'Switch to single-page view' : 'Switch to two-page view';
+    }
+
+    function toggleLayoutMode() {
+      const willEnableSpread = !isTwoPageView;
+      isTwoPageView = willEnableSpread;
+      if (willEnableSpread) {
+        // Keep spreads stable as [0,1], [2,3], ...
+        currentIndex = Math.floor(currentIndex / 2) * 2;
+      }
+      updateLayoutButton();
+      renderChapter(currentIndex);
+    }
+
+    async function getChapterRenderData(index) {
+      if (index < 0 || index >= spine.length) return null;
+      const chapterHref = spine[index];
+      const chapterPath = opfDir ? opfDir + '/' + chapterHref : chapterHref;
+      const file = zip.file(chapterPath);
+      if (!file) return null;
+
+      const html = await file.async('string');
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+
+      for (const el of doc.querySelectorAll('[src]')) {
+        const src = el.getAttribute('src');
+        if (src && !src.startsWith('data:') && !/^https?:\/\//.test(src)) {
+          const resolved = resolveHref(chapterPath, src);
+          const url = await getBlobUrl(resolved);
+          if (url) el.setAttribute('src', url);
+        }
+      }
+
+      const styles = [];
+      for (const el of doc.querySelectorAll('style')) {
+        styles.push(await replaceCssUrls(el.textContent, chapterPath));
+      }
+      for (const el of doc.querySelectorAll('link[rel="stylesheet"][href]')) {
+        const href = el.getAttribute('href');
+        const cssPath = resolveHref(chapterPath, href);
+        const cssFile = zip.file(cssPath);
+        if (cssFile) {
+          let css = await cssFile.async('string');
+          css = await replaceCssUrls(css, cssPath);
+          styles.push(css);
+        }
+      }
+
+      return {
+        chapterPath,
+        styles,
+        bodyHtml: doc.body ? doc.body.innerHTML : '',
+      };
     }
 
     function saveReadingPosition(chapterIndex) {
@@ -254,41 +329,12 @@
     }
 
     async function renderChapter(index) {
-      const chapterHref = spine[index];
-      const chapterPath = opfDir ? opfDir + '/' + chapterHref : chapterHref;
-
-      const file = zip.file(chapterPath);
-      if (!file) { console.error('Chapter file not found:', chapterPath); return; }
-
-      const html = await file.async('string');
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-
-      // Rewrite img/image src to blob URLs
-      for (const el of doc.querySelectorAll('[src]')) {
-        const src = el.getAttribute('src');
-        if (src && !src.startsWith('data:') && !/^https?:\/\//.test(src)) {
-          const resolved = resolveHref(chapterPath, src);
-          const url = await getBlobUrl(resolved);
-          if (url) el.setAttribute('src', url);
-        }
+      const left = await getChapterRenderData(index);
+      if (!left) {
+        console.error('Chapter file not found at index:', index);
+        return;
       }
-
-      // Collect styles: inline <style> tags + external <link rel="stylesheet">
-      const styles = [];
-      for (const el of doc.querySelectorAll('style')) {
-        styles.push(await replaceCssUrls(el.textContent, chapterPath));
-      }
-      for (const el of doc.querySelectorAll('link[rel="stylesheet"][href]')) {
-        const href = el.getAttribute('href');
-        const cssPath = resolveHref(chapterPath, href);
-        const cssFile = zip.file(cssPath);
-        if (cssFile) {
-          let css = await cssFile.async('string');
-          css = await replaceCssUrls(css, cssPath);
-          styles.push(css);
-        }
-      }
+      const right = isTwoPageView ? await getChapterRenderData(index + 1) : null;
 
       // Initialise shadow root once
       if (!shadowRoot) {
@@ -315,43 +361,108 @@
           line-height: 1.8;
           color: #111;
         }
+        .epub-spread {
+          max-width: 1320px;
+          margin: 0 auto;
+          padding: 0 1rem;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 1rem;
+        }
+        .epub-page {
+          background: #fff;
+          min-height: calc(100vh - 190px);
+          overflow: hidden;
+          border-left: 1px solid rgba(0, 0, 0, 0.08);
+          border-right: 1px solid rgba(0, 0, 0, 0.08);
+        }
+        .epub-page-empty {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #6b7280;
+          font-family: system-ui, -apple-system, sans-serif;
+          font-size: 0.9rem;
+        }
         img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
         a { color: #4f46e5; }
         p { margin: 0 0 0.8em; }
         h1, h2, h3, h4, h5, h6 { margin: 1.2em 0 0.4em; line-height: 1.3; }
+        h1, h2, h3, h4, h5, h6, p, li, blockquote, pre, table, figure { break-inside: avoid; }
         /* Hide Kindle-specific zoom overlays that serve no purpose here */
         #PV, .PV-P { display: none !important; }
       `;
       shadowRoot.appendChild(baseStyle);
 
-      // Book-supplied styles
-      for (const css of styles) {
+      // Book-supplied styles (left page + right page if spread mode)
+      const mergedStyles = [...left.styles, ...(right ? right.styles : [])];
+      const seenCss = new Set();
+      for (const css of mergedStyles) {
+        if (seenCss.has(css)) continue;
+        seenCss.add(css);
         const s = document.createElement('style');
         s.textContent = css;
         shadowRoot.appendChild(s);
       }
 
-      // Chapter content
-      const content = document.createElement('div');
-      content.className = 'epub-content';
-      content.innerHTML = doc.body.innerHTML;
-      shadowRoot.appendChild(content);
+      if (isTwoPageView) {
+        const spread = document.createElement('div');
+        spread.className = 'epub-spread';
 
-      attachLinkInterceptor(content, chapterPath);
+        const leftPage = document.createElement('div');
+        leftPage.className = 'epub-page';
+        const leftContent = document.createElement('div');
+        leftContent.className = 'epub-content';
+        leftContent.innerHTML = left.bodyHtml;
+        leftPage.appendChild(leftContent);
+        spread.appendChild(leftPage);
+        attachLinkInterceptor(leftContent, left.chapterPath);
+
+        const rightPage = document.createElement('div');
+        rightPage.className = 'epub-page';
+        if (right) {
+          const rightContent = document.createElement('div');
+          rightContent.className = 'epub-content';
+          rightContent.innerHTML = right.bodyHtml;
+          rightPage.appendChild(rightContent);
+          attachLinkInterceptor(rightContent, right.chapterPath);
+        } else {
+          const empty = document.createElement('div');
+          empty.className = 'epub-page-empty';
+          empty.textContent = 'End of book';
+          rightPage.appendChild(empty);
+        }
+        spread.appendChild(rightPage);
+
+        shadowRoot.appendChild(spread);
+      } else {
+        const content = document.createElement('div');
+        content.className = 'epub-content';
+        content.innerHTML = left.bodyHtml;
+        shadowRoot.appendChild(content);
+        attachLinkInterceptor(content, left.chapterPath);
+      }
 
       // Scroll to top
       document.getElementById('viewer').scrollTop = 0;
 
       // Update UI
-      document.getElementById('page-info').textContent = `${index + 1} / ${spine.length}`;
+      document.getElementById('page-info').textContent = isTwoPageView
+        ? `${index + 1}${right ? '-' + (index + 2) : ''} / ${spine.length}`
+        : `${index + 1} / ${spine.length}`;
       document.getElementById('btn-prev').disabled = index === 0;
-      document.getElementById('btn-next').disabled = index === spine.length - 1;
+      document.getElementById('btn-next').disabled = isTwoPageView
+        ? index >= spine.length - 2
+        : index === spine.length - 1;
       document.getElementById('edge-prev').disabled = index === 0;
-      document.getElementById('edge-next').disabled = index === spine.length - 1;
+      document.getElementById('edge-next').disabled = isTwoPageView
+        ? index >= spine.length - 2
+        : index === spine.length - 1;
       saveReadingPosition(index);
     }
 
     const bookId = parseInt(new URLSearchParams(location.search).get('id'));
+    updateLayoutButton();
     if (!bookId) {
       showError('No book ID provided.');
     } else {

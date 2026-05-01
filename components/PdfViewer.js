@@ -239,7 +239,7 @@ export const PdfViewer = ({
   }, [panelOpen]); // re-register when panel mounts/unmounts
   const autoSaveMsgTimerRef = useRef(null);
   const [rotationDeg, setRotationDeg] = useState(0);
-  const [twoPageMode, setTwoPageMode] = useState(false);
+  const [twoPageMode, setTwoPageMode] = useState('off'); // 'off' | 'even-left' | 'odd-left'
   const [displayPanelOpen, setDisplayPanelOpen] = useState(false);
   const displayTabRef = useRef(null);
   const displayPanelRef = useRef(null);
@@ -386,13 +386,31 @@ export const PdfViewer = ({
         if (cancelled || runId !== runIdRef.current) { cleanupPdf(); return; }
 
         const wrap = document.createElement('div');
-        wrap.className = twoPageMode
-          ? 'flex flex-col items-center gap-4 py-4 px-2 w-full min-h-full'
-          : 'flex flex-col items-center gap-4 py-4 px-2 w-full min-h-full';
+        wrap.className = 'flex flex-col items-center gap-4 py-4 px-2 w-full min-h-full';
         mount.appendChild(wrap);
 
         const newWrappers = [];
         let currentRow = null;
+        const isTwoPageActive = twoPageMode !== 'off';
+
+        const createRow = (withLeftSpacer = false) => {
+          const row = document.createElement('div');
+          row.style.display = 'flex';
+          row.style.gap = '16px';
+          row.style.width = '100%';
+          row.style.alignItems = 'flex-start';
+          row.style.justifyContent = 'center';
+          row.style.flexWrap = 'nowrap';
+          if (withLeftSpacer) {
+            const spacer = document.createElement('div');
+            spacer.style.width = '100%';
+            spacer.style.maxWidth = 'calc(50% - 8px)';
+            spacer.style.visibility = 'hidden';
+            row.appendChild(spacer);
+          }
+          wrap.appendChild(row);
+          return row;
+        };
 
         for (let i = 1; i <= numPages; i++) {
           if (cancelled || runId !== runIdRef.current) break;
@@ -412,18 +430,21 @@ export const PdfViewer = ({
           } catch (tlErr) {
             console.warn('PDF text layer failed:', tlErr);
           }
-          if (twoPageMode) {
-            if ((i - 1) % 2 === 0) {
-              currentRow = document.createElement('div');
-              currentRow.style.display = 'flex';
-              currentRow.style.gap = '16px';
-              currentRow.style.width = '100%';
-              currentRow.style.alignItems = 'flex-start';
-              currentRow.style.justifyContent = 'center';
-              currentRow.style.flexWrap = 'nowrap';
-              wrap.appendChild(currentRow);
+          if (isTwoPageActive) {
+            if (twoPageMode === 'odd-left') {
+              if ((i - 1) % 2 === 0) {
+                currentRow = createRow(false);
+              }
+            } else if (twoPageMode === 'even-left') {
+              if (i === 1) {
+                currentRow = createRow(true);
+              } else if (i % 2 === 0) {
+                currentRow = createRow(false);
+              }
             }
-            if (currentRow) currentRow.appendChild(pageWrapper);
+            if (currentRow) {
+              currentRow.appendChild(pageWrapper);
+            }
           } else {
             wrap.appendChild(pageWrapper);
           }
@@ -1331,15 +1352,23 @@ export const PdfViewer = ({
             padding: '5px 10px',
             borderRadius: 6,
             border: 'none',
-            background: twoPageMode ? 'rgba(59,130,246,1)' : 'rgba(75,85,99,1)',
+            background: twoPageMode === 'off' ? 'rgba(75,85,99,1)' : 'rgba(59,130,246,1)',
             color: '#e5e7eb',
             fontSize: 12,
             cursor: 'pointer',
             whiteSpace: 'nowrap',
           },
-          onClick: () => setTwoPageMode((prev) => !prev),
+          onClick: () => setTwoPageMode((prev) => {
+            if (prev === 'off') return 'even-left';
+            if (prev === 'even-left') return 'odd-left';
+            return 'off';
+          }),
         },
-        twoPageMode ? 'Two-page mode: ON' : 'Two-page mode'
+        twoPageMode === 'off'
+          ? 'Two-page mode: OFF'
+          : (twoPageMode === 'even-left'
+            ? 'Two-page: even-left'
+            : 'Two-page: odd-left')
       ),
       React.createElement(
         'button',
@@ -1357,7 +1386,7 @@ export const PdfViewer = ({
           },
           onClick: () => {
             setRotationDeg(0);
-            setTwoPageMode(false);
+            setTwoPageMode('off');
           },
         },
         'Reset display'
