@@ -36,6 +36,8 @@ import {
   readLibraryDisplayPolicy,
   writeLibraryDisplayPolicy,
 } from '../utils/libraryDisplayPolicy.js';
+import { formatBytes } from '../utils/fileUtils.js';
+import { getSyncSettings, saveSyncSettings } from '../utils/syncSettings.js';
 
 /** Ensures startup background sync runs once per page load (survives React Strict Mode remount). */
 let ownerBackgroundSyncScheduled = false;
@@ -62,6 +64,7 @@ export const Library = ({
   setItemSharedWith,
   renameItem,
   getMergedLibraryItems,
+  getTotalStorageUsed,
   onGoogleUserEmail,
   onDriveCredentialsChanged,
   loadItems,
@@ -87,6 +90,8 @@ export const Library = ({
   const driveFolderId = getDriveFolderId();
   const [isSystemSettingsOpen, setIsSystemSettingsOpen] = useState(false);
   const [driveFolderDraft, setDriveFolderDraft] = useState('');
+  const [storageUsed, setStorageUsed] = useState(null);
+  const [storageLimitDraft, setStorageLimitDraft] = useState(() => getSyncSettings().maxStorageGB);
   const [isNewNoteOpen,    setIsNewNoteOpen]    = useState(false);
   const [isYoutubeOpen,    setIsYoutubeOpen]    = useState(false);
   const [isChannelOpen,    setIsChannelOpen]    = useState(false);
@@ -170,8 +175,11 @@ export const Library = ({
   };
 
   useEffect(() => {
-    if (isSystemSettingsOpen) setDriveFolderDraft(getDriveFolderId());
-  }, [isSystemSettingsOpen]);
+    if (!isSystemSettingsOpen) return;
+    setDriveFolderDraft(getDriveFolderId());
+    setStorageLimitDraft(getSyncSettings().maxStorageGB);
+    if (getTotalStorageUsed) getTotalStorageUsed().then(setStorageUsed);
+  }, [isSystemSettingsOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Tags for card dropdowns: union of item and channel tags
   const availableTags = useMemo(() => {
@@ -1563,6 +1571,59 @@ export const Library = ({
                   title: 'Delete database and reinitialize',
                 },
                 'Clear All'
+              )
+            )
+          ),
+
+          // Section 4: Storage usage & limit
+          React.createElement(
+            'div',
+            { className: 'space-y-2' },
+            React.createElement('p', { className: 'text-xs font-semibold text-gray-400 uppercase tracking-wider' }, 'Storage'),
+            React.createElement(
+              'div',
+              { className: 'bg-gray-900 rounded-xl px-4 py-3 space-y-3' },
+              storageUsed != null && React.createElement(
+                'div',
+                { className: 'space-y-1' },
+                React.createElement(
+                  'div',
+                  { className: 'w-full bg-gray-700 rounded-full h-2' },
+                  React.createElement('div', {
+                    className: 'bg-indigo-500 h-2 rounded-full transition-all',
+                    style: { width: `${Math.min(100, (storageUsed / (storageLimitDraft * 1024 ** 3)) * 100).toFixed(1)}%` },
+                  })
+                ),
+                React.createElement(
+                  'p',
+                  { className: 'text-xs text-gray-400' },
+                  `${formatBytes(storageUsed)} used of ${storageLimitDraft} GB`
+                )
+              ),
+              React.createElement('p', { className: 'text-sm font-medium text-gray-200' }, 'Storage limit (GB)'),
+              React.createElement(
+                'div',
+                { className: 'flex gap-2' },
+                React.createElement('input', {
+                  type: 'number',
+                  min: 1,
+                  value: storageLimitDraft,
+                  onChange: (e) => setStorageLimitDraft(Math.max(1, Number(e.target.value))),
+                  className: 'w-28 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-indigo-500',
+                }),
+                React.createElement(
+                  'button',
+                  {
+                    onClick: () => saveSyncSettings({ maxStorageGB: storageLimitDraft }),
+                    className: 'px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium',
+                  },
+                  'Save'
+                )
+              ),
+              React.createElement(
+                'p',
+                { className: 'text-xs text-gray-500' },
+                'Oldest unvisited items (> 1 KB) are auto-cleared when over limit. Item metadata is kept.'
               )
             )
           )

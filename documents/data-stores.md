@@ -23,17 +23,20 @@ For `books`/`notes`/`videos`/`images` (and channel-compatible subset):
 {
   id,
   name,
-  data,
+  data,             // Blob | null (null when evicted by LRU quota enforcement)
   type,
-  size,
+  size,             // bytes; set to 0 after eviction
   driveId,
   modifiedTime,
   localModifiedAt,
+  lastVisitedAt,    // Date | null — updated each time the item is opened in Reader
   tags,
-  sharedWith,   // string[]
-  ownerEmail    // string
+  sharedWith,       // string[]
+  ownerEmail        // string
 }
 ```
+
+`lastVisitedAt` is set to the current time when an item is first imported (`addItem`) and updated each time the user opens it. Items that have never been opened have `lastVisitedAt: null`, which sorts them as oldest for LRU eviction purposes.
 
 Additional fields:
 
@@ -79,3 +82,28 @@ v7 changes:
 - retained `pdfAnnotations`
 
 For reset during development, use app "Clear All" or clear site storage in browser devtools.
+
+## Storage quota and LRU eviction
+
+A configurable storage limit (default **500 GB**, stored in `localStorage` under `infodepo_sync_settings`) is enforced automatically. The limit is managed via `utils/syncSettings.js`:
+
+```js
+getSyncSettings()  // → { maxStorageGB: number }
+saveSyncSettings({ maxStorageGB })
+```
+
+**When eviction runs:**
+- Once on startup after `dataReady` becomes true.
+- After each new item is imported via `addItem`.
+
+**Eviction algorithm (`evictLeastRecentlyVisited` in `useIndexedDB.js`):**
+1. Sum `size` across `books`, `notes`, and `videos`.
+2. If total ≤ limit, stop.
+3. Collect candidates from `books` and `notes` where `size > 1024` (1 KB) and `data != null`.
+4. Sort by `lastVisitedAt` ascending (`null` = epoch = evicted first).
+5. Null out `data` and set `size = 0` one record at a time until total drops below the limit.
+6. Call `loadAll()` to refresh the UI.
+
+Evicted items remain visible in the library grid (metadata preserved) but cannot be opened — their blob data has been cleared. Re-syncing from Drive restores the content.
+
+**User-facing controls:** System Settings → **Storage** section shows a progress bar and allows adjusting the GB limit.

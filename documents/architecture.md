@@ -79,13 +79,20 @@ See [sharing-mechanism.md](sharing-mechanism.md).
 4. prune locally cached peer-owned rows not in current shared set
 5. upsert remaining downloadable items/channels
 
+## Storage quota
+
+A 500 GB default quota is enforced client-side via LRU eviction. When total `size` across `books`/`notes`/`videos` exceeds the limit, `evictLeastRecentlyVisited` nulls the `data` blob of the least-recently-opened items (≥ 1 KB) until under the limit. Visit time is tracked via `lastVisitedAt` on each record, updated by `touchItemVisit` in `App.js` whenever an item is opened.
+
+The limit is persisted in `localStorage` (`infodepo_sync_settings`) and is adjustable in System Settings → **Storage**. See [data-stores.md](data-stores.md) for full eviction details.
+
 ## Key files
 
 | File | Purpose |
 |------|---------|
-| `App.js` | startup gates, role resolution, main routing |
-| `hooks/useIndexedDB.js` | IndexedDB CRUD and sync helpers |
-| `components/Library.js` | sync UI, tile actions, share ACL/update orchestration |
+| `App.js` | startup gates, role resolution, main routing, visit tracking, eviction trigger |
+| `hooks/useIndexedDB.js` | IndexedDB CRUD, sync helpers, storage quota (`touchItemVisit`, `getTotalStorageUsed`, `evictLeastRecentlyVisited`, `checkAndEvict`) |
+| `components/Library.js` | sync UI, tile actions, share ACL/update orchestration, storage settings UI |
+| `utils/syncSettings.js` | storage limit persistence (`maxStorageGB`, default 500) |
 | `utils/driveSync.js` | backup + folder pull engine |
 | `utils/libraryDriveSync.js` | owner sync orchestration |
 | `utils/ownerIndex.js` | read/write `_infodepo_index.json` |

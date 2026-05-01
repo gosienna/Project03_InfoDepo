@@ -1,8 +1,9 @@
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { INFO_DEPO_DB_NAME as DB_NAME, INFO_DEPO_DB_VERSION as DB_VERSION } from '../utils/infodepoDb.js';
 import { normalizeTagsList } from '../utils/tagUtils.js';
 import { parsePdfAnnotationSidecarText, pdfAnnotationSidecarNeedsBackup, timeMs as sidecarTimeMs } from '../utils/pdfAnnotationSidecar.js';
+import { getSyncSettings } from '../utils/syncSettings.js';
 
 const BOOKS_STORE    = 'books';
 const NOTES_STORE    = 'notes';
@@ -58,6 +59,7 @@ export const useIndexedDB = () => {
   const [channels, setChannels] = useState([]);
   const [isInitialized, setIsInitialized] = useState(false);
   const [dataReady, setDataReady] = useState(false);
+  const isEvicting = useRef(false);
 
   const initDB = useCallback(() => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -318,6 +320,7 @@ export const useIndexedDB = () => {
         name, type: storedType, data, size, driveId: '',
         modifiedTime: now,
         localModifiedAt: now,
+        lastVisitedAt: now,
         tags: [],
       };
       const addRequest = tx.objectStore(store).add(record);
@@ -1201,6 +1204,107 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
+  const touchItemVisit = useCallback((id, storeName) => {
+    if (!db || id == null || !storeName) return Promise.resolve();
+    return new Promise((resolve) => {
+      let tx;
+      try { tx = db.transaction(storeName, 'readwrite'); } catch { resolve(); return; }
+      const os = tx.objectStore(storeName);
+      const req = os.get(id);
+      req.onsuccess = () => {
+        const existing = req.result;
+        if (!existing) { resolve(); return; }
+        const put = os.put({ ...existing, lastVisitedAt: new Date() });
+        put.onsuccess = () => resolve();
+        put.onerror  = () => resolve();
+      };
+      req.onerror = () => resolve();
+    });
+  }, [db]);
+
+  const getTotalStorageUsed = useCallback(() => {
+    if (!db) return Promise.resolve(0);
+    return Promise.all(
+      [BOOKS_STORE, NOTES_STORE, VIDEOS_STORE].map(storeName =>
+        new Promise(resolve => {
+          let tx;
+          try { tx = db.transaction(storeName, 'readonly'); } catch { resolve(0); return; }
+          const req = tx.objectStore(storeName).getAll();
+          req.onsuccess = () =>
+            resolve((req.result || []).reduce((s, r) => s + (r.size || 0), 0));
+          req.onerror = () => resolve(0);
+        })
+      )
+    ).then(totals => totals.reduce((a, b) => a + b, 0));
+  }, [db]);
+
+  const evictLeastRecentlyVisited = useCallback(async (limitBytes) => {
+    if (!db || isEvicting.current) return;
+    isEvicting.current = true;
+    try {
+      const allByStore = {};
+      let totalUsed = 0;
+      await Promise.all(
+        [BOOKS_STORE, NOTES_STORE, VIDEOS_STORE].map(storeName =>
+          new Promise(resolve => {
+            let tx;
+            try { tx = db.transaction(storeName, 'readonly'); } catch { resolve(); return; }
+            const req = tx.objectStore(storeName).getAll();
+            req.onsuccess = () => {
+              allByStore[storeName] = req.result || [];
+              totalUsed += allByStore[storeName].reduce((s, r) => s + (r.size || 0), 0);
+              resolve();
+            };
+            req.onerror = () => resolve();
+          })
+        )
+      );
+
+      if (totalUsed <= limitBytes) return;
+
+      const candidates = [];
+      for (const storeName of [BOOKS_STORE, NOTES_STORE]) {
+        for (const row of (allByStore[storeName] || [])) {
+          if ((row.size || 0) > 1024 && row.data != null) {
+            candidates.push({ row, storeName });
+          }
+        }
+      }
+      candidates.sort((a, b) => {
+        const ta = a.row.lastVisitedAt ? new Date(a.row.lastVisitedAt).getTime() : 0;
+        const tb = b.row.lastVisitedAt ? new Date(b.row.lastVisitedAt).getTime() : 0;
+        return ta - tb;
+      });
+
+      let evicted = false;
+      for (const { row, storeName } of candidates) {
+        if (totalUsed <= limitBytes) break;
+        const freed = row.size || 0;
+        await new Promise(resolve => {
+          let tx;
+          try { tx = db.transaction(storeName, 'readwrite'); } catch { resolve(); return; }
+          const p = tx.objectStore(storeName).put({ ...row, data: null, size: 0 });
+          p.onsuccess = () => resolve();
+          p.onerror   = () => resolve();
+        });
+        totalUsed -= freed;
+        evicted = true;
+      }
+
+      if (evicted) loadAll();
+    } finally {
+      isEvicting.current = false;
+    }
+  }, [db, loadAll]);
+
+  const checkAndEvict = useCallback(async () => {
+    if (!db) return;
+    const { maxStorageGB } = getSyncSettings();
+    const limitBytes = maxStorageGB * 1024 ** 3;
+    const used = await getTotalStorageUsed();
+    if (used > limitBytes) await evictLeastRecentlyVisited(limitBytes);
+  }, [db, getTotalStorageUsed, evictLeastRecentlyVisited]);
+
   return {
     items, channels, isInitialized, dataReady,
     addItem, updateItem, deleteItem, clearAll,
@@ -1222,5 +1326,6 @@ export const useIndexedDB = () => {
     upsertDrivePdfAnnotation,
     getMergedLibraryItems,
     loadItems, loadChannels, loadAll,
+    touchItemVisit, getTotalStorageUsed, evictLeastRecentlyVisited, checkAndEvict,
   };
 };

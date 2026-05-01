@@ -16,6 +16,8 @@
 - Root router for `library`, `reader`, and `channel` views.
 - Owns role resolution (`master`/`editor`/`viewer`/`unauthorized`).
 - Wires all `useIndexedDB` helpers into `Library` and `Reader`.
+- Calls `touchItemVisit(id, idbStore)` whenever `currentVideo` changes (tracks last-opened time for LRU eviction).
+- Runs `checkAndEvict()` once after `dataReady` to enforce the storage quota on startup.
 
 ### `Header.js`
 
@@ -42,6 +44,7 @@
   - owner index write (`_infodepo_index.json`)
   - viewer peer sync (`syncSharedFromPeers`)
 - Viewer peer sync now also prunes revoked peer-owned content from local IndexedDB.
+- **System Settings → Storage**: shows a progress bar of used vs. limit, and an input to adjust the GB cap (saved via `saveSyncSettings`).
 
 ### `DataTile.js`
 

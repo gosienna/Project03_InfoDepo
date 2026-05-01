@@ -43,6 +43,9 @@ const App = () => {
     loadChannels,
     loadAll,
     dataReady,
+    touchItemVisit,
+    getTotalStorageUsed,
+    checkAndEvict,
   } = useIndexedDB();
   const [googleUserEmail, setGoogleUserEmail] = useState(null);
   // 'loading' | 'master' | 'editor' | 'viewer' | 'unauthorized'
@@ -132,6 +135,17 @@ const App = () => {
     const updated = channels.find((c) => c.id === currentChannel.id);
     if (updated) setCurrentChannel(updated);
   }, [channels]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Update lastVisitedAt when user opens an item.
+  useEffect(() => {
+    if (!currentVideo) return;
+    touchItemVisit(currentVideo.id, currentVideo.idbStore);
+  }, [currentVideo?.id, currentVideo?.idbStore]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Run LRU eviction check once after initial data load.
+  useEffect(() => {
+    if (dataReady) checkAndEvict();
+  }, [dataReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // On startup, silently check every channel for new videos and update IndexedDB.
   useEffect(() => {
@@ -359,6 +373,7 @@ const App = () => {
             setItemSharedWith,
             renameItem,
             getMergedLibraryItems,
+            getTotalStorageUsed,
             onGoogleUserEmail: setGoogleUserEmail,
             onDriveCredentialsChanged: recheckDriveOAuthGate,
             loadItems,
