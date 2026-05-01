@@ -665,20 +665,40 @@ export const Desk = ({
       const tag = t?.tagName?.toLowerCase?.() || '';
       if (tag === 'input' || tag === 'textarea' || t?.isContentEditable) return;
       const key = String(e.key || '').toLowerCase();
-      if (key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const slashPressed = e.code === 'Slash' || key === '/' || key === '?';
+      if (slashPressed && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
-        const rect = viewportRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const x = Math.max(12, Math.min(mouseRef.current.x, rect.width - 232));
-        const y = Math.max(12, Math.min(mouseRef.current.y, rect.height - 160));
-        setSlashMenu({ open: true, x, y });
+        if (slashMenu.open || connectMode) {
+          setSlashMenu((prev) => ({ ...prev, open: false }));
+          setConnectMode(false);
+          setConnectStartKey(null);
+        } else {
+          const rect = viewportRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          const x = Math.max(12, Math.min(mouseRef.current.x, rect.width - 232));
+          const y = Math.max(12, Math.min(mouseRef.current.y, rect.height - 160));
+          setSlashMenu({ open: true, x, y });
+          setConnectMode(true);
+        }
         return;
       }
-      if ((key === 'backspace' || key === 'delete') && selectedConnectionIds.length > 0) {
+      if ((key === 'backspace' || key === 'delete') && (selectedConnectionIds.length > 0 || selectedItemKeys.length > 0)) {
         e.preventDefault();
-        const selectedSet = new Set(selectedConnectionIds);
-        commitConnections((connectionsRef.current || []).filter((c) => !selectedSet.has(c.id)));
+        const selectedLineSet = new Set(selectedConnectionIds);
+        const selectedItemSet = new Set(selectedItemKeys);
+        if (selectedItemSet.size > 0) {
+          const nextLayout = { ...(layoutRef.current || {}) };
+          selectedItemSet.forEach((k) => { delete nextLayout[k]; });
+          commitLayout(nextLayout);
+          const nextConnections = (connectionsRef.current || []).filter((c) =>
+            !selectedLineSet.has(c.id) && !selectedItemSet.has(c.fromKey) && !selectedItemSet.has(c.toKey)
+          );
+          commitConnections(nextConnections, { recordHistory: false });
+        } else {
+          commitConnections((connectionsRef.current || []).filter((c) => !selectedLineSet.has(c.id)));
+        }
         setSelectedConnectionIds([]);
+        setSelectedItemKeys([]);
         setSelectedNodeIds([]);
         return;
       }
@@ -696,7 +716,7 @@ export const Desk = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [commitConnections, readOnly, redoDesk, selectedConnectionIds, undoDesk]);
+  }, [commitConnections, commitLayout, connectMode, readOnly, redoDesk, selectedConnectionIds, selectedItemKeys, slashMenu.open, undoDesk]);
 
   const onViewportPointerDown = useCallback((e) => {
     if (e.target === e.currentTarget && e.button === 0 && !spaceRef.current) {
@@ -709,6 +729,8 @@ export const Desk = ({
       setSelectedItemKeys([]);
       setSelectedNodeIds([]);
       setSlashMenu((prev) => prev.open ? { ...prev, open: false } : prev);
+      setConnectMode(false);
+      setConnectStartKey(null);
     }
     if (e.button === 1 || (e.button === 0 && spaceRef.current)) {
       e.preventDefault();
@@ -1059,6 +1081,36 @@ export const Desk = ({
       React.createElement(
         'svg',
         { style: { position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' } },
+        React.createElement(
+          'defs',
+          null,
+          React.createElement(
+            'marker',
+            {
+              id: 'desk-conn-arrow',
+              markerWidth: 8,
+              markerHeight: 8,
+              refX: 7,
+              refY: 3,
+              orient: 'auto',
+              markerUnits: 'strokeWidth',
+            },
+            React.createElement('path', { d: 'M0,0 L0,6 L7,3 z', fill: '#60a5fa' })
+          ),
+          React.createElement(
+            'marker',
+            {
+              id: 'desk-conn-arrow-selected',
+              markerWidth: 8,
+              markerHeight: 8,
+              refX: 7,
+              refY: 3,
+              orient: 'auto',
+              markerUnits: 'strokeWidth',
+            },
+            React.createElement('path', { d: 'M0,0 L0,6 L7,3 z', fill: '#c4b5fd' })
+          )
+        ),
         visibleConnections.map(({ conn, points }) =>
           React.createElement(
             'g',
@@ -1068,6 +1120,7 @@ export const Desk = ({
               stroke: selectedConnectionIds.includes(conn.id) ? '#c4b5fd' : '#60a5fa',
               strokeWidth: selectedConnectionIds.includes(conn.id) ? 3 : 2,
               fill: 'none',
+              markerEnd: selectedConnectionIds.includes(conn.id) ? 'url(#desk-conn-arrow-selected)' : 'url(#desk-conn-arrow)',
               pointerEvents: connectMode ? 'stroke' : 'none',
               style: { pointerEvents: connectMode ? 'stroke' : 'none' },
               onPointerDown: (e) => {
@@ -1294,29 +1347,7 @@ export const Desk = ({
         onPointerDown: (e) => e.stopPropagation(),
       },
       React.createElement('p', { style: { color: '#9ca3af', fontSize: 11, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'Connections'),
-      React.createElement(
-        'button',
-        {
-          onClick: () => {
-            setConnectMode((v) => !v);
-            setConnectStartKey(null);
-            setSlashMenu((prev) => ({ ...prev, open: false }));
-          },
-          style: {
-            width: '100%',
-            border: '1px solid #374151',
-            borderRadius: 8,
-            background: connectMode ? '#4f46e5' : '#111827',
-            color: connectMode ? '#fff' : '#d1d5db',
-            padding: '7px 9px',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-            marginBottom: 8,
-          },
-        },
-        connectMode ? 'Exit Connect Mode' : 'Connect Items'
-      ),
+      React.createElement('p', { style: { color: '#a5b4fc', fontSize: 11, lineHeight: 1.5, marginBottom: 8 } }, 'Line edit mode is active. Press "/" again to exit.'),
       connectMode && React.createElement('p', { style: { color: '#a5b4fc', fontSize: 11, lineHeight: 1.5, marginBottom: 8 } }, connectStartKey ? 'Select the second item to complete line.' : 'Click first item, then second item.'),
       connectMode && connectStartKey && React.createElement(
         'button',
@@ -1338,44 +1369,6 @@ export const Desk = ({
           },
         },
         'Cancel Selection'
-      ),
-      (connectionsRef.current || []).length > 0 && React.createElement(
-        'button',
-        {
-          onClick: () => {
-            commitConnections([]);
-            setSlashMenu((prev) => ({ ...prev, open: false }));
-          },
-          style: {
-            width: '100%',
-            border: '1px solid #7f1d1d',
-            borderRadius: 8,
-            background: '#111827',
-            color: '#fca5a5',
-            padding: '6px 8px',
-            fontSize: 12,
-            cursor: 'pointer',
-          },
-        },
-        'Clear All Lines'
-      ),
-      React.createElement(
-        'button',
-        {
-          onClick: () => setSlashMenu((prev) => ({ ...prev, open: false })),
-          style: {
-            width: '100%',
-            border: '1px solid #374151',
-            borderRadius: 8,
-            background: '#111827',
-            color: '#9ca3af',
-            padding: '6px 8px',
-            fontSize: 12,
-            cursor: 'pointer',
-            marginTop: 8,
-          },
-        },
-        'Close'
       )
     ),
     // Zoom indicator
