@@ -8,11 +8,12 @@ InfoDepo is a browser-only app (no backend database). Content is stored in Index
 User
  └── Browser
       ├── React app (Vite)
-      │    ├── Library (items/channels, sync, sharing)
+      │    ├── Library (items/channels/desks, sync, sharing)
+      │    ├── Desk (infinite canvas for item layout)
       │    ├── Reader (PDF/TXT/MD/YouTube)
       │    └── Explorer (web page → markdown note)
       ├── reader.html (EPUB in new tab)
-      └── IndexedDB (InfoDepo, v7)
+      └── IndexedDB (InfoDepo, v8)
 ```
 
 ## Current component map
@@ -21,14 +22,19 @@ User
 App.js
 ├── GoogleLoginGate.js      # step 1: Google sign-in (all users when credentials exist)
 ├── DriveFolderGate.js      # step 2: owner/editor folder setup (viewer skips)
-├── Header.js               # top bar, user email + role badge, manage users (master)
+├── Header.js               # top bar, user email + role badge, system settings (editor+), manage users (master)
 │   └── UserConfigModal.js  # edits config.json users map
-├── Library.js              # grid, sync, upload, item-level sharedWith, peer sync for viewer
+├── NewNoteModal.js         # owned by App; shared by Library and Desk
+├── NewYoutubeModal.js      # owned by App; shared by Library and Desk
+├── NewChannelModal.js      # owned by App; shared by Library and Desk
+├── Library.js              # grid, sync, upload, item-level sharedWith, peer sync for viewer, system settings modal
+│   ├── AddContentDropdown.js  # reusable dropdown: new note / YouTube / channel / file / desk
 │   ├── DataTile.js         # item/channel cards with tags + sharedWith editor
-│   ├── NewNoteModal.js
-│   ├── NewYoutubeModal.js
-│   ├── NewChannelModal.js
+│   ├── DeskTile.js         # library-grid tile for desk records
 │   └── DeleteContentModal.js
+├── Desk.js                 # infinite canvas with pan/zoom, drag, dot-grid background
+│   ├── AddContentDropdown.js  # same component reused here
+│   └── DeskTile.js
 ├── YoutubeChannelViewer.js
 └── Reader.js
     ├── PdfViewer.js
@@ -70,6 +76,14 @@ See [sharing-mechanism.md](sharing-mechanism.md).
 3. write owner index (`_infodepo_index.json`)
 4. sync shared content from peers (if configured)
 
+### Desk mode
+
+Users create named desks that hold a `layout` map of item positions (`{ [key]: { x, y } }`). Each desk is backed up to Drive as `<name>.desk.json`. Items, channels, and other desks can be placed on the canvas. Layout changes are committed to IndexedDB on drag-end and synced to Drive on the next owner pipeline run.
+
+The Desk canvas toolbar (top-right) provides two ways to add content:
+- **InlineAddSearch** — searches existing library items and places them on the canvas on click.
+- **AddContentDropdown** — creates new content (note, YouTube, channel, file); newly created items are automatically placed on the current desk via `addToDeskIfActive` in `App.js`.
+
 ### Viewer sync
 
 `syncSharedFromPeers`:
@@ -89,9 +103,10 @@ The limit is persisted in `localStorage` (`infodepo_sync_settings`) and is adjus
 
 | File | Purpose |
 |------|---------|
-| `App.js` | startup gates, role resolution, main routing, visit tracking, eviction trigger |
+| `App.js` | startup gates, role resolution, main routing, visit tracking, eviction trigger, add-content modal state, `addToDeskIfActive` |
 | `hooks/useIndexedDB.js` | IndexedDB CRUD, sync helpers, storage quota (`touchItemVisit`, `getTotalStorageUsed`, `evictLeastRecentlyVisited`, `checkAndEvict`) |
-| `components/Library.js` | sync UI, tile actions, share ACL/update orchestration, storage settings UI |
+| `components/Library.js` | sync UI, tile actions, share ACL/update orchestration, storage settings UI, system settings modal |
+| `components/AddContentDropdown.js` | reusable "+ Add Content" dropdown used in Library and Desk |
 | `utils/syncSettings.js` | storage limit persistence (`maxStorageGB`, default 500) |
 | `utils/driveSync.js` | backup + folder pull engine |
 | `utils/libraryDriveSync.js` | owner sync orchestration |
@@ -99,6 +114,8 @@ The limit is persisted in `localStorage` (`infodepo_sync_settings`) and is adjus
 | `utils/peerSync.js` | peer discovery + viewer download/prune |
 | `utils/driveSharePermissions.js` | apply/revoke Drive reader permissions |
 | `utils/userConfig.js` | parse config users map and role/folder helpers |
+| `components/Desk.js` | infinite-canvas component (pan/zoom, drag, add/remove items) |
+| `components/DeskTile.js` | library grid tile for desk records |
 
 ## Current config.json shape
 

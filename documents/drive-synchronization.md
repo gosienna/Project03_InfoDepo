@@ -7,7 +7,7 @@ InfoDepo synchronization is now based on owner folders plus item-level sharing m
 | File | Role |
 |------|------|
 | `utils/libraryDriveSync.js` | `runOwnerSyncPipeline` orchestration |
-| `utils/driveSync.js` | backup and folder pull implementation |
+| `utils/driveSync.js` | backup and folder pull implementation; recognizes `.desk.json` files |
 | `utils/ownerIndex.js` | write/read `_infodepo_index.json` |
 | `utils/peerSync.js` | peer discovery/download/prune for shared content |
 | `components/Library.js` | runs manual/startup sync and viewer peer sync |
@@ -23,6 +23,8 @@ InfoDepo synchronization is now based on owner folders plus item-level sharing m
 
 Returned summary includes `backed`, `backupFailed`, `added`, `updated`, `skipped`, `removed`, `peerAdded`, `peerRemoved`, `peerFailed`.
 
+Desk records are backed up as `<name>.desk.json` with `_type: 'infodepo-desk'` marker. The pull step recognizes this marker and calls `upsertDriveDesk` to sync desk layouts from Drive.
+
 ## Viewer shared-content sync
 
 For `viewer`, `Library.js` triggers `syncSharedFromPeers` once after role/config are ready:
@@ -34,6 +36,26 @@ For `viewer`, `Library.js` triggers `syncSharedFromPeers` once after role/config
 5. download and upsert remaining shared entries
 
 This keeps viewer IndexedDB aligned when owner revokes sharing.
+
+## Desk backup and sync
+
+Desk records are serialized to JSON and uploaded to the owner's Drive folder as `<name>.desk.json`.
+
+File format:
+```json
+{
+  "_type": "infodepo-desk",
+  "name": "My Desk",
+  "layout": { "notes:3": { "x": 120, "y": 80 }, "channel:1": { "x": 400, "y": 200 } },
+  "tags": [],
+  "sharedWith": [],
+  "ownerEmail": "user@example.com"
+}
+```
+
+During `syncDriveToLocal`, files with `_type === 'infodepo-desk'` are routed to `upsertDriveDesk` in `useIndexedDB.js`. The `DESK_JSON_MARKER = 'infodepo-desk'` constant is exported from `utils/driveSync.js`.
+
+Dirty detection uses the same `localModifiedAt > modifiedTime` logic as items.
 
 ## Dirty detection
 

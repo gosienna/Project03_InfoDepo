@@ -1,6 +1,7 @@
 
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { DataTile } from './DataTile.js';
+import { DeskTile } from './DeskTile.js';
 import { BookIcon } from './icons/BookIcon.js';
 import { getDriveCredentials, hasGoogleApiKeyOrProxy } from '../utils/driveCredentials.js';
 import { getDriveFolderId, setDriveFolderId, parseDriveFolderIdInput } from '../utils/driveFolderStorage.js';
@@ -11,9 +12,7 @@ import {
   clearAllStoredAccessTokens,
   getAllStoredAccessTokens,
 } from '../utils/driveOAuthStorage.js';
-import { NewNoteModal } from './NewNoteModal.js';
-import { NewYoutubeModal } from './NewYoutubeModal.js';
-import { NewChannelModal } from './NewChannelModal.js';
+import { AddContentDropdown } from './AddContentDropdown.js';
 import { CHANNEL_JSON_MARKER } from '../utils/driveSync.js';
 import { runOwnerSyncPipeline } from '../utils/libraryDriveSync.js';
 import { libraryItemKey } from '../utils/libraryItemKey.js';
@@ -49,11 +48,13 @@ const SEARCH_SUGGEST_MAX = 15;
 const LIBRARY_PAGE_SIZE = 20;
 
 export const Library = ({
-  items, channels,
-  onSelectItem, onSelectChannel, onAddItem, onDeleteItem, onClearLibrary,
+  items, channels, desks,
+  onSelectItem, onSelectChannel, onSelectDesk, onAddDesk, onDeleteDesk,
+  onAddItem, onDeleteItem, onClearLibrary,
   onSetDriveId, onSetNoteFolderData, onGetAllImages, getImagesForNote,
   onAddChannel, onDeleteChannel,
   getChannelByDriveId, upsertDriveChannel,
+  getDeskByDriveId, upsertDriveDesk,
   getBookByDriveId, getBookByName, upsertDriveBook,
   deleteItemByDriveId, deleteChannelByDriveId, getLocalRecordsByOwnerEmail,
   getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
@@ -73,10 +74,15 @@ export const Library = ({
   userType,
   userConfig,
   googleUserEmail,
+  isSystemSettingsOpen,
+  setIsSystemSettingsOpen,
+  onOpenNewNote,
+  onOpenYoutube,
+  onOpenChannel,
+  onOpenFile,
 }) => {
   const isEditor = userType === 'master' || userType === 'editor';
   const normalizedUserEmail = String(googleUserEmail || '').trim().toLowerCase();
-  const fileInputRef      = useRef(null);
   const searchInputRef    = useRef(null);
   const uploadTokenRef    = useRef(null);
   const lastScopeRef      = useRef('');
@@ -88,14 +94,9 @@ export const Library = ({
   const [uploadStatuses,   setUploadStatuses]   = useState({});
   const credentials = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
-  const [isSystemSettingsOpen, setIsSystemSettingsOpen] = useState(false);
   const [driveFolderDraft, setDriveFolderDraft] = useState('');
   const [storageUsed, setStorageUsed] = useState(null);
   const [storageLimitDraft, setStorageLimitDraft] = useState(() => getSyncSettings().maxStorageGB);
-  const [isNewNoteOpen,    setIsNewNoteOpen]    = useState(false);
-  const [isYoutubeOpen,    setIsYoutubeOpen]    = useState(false);
-  const [isChannelOpen,    setIsChannelOpen]    = useState(false);
-  const [isAddMenuOpen,    setIsAddMenuOpen]    = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
 
   // Search state
@@ -466,7 +467,7 @@ export const Library = ({
       setSyncResult(null);
       try {
         const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
-        const peerResult = await syncSharedFromPeers({
+        await syncSharedFromPeers({
           accessToken: token,
           myEmail: googleUserEmail,
           config: userConfig,
@@ -610,13 +611,6 @@ export const Library = ({
     }
   };
 
-  const handleFileChange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    await onAddItem(file.name, file.type, file);
-    e.target.value = '';
-  };
-
   const handleConfirmClear = () => {
     if (window.confirm('Delete the local database and reinitialize? All locally stored content will be removed. This cannot be undone.')) {
       onClearLibrary();
@@ -653,6 +647,7 @@ export const Library = ({
         folderId: driveFolderId,
         items,
         channels,
+        desks,
         ownerEmail: googleUserEmail,
         config: userConfig,
         onSetDriveId: (id, storeName, driveId, syncMeta = null) =>
@@ -671,6 +666,9 @@ export const Library = ({
         getChannelByDriveId,
         upsertDriveChannel: (driveFile, channelData) =>
           upsertDriveChannel(driveFile, channelData, { silent: true }),
+        getDeskByDriveId,
+        upsertDriveDesk: (driveFile, deskData) =>
+          upsertDriveDesk(driveFile, deskData, { silent: true }),
         getLocalRecordsByOwnerEmail,
         deleteItemByDriveId,
         deleteChannelByDriveId,
@@ -742,8 +740,14 @@ export const Library = ({
     return true;
   }), [channels, activeFilters, query]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const totalGridCount = items.length + (channels || []).length;
-  const filteredGridCount = filteredItems.length + filteredChannels.length;
+  const filteredDesks = useMemo(() => (desks || []).filter(d => {
+    if (activeFilters.size > 0 && !activeFilters.has('desks')) return false;
+    if (query && !matchesNameOrTags(d.name, d.tags)) return false;
+    return true;
+  }), [desks, activeFilters, query]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const totalGridCount = items.length + (channels || []).length + (desks || []).length;
+  const filteredGridCount = filteredItems.length + filteredChannels.length + filteredDesks.length;
 
   const sortedLibraryRows = useMemo(() => {
     const rows = [];
@@ -753,8 +757,11 @@ export const Library = ({
     for (const ch of filteredChannels) {
       rows.push({ kind: 'channel', data: ch, sortMs: modifiedTimeSortMs(ch) });
     }
+    for (const d of filteredDesks) {
+      rows.push({ kind: 'desk', data: d, sortMs: modifiedTimeSortMs(d) });
+    }
     return applyLibraryDisplayPolicy(rows, libraryDisplayPolicy);
-  }, [filteredItems, filteredChannels, libraryDisplayPolicy]);
+  }, [filteredItems, filteredChannels, filteredDesks, libraryDisplayPolicy]);
 
   const libraryPageRows = useMemo(() => {
     const start = libraryPageIndex * LIBRARY_PAGE_SIZE;
@@ -931,106 +938,17 @@ export const Library = ({
         hasCredentials && syncButton,
 
         // Add Content dropdown (editor/master only)
-        isEditor && React.createElement(
-          'div',
-          { className: 'relative' },
-          React.createElement(
-            'button',
-            {
-              onClick: () => setIsAddMenuOpen(prev => !prev),
-              className: 'flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-5 rounded-xl transition-all active:scale-95'
-            },
-            React.createElement(
-              'svg',
-              { xmlns: 'http://www.w3.org/2000/svg', className: 'h-5 w-5', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
-              React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M12 4v16m8-8H4' })
-            ),
-            'Add Content',
-            React.createElement(
-              'svg',
-              { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
-              React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M19 9l-7 7-7-7' })
-            )
-          ),
-          isAddMenuOpen && React.createElement(
-            'div',
-            {
-              className: 'absolute right-0 mt-1 w-48 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden',
-              onMouseLeave: () => setIsAddMenuOpen(false)
-            },
-            React.createElement(
-              'button',
-              {
-                onClick: () => { setIsAddMenuOpen(false); setIsNewNoteOpen(true); },
-                className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors'
-              },
-              React.createElement(
-                'svg',
-                { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4 text-emerald-400', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
-                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z' })
-              ),
-              'New Note'
-            ),
-            React.createElement(
-              'button',
-              {
-                onClick: () => { setIsAddMenuOpen(false); setIsYoutubeOpen(true); },
-                className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors'
-              },
-              React.createElement(
-                'svg',
-                { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4 text-red-400', fill: 'currentColor', viewBox: '0 0 24 24' },
-                React.createElement('path', { d: 'M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z' })
-              ),
-              'Add YouTube'
-            ),
-            React.createElement(
-              'button',
-              {
-                onClick: () => { setIsAddMenuOpen(false); setIsChannelOpen(true); },
-                className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors'
-              },
-              React.createElement(
-                'svg',
-                { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4 text-red-400', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
-                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10' })
-              ),
-              'Add Channel'
-            ),
-            React.createElement(
-              'button',
-              {
-                onClick: () => { setIsAddMenuOpen(false); fileInputRef.current?.click(); },
-                className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors'
-              },
-              React.createElement(BookIcon, { className: 'h-4 w-4 text-indigo-400' }),
-              'Add File'
-            ),
-          )
-        ),
-        isEditor && React.createElement('input', {
-          ref: fileInputRef,
-          type: 'file',
-          accept: '.epub,.pdf,.txt,.md,application/epub+zip,application/pdf,text/plain,text/markdown',
-          onChange: handleFileChange,
-          className: 'hidden'
+        isEditor && React.createElement(AddContentDropdown, {
+          onNewNote: onOpenNewNote,
+          onAddYoutube: onOpenYoutube,
+          onAddChannel: onOpenChannel,
+          onAddFile: onOpenFile,
+          onAddDesk: onAddDesk ? () => {
+            const name = window.prompt('Desk name:', 'New Desk');
+            if (name && name.trim()) onAddDesk(name.trim());
+          } : undefined,
         }),
 
-        // System settings button (editor/master only)
-        isEditor && React.createElement(
-          'button',
-          {
-            onClick: () => setIsSystemSettingsOpen(true),
-            className: 'text-gray-500 hover:text-gray-300 p-2 rounded-xl hover:bg-gray-700 transition-colors',
-            title: 'System settings'
-          },
-          React.createElement(
-            'svg',
-            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-5 w-5', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
-            React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z' }),
-            React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M15 12a3 3 0 11-6 0 3 3 0 016 0z' })
-          )
-        )
       )
     ),
 
@@ -1248,6 +1166,19 @@ export const Library = ({
                   availableTags,
                 });
               }
+              if (row.kind === 'desk') {
+                const d = row.data;
+                return React.createElement(DeskTile, {
+                  key: `desk-${d.id}`,
+                  desk: d,
+                  onSelect: onSelectDesk,
+                  onDelete: isEditor && onDeleteDesk ? (desk) => {
+                    if (window.confirm(`Remove desk "${desk.name}"?`)) onDeleteDesk(desk.id);
+                  } : undefined,
+                  onRename: isEditor ? (desk, name) => renameItem(desk.id, 'desks', name) : undefined,
+                  readOnly: !isEditor,
+                });
+              }
               return null;
             })
           ),
@@ -1349,7 +1280,7 @@ export const Library = ({
               isEditor && React.createElement(
                 'button',
                 {
-                  onClick: () => fileInputRef.current?.click(),
+                  onClick: onOpenFile,
                   className: 'mt-6 inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-6 rounded-xl transition-all'
                 },
                 React.createElement(BookIcon, { className: 'h-5 w-5' }),
@@ -1357,24 +1288,6 @@ export const Library = ({
               )
             )
           : null,
-
-    // New note modal
-    isNewNoteOpen && React.createElement(NewNoteModal, {
-      onSave:  onAddItem,
-      onClose: () => setIsNewNoteOpen(false),
-    }),
-
-    // New YouTube modal
-    isYoutubeOpen && React.createElement(NewYoutubeModal, {
-      onSave:  onAddItem,
-      onClose: () => setIsYoutubeOpen(false),
-    }),
-
-    // New Channel modal
-    isChannelOpen && React.createElement(NewChannelModal, {
-      onSave:  onAddChannel,
-      onClose: () => setIsChannelOpen(false),
-    }),
 
     // System settings modal
     isSystemSettingsOpen && React.createElement(

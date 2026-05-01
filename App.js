@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from './components/Header.js';
 import { Library } from './components/Library.js';
 import { GoogleLoginGate } from './components/GoogleLoginGate.js';
@@ -7,6 +7,7 @@ import { DriveFolderGate } from './components/DriveFolderGate.js';
 import { Reader } from './components/Reader.js';
 import { YoutubeChannelViewer } from './components/YoutubeChannelViewer.js';
 import { Explorer } from './components/Explorer.js';
+import { Desk } from './components/Desk.js';
 import { useIndexedDB } from './hooks/useIndexedDB.js';
 import { libraryItemKey } from './utils/libraryItemKey.js';
 import { needsGoogleSignIn } from './utils/driveOAuthGateCheck.js';
@@ -19,10 +20,13 @@ import { fetchUserConfig, resolveUserType } from './utils/userConfig.js';
 import { clearAllStoredAccessTokens } from './utils/driveOAuthStorage.js';
 import { fetchGoogleUserEmail } from './utils/googleUser.js';
 import { fetchNewChannelVideos } from './utils/youtubeApi.js';
+import { NewNoteModal } from './components/NewNoteModal.js';
+import { NewYoutubeModal } from './components/NewYoutubeModal.js';
+import { NewChannelModal } from './components/NewChannelModal.js';
 
 const App = () => {
   const {
-    items, channels, addItem, updateItem, deleteItem, clearAll, isInitialized,
+    items, channels, desks, addItem, updateItem, deleteItem, clearAll, isInitialized,
     addImage, getImagesForNote, getAllImages,
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
     setItemDriveId, setNoteFolderData,
@@ -30,6 +34,8 @@ const App = () => {
     getChannelByDriveId, upsertDriveChannel,
     getBookByDriveId, getBookByName, upsertDriveBook,
     deleteItemByDriveId, deleteChannelByDriveId, getLocalRecordsByOwnerEmail,
+    addDesk, deleteDesk, setDeskLayout,
+    getDeskByDriveId, upsertDriveDesk,
     setRecordTags,
     setItemSharedWith,
     renameItem,
@@ -53,13 +59,19 @@ const App = () => {
   const [userConfig, setUserConfig] = useState(null);
   const [currentVideo, setCurrentVideo] = useState(null);
   const [currentChannel, setCurrentChannel] = useState(null);
+  const [currentDesk, setCurrentDesk] = useState(null);
   const [view, setView] = useState('library');
-  const [mode, setMode] = useState('library'); // 'library' | 'explorer'
+  const [mode, setMode] = useState('library'); // 'library' | 'desk' | 'explorer'
   /** Step 1 gate: Google sign-in (all users). True when credentials configured but no valid token. */
   const [loginGateActive, setLoginGateActive] = useState(() => needsGoogleSignIn());
   /** Step 2 gate: Drive folder setup (MASTER/EDITOR only). True until folder ID is saved. */
   const [driveFolderReady, setDriveFolderReady] = useState(() => !!getDriveFolderId().trim());
   const [pendingChannelDelete, setPendingChannelDelete] = useState(null);
+  const [isSystemSettingsOpen, setIsSystemSettingsOpen] = useState(false);
+  const [isNewNoteOpen, setIsNewNoteOpen] = useState(false);
+  const [isYoutubeOpen, setIsYoutubeOpen] = useState(false);
+  const [isChannelOpen, setIsChannelOpen] = useState(false);
+  const fileInputRef = useRef(null);
 
   const recheckDriveOAuthGate = useCallback(() => {
     setLoginGateActive(needsGoogleSignIn());
@@ -136,6 +148,20 @@ const App = () => {
     if (updated) setCurrentChannel(updated);
   }, [channels]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Keep currentDesk in sync with IndexedDB (layout saves update the desks array).
+  useEffect(() => {
+    if (!currentDesk) return;
+    const updated = desks.find((d) => d.id === currentDesk.id);
+    if (updated) setCurrentDesk(updated);
+  }, [desks]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When switching to desk mode, auto-select the most-recently-modified desk.
+  useEffect(() => {
+    if (mode === 'desk' && !currentDesk && desks.length > 0) {
+      setCurrentDesk(desks[0]);
+    }
+  }, [mode, desks]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Update lastVisitedAt when user opens an item.
   useEffect(() => {
     if (!currentVideo) return;
@@ -200,6 +226,45 @@ const App = () => {
   const handleSelectChannel = (channel) => {
     setCurrentChannel(channel);
     setView('channel');
+  };
+
+  const handleSelectDesk = (desk) => {
+    setCurrentDesk(desk);
+    setMode('desk');
+    setView('library');
+  };
+
+  const handleAddDesk = async (name) => {
+    const id = await addDesk(name);
+    const newDesk = { id, name, layout: {} };
+    setCurrentDesk(newDesk);
+    setMode('desk');
+    setView('library');
+  };
+
+  const inferStore = (name, type) => {
+    const n = (name || '').toLowerCase();
+    const mime = typeof type === 'string' ? type.trim().toLowerCase() : '';
+    if (n.endsWith('.youtube') || mime === 'application/x-youtube') return 'videos';
+    if (/\.(md|markdown|mdown|mkd)$/i.test(n) || mime === 'text/markdown' || mime === 'text/x-markdown' || mime === 'text/md') return 'notes';
+    return 'books';
+  };
+
+  const addToDeskIfActive = useCallback((store, id) => {
+    if (mode !== 'desk' || !currentDesk || id == null) return;
+    const key = store === 'channel' ? `channel:${id}` : `${store}:${id}`;
+    const currentLayout = currentDesk.layout || {};
+    const count = Object.keys(currentLayout).length;
+    const newLayout = { ...currentLayout, [key]: { x: 60 + (count * 20) % 200, y: 60 + (count * 20) % 100 } };
+    setDeskLayout(currentDesk.id, newLayout);
+  }, [mode, currentDesk, setDeskLayout]);
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const id = await addItem(file.name, file.type, file);
+    addToDeskIfActive(inferStore(file.name, file.type), id);
+    e.target.value = '';
   };
 
   const driveCreds = getDriveCredentials();
@@ -329,22 +394,76 @@ const App = () => {
       onModeChange: setMode,
       showModeToggle: view === 'library',
       userType,
+      onSystemSettings: isEditorOrMaster ? () => setIsSystemSettingsOpen(true) : undefined,
+    }),
+    React.createElement('input', {
+      ref: fileInputRef,
+      type: 'file',
+      accept: '.epub,.pdf,.txt,.md,application/epub+zip,application/pdf,text/plain,text/markdown',
+      onChange: handleFileChange,
+      className: 'hidden',
+    }),
+    isNewNoteOpen && React.createElement(NewNoteModal, {
+      onSave: async (name, type, data) => { const id = await addItem(name, type, data); addToDeskIfActive('notes', id); },
+      onClose: () => setIsNewNoteOpen(false),
+    }),
+    isYoutubeOpen && React.createElement(NewYoutubeModal, {
+      onSave: async (name, type, data) => { const id = await addItem(name, type, data); addToDeskIfActive('videos', id); },
+      onClose: () => setIsYoutubeOpen(false),
+    }),
+    isChannelOpen && React.createElement(NewChannelModal, {
+      onSave: async (channelData) => { const id = await addChannel(channelData); addToDeskIfActive('channel', id); },
+      onClose: () => setIsChannelOpen(false),
     }),
     React.createElement(
       "main",
-      { className: `flex-grow flex flex-col min-h-0 ${mode === 'explorer' ? '' : 'p-4 sm:p-6 md:p-8'}` },
+      { className: `flex-grow flex flex-col min-h-0 ${(mode === 'explorer' || mode === 'desk') ? '' : 'p-4 sm:p-6 md:p-8'}` },
       mode === 'explorer'
         ? React.createElement(Explorer, {
             addItem,
             addImage,
             onSaved: () => setMode('library'),
           })
+        : mode === 'desk' && view === 'library'
+        ? currentDesk
+          ? React.createElement(Desk, {
+              desk: currentDesk,
+              items,
+              channels,
+              desks,
+              onSelectItem: handleSelectVideo,
+              onSelectChannel: handleSelectChannel,
+              onSelectDesk: handleSelectDesk,
+              onUpdateLayout: setDeskLayout,
+              readOnly: userType === 'viewer',
+              onOpenNewNote: () => setIsNewNoteOpen(true),
+              onOpenYoutube: () => setIsYoutubeOpen(true),
+              onOpenChannel: () => setIsChannelOpen(true),
+              onOpenFile: () => fileInputRef.current?.click(),
+            })
+          : React.createElement(
+              'div',
+              { className: 'flex flex-col items-center justify-center h-full gap-4' },
+              React.createElement('p', { className: 'text-gray-400 text-lg' }, 'No desk selected.'),
+              userType !== 'viewer' && React.createElement(
+                'button',
+                {
+                  onClick: () => handleAddDesk('New Desk'),
+                  className: 'bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 px-6 rounded-xl transition-all',
+                },
+                'Create First Desk'
+              )
+            )
         : view === 'library'
         ? React.createElement(Library, {
             items,
             channels,
+            desks,
             onSelectItem: handleSelectVideo,
             onSelectChannel: handleSelectChannel,
+            onSelectDesk: handleSelectDesk,
+            onAddDesk: userType !== 'viewer' ? handleAddDesk : undefined,
+            onDeleteDesk: userType !== 'viewer' ? deleteDesk : undefined,
             onAddItem: addItem,
             onDeleteItem: deleteItem,
             onClearLibrary: clearAll,
@@ -356,6 +475,8 @@ const App = () => {
             onDeleteChannel: deleteChannel,
             getChannelByDriveId,
             upsertDriveChannel,
+            getDeskByDriveId,
+            upsertDriveDesk,
             getBookByDriveId,
             getBookByName,
             upsertDriveBook,
@@ -382,6 +503,12 @@ const App = () => {
             userType,
             userConfig,
             googleUserEmail,
+            isSystemSettingsOpen,
+            setIsSystemSettingsOpen,
+            onOpenNewNote: () => setIsNewNoteOpen(true),
+            onOpenYoutube: () => setIsYoutubeOpen(true),
+            onOpenChannel: () => setIsChannelOpen(true),
+            onOpenFile: () => fileInputRef.current?.click(),
           })
         : view === 'channel' && currentChannel
         ? React.createElement(YoutubeChannelViewer, {

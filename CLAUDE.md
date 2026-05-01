@@ -54,14 +54,16 @@ No backend or serverless functions.
 ```
 App.js                            # View switching (library ↔ reader ↔ channel), IndexedDB init, OAuth gate
 ├── GoogleOAuthGate.js            # First-run: Drive folder ID + Google sign-in
-├── Header.js                     # Nav bar, back button, user email
-├── Library.js                    # Item/channel/share grid, search/filters, Drive sync/backup, share filter
+├── Header.js                     # Nav bar, back button, user email, system settings (editor+), manage users (master)
+├── NewNoteModal.js               # Owned by App; triggered from Library and Desk
+├── NewYoutubeModal.js            # Owned by App; triggered from Library and Desk
+├── NewChannelModal.js            # Owned by App; triggered from Library and Desk
+├── Library.js                    # Item/channel/share grid, search/filters, Drive sync/backup, system settings modal
+│   ├── AddContentDropdown.js     # Reusable "+ Add Content" dropdown (also used in Desk)
 │   ├── DataTile.js               # Grid tiles for items, channels, and shares (same shell)
 │   ├── SharesEditorModal.js      # Owner share editor / receiver read-only view
-│   ├── DevDriveBrowser.js        # OAuth + Drive API v3 folder browser
-│   ├── NewNoteModal.js           # Create a new Markdown note
-│   ├── NewChannelModal.js        # YouTube channel URL input + API fetch
-│   └── NewYoutubeModal.js        # Single YouTube video URL input
+│   └── DevDriveBrowser.js        # OAuth + Drive API v3 folder browser
+├── Desk.js                       # Infinite canvas; top-right toolbar: InlineAddSearch + AddContentDropdown
 ├── YoutubeChannelViewer.js       # Sortable video grid for a channel (reuses DataTile); auto-refreshes for new videos on mount
 └── Reader.js                     # Dispatches to viewer by file extension / MIME type
     ├── PdfViewer.js

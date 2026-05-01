@@ -6,13 +6,13 @@ import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-async function renderPageToCanvas(page, containerWidth) {
-  const base = page.getViewport({ scale: 1 });
+async function renderPageToCanvas(page, containerWidth, rotationDeg = 0) {
+  const base = page.getViewport({ scale: 1, rotation: rotationDeg });
   const padding = 16;
   const cssW = Math.max(100, containerWidth - padding * 2);
   const userScale = cssW / base.width;
   const outputScale = window.devicePixelRatio || 1;
-  const viewport = page.getViewport({ scale: userScale * outputScale });
+  const viewport = page.getViewport({ scale: userScale * outputScale, rotation: rotationDeg });
 
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
@@ -27,7 +27,7 @@ async function renderPageToCanvas(page, containerWidth) {
   canvas.className = 'max-w-full shadow-md rounded bg-white';
 
   await page.render({ canvasContext: ctx, viewport }).promise;
-  return { canvas, userScale, outputScale, viewportCss: page.getViewport({ scale: userScale }) };
+  return { canvas, userScale, outputScale, viewportCss: page.getViewport({ scale: userScale, rotation: rotationDeg }) };
 }
 
 async function buildTextLayerDiv(page, viewportCss) {
@@ -238,6 +238,28 @@ export const PdfViewer = ({
     };
   }, [panelOpen]); // re-register when panel mounts/unmounts
   const autoSaveMsgTimerRef = useRef(null);
+  const [rotationDeg, setRotationDeg] = useState(0);
+  const [twoPageMode, setTwoPageMode] = useState(false);
+  const [displayPanelOpen, setDisplayPanelOpen] = useState(false);
+  const displayTabRef = useRef(null);
+  const displayPanelRef = useRef(null);
+  const displayCloseTimerRef = useRef(null);
+
+  function normalizeRotationDeg(value) {
+    const normalized = ((value % 360) + 360) % 360;
+    return normalized;
+  }
+
+  function scheduleDisplayClose() {
+    displayCloseTimerRef.current = setTimeout(() => setDisplayPanelOpen(false), 150);
+  }
+
+  function cancelDisplayClose() {
+    if (displayCloseTimerRef.current) {
+      clearTimeout(displayCloseTimerRef.current);
+      displayCloseTimerRef.current = null;
+    }
+  }
 
   const jumpToWrapper = (wrapper, mount) => {
     if (!wrapper || !mount) return;
@@ -256,6 +278,54 @@ export const PdfViewer = ({
       mount.scrollTop = targetTop;
     });
   };
+
+  useEffect(() => {
+    const tab = displayTabRef.current;
+    if (!tab) return;
+    const open = () => {
+      cancelDisplayClose();
+      setDisplayPanelOpen(true);
+    };
+    const close = () => scheduleDisplayClose();
+    const toggle = (e) => {
+      e.preventDefault();
+      cancelDisplayClose();
+      setDisplayPanelOpen((prev) => !prev);
+    };
+    tab.addEventListener('mouseenter', open);
+    tab.addEventListener('mouseleave', close);
+    tab.addEventListener('touchstart', toggle, { passive: false });
+    return () => {
+      tab.removeEventListener('mouseenter', open);
+      tab.removeEventListener('mouseleave', close);
+      tab.removeEventListener('touchstart', toggle);
+    };
+  }, []);
+
+  useEffect(() => {
+    const panel = displayPanelRef.current;
+    if (!panel) return;
+    const open = () => {
+      cancelDisplayClose();
+      setDisplayPanelOpen(true);
+    };
+    const close = () => scheduleDisplayClose();
+    panel.addEventListener('mouseenter', open);
+    panel.addEventListener('mouseleave', close);
+    panel.addEventListener('touchstart', open, { passive: true });
+    return () => {
+      panel.removeEventListener('mouseenter', open);
+      panel.removeEventListener('mouseleave', close);
+      panel.removeEventListener('touchstart', open);
+    };
+  }, [displayPanelOpen]);
+
+  useEffect(() => () => {
+    if (displayCloseTimerRef.current) {
+      clearTimeout(displayCloseTimerRef.current);
+      displayCloseTimerRef.current = null;
+    }
+  }, []);
 
   // PDF rendering effect
   useEffect(() => {
@@ -316,17 +386,20 @@ export const PdfViewer = ({
         if (cancelled || runId !== runIdRef.current) { cleanupPdf(); return; }
 
         const wrap = document.createElement('div');
-        wrap.className = 'flex flex-col items-center gap-4 py-4 px-2 w-full min-h-full';
+        wrap.className = twoPageMode
+          ? 'flex flex-col items-center gap-4 py-4 px-2 w-full min-h-full'
+          : 'flex flex-col items-center gap-4 py-4 px-2 w-full min-h-full';
         mount.appendChild(wrap);
 
         const newWrappers = [];
+        let currentRow = null;
 
         for (let i = 1; i <= numPages; i++) {
           if (cancelled || runId !== runIdRef.current) break;
 
           const page = await pdfDoc.getPage(i);
           const w = mount.clientWidth || containerWidth;
-          const { canvas, viewportCss } = await renderPageToCanvas(page, w);
+          const { canvas, viewportCss } = await renderPageToCanvas(page, w, rotationDeg);
 
           // position:relative wrapper so the SVG overlay (position:absolute) stays on top
           const pageWrapper = document.createElement('div');
@@ -339,7 +412,21 @@ export const PdfViewer = ({
           } catch (tlErr) {
             console.warn('PDF text layer failed:', tlErr);
           }
-          wrap.appendChild(pageWrapper);
+          if (twoPageMode) {
+            if ((i - 1) % 2 === 0) {
+              currentRow = document.createElement('div');
+              currentRow.style.display = 'flex';
+              currentRow.style.gap = '16px';
+              currentRow.style.width = '100%';
+              currentRow.style.alignItems = 'flex-start';
+              currentRow.style.justifyContent = 'center';
+              currentRow.style.flexWrap = 'nowrap';
+              wrap.appendChild(currentRow);
+            }
+            if (currentRow) currentRow.appendChild(pageWrapper);
+          } else {
+            wrap.appendChild(pageWrapper);
+          }
           newWrappers.push(pageWrapper);
           // Publish wrappers incrementally so page tracking/restore can work
           // before the full document finishes rendering.
@@ -374,7 +461,7 @@ export const PdfViewer = ({
       if (pdfDocRef.current) { pdfDocRef.current.destroy().catch(() => {}); pdfDocRef.current = null; }
       if (loadingTaskRef.current) { loadingTaskRef.current.destroy(); loadingTaskRef.current = null; }
     };
-  }, [data]);
+  }, [data, rotationDeg, twoPageMode]);
 
   useEffect(() => {
     didRestoreScrollRef.current = false;
@@ -1163,6 +1250,131 @@ export const PdfViewer = ({
   return React.createElement(
     'div',
     { className: 'relative w-full h-full bg-gray-800 rounded-lg shadow-lg flex flex-col min-h-0' },
+
+    // Hidden top edge tab for display controls
+    React.createElement('div', {
+      ref: displayTabRef,
+      style: {
+        position: 'fixed',
+        top: 70,
+        left: 0,
+        right: 0,
+        height: 18,
+        zIndex: 9998,
+        cursor: 'default',
+      },
+    }),
+
+    // Horizontal display controls panel
+    displayPanelOpen && React.createElement(
+      'div',
+      {
+        ref: displayPanelRef,
+        style: {
+          position: 'fixed',
+          top: 88,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 9999,
+          background: 'rgba(31,41,55,0.97)',
+          borderRadius: 10,
+          boxShadow: '0 8px 18px rgba(0,0,0,0.4)',
+          padding: '8px 10px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          maxWidth: 'calc(100% - 20px)',
+          overflowX: 'auto',
+        },
+      },
+      React.createElement(
+        'button',
+        {
+          type: 'button',
+          style: {
+            padding: '5px 10px',
+            borderRadius: 6,
+            border: 'none',
+            background: 'rgba(75,85,99,1)',
+            color: '#e5e7eb',
+            fontSize: 12,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          },
+          onClick: () => setRotationDeg((deg) => normalizeRotationDeg(deg - 90)),
+        },
+        'Rotate -90°'
+      ),
+      React.createElement(
+        'button',
+        {
+          type: 'button',
+          style: {
+            padding: '5px 10px',
+            borderRadius: 6,
+            border: 'none',
+            background: 'rgba(75,85,99,1)',
+            color: '#e5e7eb',
+            fontSize: 12,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          },
+          onClick: () => setRotationDeg((deg) => normalizeRotationDeg(deg + 90)),
+        },
+        'Rotate +90°'
+      ),
+      React.createElement(
+        'button',
+        {
+          type: 'button',
+          style: {
+            padding: '5px 10px',
+            borderRadius: 6,
+            border: 'none',
+            background: twoPageMode ? 'rgba(59,130,246,1)' : 'rgba(75,85,99,1)',
+            color: '#e5e7eb',
+            fontSize: 12,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          },
+          onClick: () => setTwoPageMode((prev) => !prev),
+        },
+        twoPageMode ? 'Two-page mode: ON' : 'Two-page mode'
+      ),
+      React.createElement(
+        'button',
+        {
+          type: 'button',
+          style: {
+            padding: '5px 10px',
+            borderRadius: 6,
+            border: 'none',
+            background: 'rgba(55,65,81,1)',
+            color: '#e5e7eb',
+            fontSize: 12,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          },
+          onClick: () => {
+            setRotationDeg(0);
+            setTwoPageMode(false);
+          },
+        },
+        'Reset display'
+      ),
+      React.createElement(
+        'span',
+        {
+          style: {
+            color: '#9ca3af',
+            fontSize: 11,
+            paddingLeft: 2,
+            whiteSpace: 'nowrap',
+          },
+        },
+        `Rotation: ${rotationDeg}°`
+      ),
+    ),
 
     // PDF scroll area
     status === 'loading' && React.createElement(

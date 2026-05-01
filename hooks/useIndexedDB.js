@@ -10,6 +10,7 @@ const NOTES_STORE    = 'notes';
 const VIDEOS_STORE   = 'videos';
 const IMAGES_STORE   = 'images';
 const CHANNELS_STORE = 'channels';
+const DESKS_STORE    = 'desks';
 const PDF_ANNOTATIONS_STORE = 'pdfAnnotations';
 
 const pdfAnnotationSidecarKey = (itemId, idbStore) => `${idbStore}:${itemId}`;
@@ -57,6 +58,7 @@ export const useIndexedDB = () => {
   const [db, setDb] = useState(null);
   const [items, setItems] = useState([]);
   const [channels, setChannels] = useState([]);
+  const [desks, setDesks] = useState([]);
   const [isInitialized, setIsInitialized] = useState(false);
   const [dataReady, setDataReady] = useState(false);
   const isEvicting = useRef(false);
@@ -94,6 +96,15 @@ export const useIndexedDB = () => {
           ')'
         );
       }
+      if (!database.objectStoreNames.contains(DESKS_STORE)) {
+        console.warn(
+          '[InfoDepo] IndexedDB is missing desks — close other tabs and reload so the DB can upgrade to version',
+          DB_VERSION,
+          '(current DB version:',
+          database.version,
+          ')'
+        );
+      }
       setDb(database);
       setIsInitialized(true);
     };
@@ -118,6 +129,11 @@ export const useIndexedDB = () => {
         s.createIndex('pdfDriveId', 'pdfDriveId', { unique: false });
         s.createIndex('annotationDriveId', 'annotationDriveId', { unique: false });
         s.createIndex('itemId', 'itemId', { unique: false });
+      }
+      // desks store (v8+; v9 bump repairs DBs that reached v8 before this existed)
+      if (!dbInstance.objectStoreNames.contains(DESKS_STORE)) {
+        const s = dbInstance.createObjectStore(DESKS_STORE, { keyPath: 'id', autoIncrement: true });
+        s.createIndex('driveId', 'driveId', { unique: false });
       }
       // v7: drop shares store, add sharedWith + ownerEmail to content stores
       if (event.oldVersion > 0 && event.oldVersion < 7) {
@@ -211,6 +227,19 @@ export const useIndexedDB = () => {
     req.onerror = () => setChannels([]);
   }, [db]);
 
+  const loadDesks = useCallback((caller = 'unknown') => {
+    console.log('[InfoDepo] loadDesks called by:', caller);
+    if (!db) return;
+    let tx;
+    try { tx = db.transaction(DESKS_STORE, 'readonly'); }
+    catch { setDesks([]); return; }
+    const req = tx.objectStore(DESKS_STORE).getAll();
+    req.onsuccess = (e) => setDesks(
+      (e.target.result || []).sort((a, b) => modifiedTimeSortKey(b) - modifiedTimeSortKey(a))
+    );
+    req.onerror = () => setDesks([]);
+  }, [db]);
+
   /** Load all stores concurrently and apply setters in one React batch → single render. */
   const loadAll = useCallback(() => {
     if (!db) return;
@@ -227,7 +256,8 @@ export const useIndexedDB = () => {
       readStore(NOTES_STORE),
       readStore(VIDEOS_STORE),
       readStore(CHANNELS_STORE),
-    ]).then(([books, notes, videos, chans]) => {
+      readStore(DESKS_STORE),
+    ]).then(([books, notes, videos, chans, desksRows]) => {
       const withTags = (r, store) => ({ ...r, idbStore: store, tags: Array.isArray(r.tags) ? r.tags : [] });
       const merged = [
         ...books.map((r) => withTags(r, BOOKS_STORE)),
@@ -237,8 +267,11 @@ export const useIndexedDB = () => {
       const sortedChans = chans
         .map((r) => ({ ...r, tags: Array.isArray(r.tags) ? r.tags : [] }))
         .sort((a, b) => modifiedTimeSortKey(b) - modifiedTimeSortKey(a));
+      const sortedDesks = (desksRows || [])
+        .sort((a, b) => modifiedTimeSortKey(b) - modifiedTimeSortKey(a));
       setItems(merged);
       setChannels(sortedChans);
+      setDesks(sortedDesks);
       setDataReady(true);
     });
   }, [db]);
@@ -602,7 +635,11 @@ export const useIndexedDB = () => {
             : {}),
         });
         putRequest.onsuccess = () => {
-          if (!silent) { if (storeName === CHANNELS_STORE) loadChannels('setItemDriveId'); else loadItems('setItemDriveId'); }
+          if (!silent) {
+            if (storeName === CHANNELS_STORE) loadChannels('setItemDriveId');
+            else if (storeName === DESKS_STORE) loadDesks('setItemDriveId');
+            else loadItems('setItemDriveId');
+          }
           resolve();
         };
         putRequest.onerror   = () => reject(putRequest.error);
@@ -814,7 +851,7 @@ export const useIndexedDB = () => {
             modifiedTime: now,
             localModifiedAt: now,
           });
-          putReq.onsuccess = () => { loadChannels('addChannel/updated'); resolve('updated'); };
+          putReq.onsuccess = () => { loadChannels('addChannel/updated'); resolve(existing.id); };
           putReq.onerror = (e) => reject(e.target.error);
           return;
         }
@@ -826,7 +863,7 @@ export const useIndexedDB = () => {
           modifiedTime: now,
           localModifiedAt: now,
         });
-        addReq.onsuccess = () => { loadChannels('addChannel/added'); resolve('added'); };
+        addReq.onsuccess = (e) => { loadChannels('addChannel/added'); resolve(e.target.result); };
         addReq.onerror = (e) => reject(e.target.error);
       };
       existingByChannelReq.onerror = (e) => reject(e.target.error);
@@ -921,6 +958,91 @@ export const useIndexedDB = () => {
   }, [db, loadChannels, getChannelByDriveId]);
 
 
+  // --- Desk operations ---
+
+  const addDesk = useCallback((name) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
+      const now = new Date();
+      const record = { name, layout: {}, driveId: '', modifiedTime: now, localModifiedAt: now, tags: [], sharedWith: [], ownerEmail: '' };
+      const req = tx.objectStore(DESKS_STORE).add(record);
+      req.onsuccess = (e) => { loadDesks('addDesk'); resolve(e.target.result); };
+      req.onerror = (e) => reject(e.target.error);
+    });
+  }, [db, loadDesks]);
+
+  const deleteDesk = useCallback((id) => {
+    if (!db) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(DESKS_STORE, 'readwrite');
+      const req = tx.objectStore(DESKS_STORE).delete(id);
+      req.onsuccess = () => { loadDesks('deleteDesk'); resolve(); };
+      req.onerror = (e) => reject(e.target.error);
+    });
+  }, [db, loadDesks]);
+
+  const setDeskLayout = useCallback((id, layout) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
+      const os = tx.objectStore(DESKS_STORE);
+      const req = os.get(id);
+      req.onsuccess = () => {
+        const existing = req.result;
+        if (!existing) { reject(new Error('Desk not found')); return; }
+        const putReq = os.put({ ...existing, layout, localModifiedAt: new Date() });
+        putReq.onsuccess = () => { loadDesks('setDeskLayout'); resolve(); };
+        putReq.onerror = () => reject(putReq.error);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }, [db, loadDesks]);
+
+  const getDeskByDriveId = useCallback((driveId) => {
+    if (!db || !driveId) return Promise.resolve(undefined);
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(DESKS_STORE, 'readonly'); } catch { resolve(undefined); return; }
+      const req = tx.objectStore(DESKS_STORE).index('driveId').get(driveId);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = (e) => reject(e.target.error);
+    });
+  }, [db]);
+
+  const upsertDriveDesk = useCallback(async (driveFile, deskData, { silent = false } = {}) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    const existing = await getDeskByDriveId(driveFile.driveId);
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
+      const os = tx.objectStore(DESKS_STORE);
+      if (existing) {
+        const driveIsNewer = !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime);
+        if (!driveIsNewer) { resolve('skipped'); return; }
+        const mt = new Date(driveFile.modifiedTime);
+        const putReq = os.put({ ...existing, ...deskData, driveId: driveFile.driveId, modifiedTime: mt, localModifiedAt: mt });
+        putReq.onsuccess = () => { if (!silent) loadDesks('upsertDriveDesk/updated'); resolve('updated'); };
+        putReq.onerror = (e) => reject(e.target.error);
+      } else {
+        const mt = new Date(driveFile.modifiedTime);
+        const addReq = os.add({
+          ...deskData,
+          driveId: driveFile.driveId,
+          modifiedTime: mt,
+          localModifiedAt: mt,
+          tags: Array.isArray(deskData.tags) ? deskData.tags : [],
+          sharedWith: [],
+          ownerEmail: driveFile.ownerEmail || '',
+        });
+        addReq.onsuccess = () => { if (!silent) loadDesks('upsertDriveDesk/added'); resolve('added'); };
+        addReq.onerror = (e) => reject(e.target.error);
+      }
+    });
+  }, [db, loadDesks, getDeskByDriveId]);
+
   const setRecordTags = useCallback((id, storeName, tags) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     const normalized = normalizeTagsList(tags);
@@ -935,6 +1057,7 @@ export const useIndexedDB = () => {
         const putReq = os.put({ ...existing, tags: normalized, localModifiedAt: new Date() });
         putReq.onsuccess = () => {
           if (storeName === CHANNELS_STORE) loadChannels('setRecordTags');
+          else if (storeName === DESKS_STORE) loadDesks('setRecordTags');
           else if (storeName !== IMAGES_STORE) loadItems('setRecordTags');
           resolve();
         };
@@ -982,6 +1105,7 @@ export const useIndexedDB = () => {
         const putReq = os.put({ ...existing, name, localModifiedAt: new Date() });
         putReq.onsuccess = () => {
           if (storeName === CHANNELS_STORE) loadChannels('renameItem');
+          else if (storeName === DESKS_STORE) loadDesks('renameItem');
           else if (storeName !== IMAGES_STORE) loadItems('renameItem');
           resolve();
         };
@@ -1306,7 +1430,7 @@ export const useIndexedDB = () => {
   }, [db, getTotalStorageUsed, evictLeastRecentlyVisited]);
 
   return {
-    items, channels, isInitialized, dataReady,
+    items, channels, desks, isInitialized, dataReady,
     addItem, updateItem, deleteItem, clearAll,
     addImage, getImagesForNote, getAllImages,
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
@@ -1316,6 +1440,8 @@ export const useIndexedDB = () => {
     getBookByDriveId, getBookByName, upsertDriveBook,
     deleteItemByDriveId, deleteChannelByDriveId,
     getLocalRecordsByOwnerEmail,
+    addDesk, deleteDesk, setDeskLayout,
+    getDeskByDriveId, upsertDriveDesk,
     setRecordTags,
     setItemSharedWith,
     renameItem,

@@ -7,6 +7,7 @@ import {
 } from './pdfAnnotationSidecar.js';
 
 export const CHANNEL_JSON_MARKER = 'infodepo-channel';
+export const DESK_JSON_MARKER = 'infodepo-desk';
 
 const SUPPORTED_MIME_TYPES = [
   'application/epub+zip',
@@ -47,6 +48,8 @@ export async function syncDriveToLocal({
   getNotes,
   getChannelByDriveId,
   upsertDriveChannel,
+  getDeskByDriveId,
+  upsertDriveDesk,
   upsertDrivePdfAnnotation,
   onProgress,
   allowedDriveIds,
@@ -238,6 +241,13 @@ export async function syncDriveToLocal({
           else if (action === 'updated') counts.updated++;
           else counts.skipped++;
           continue;
+        } else if (parsed._type === DESK_JSON_MARKER && upsertDriveDesk) {
+          const { _type, ...deskData } = parsed;
+          const action = await upsertDriveDesk(driveFile, deskData);
+          if (action === 'added') counts.added++;
+          else if (action === 'updated') counts.updated++;
+          else counts.skipped++;
+          continue;
         } else if (parsed.url && /youtube\.com|youtu\.be/.test(parsed.url)) {
           const safeTitle = (parsed.title || 'YouTube Video').replace(/[/\\?%*:|"<>]/g, '-');
           effectiveFile = { ...driveFile, name: safeTitle + '.youtube', mimeType: 'application/x-youtube' };
@@ -341,6 +351,16 @@ function noteBundleNeedsBackup(item) {
   return itemNeedsBackupUpload(item);
 }
 
+function deskNeedsBackupUpload(desk) {
+  const d = String(desk?.driveId || '').trim();
+  if (!d) return true;
+  const lm = timeMs(desk.localModifiedAt);
+  const mt = timeMs(desk.modifiedTime);
+  if (lm == null) return false;
+  if (mt == null) return true;
+  return lm > mt;
+}
+
 function channelNeedsBackupUpload(ch) {
   const d = String(ch?.driveId || '').trim();
   if (!d) return true;
@@ -369,6 +389,7 @@ export async function backupAllToGDrive({
   folderId,
   items,
   channels,
+  desks,
   onSetDriveId,
   onSetNoteFolderData,
   onProgress,
@@ -590,6 +611,40 @@ export async function backupAllToGDrive({
         console.warn(`Annotation backup failed for "${item.name}":`, err.message);
         failed++;
       }
+    }
+  }
+
+  for (const desk of desks || []) {
+    if (!deskNeedsBackupUpload(desk)) continue;
+    const label = desk.name || `desk-${desk.id}`;
+    progress(`Backing up desk "${label}"...`);
+    try {
+      const { id, driveId: _d, ...rest } = desk;
+      const payload = JSON.stringify({ _type: DESK_JSON_MARKER, ...rest });
+      const blob = new Blob([payload], { type: 'application/json' });
+      const safeName = String(label).replace(/[/\\?%*:|"<>]/g, '-');
+      const fileName = `${safeName}.desk.json`;
+      const did = String(desk.driveId || '').trim();
+      let driveFile;
+      if (did) {
+        try {
+          driveFile = await patchMultipart(did, blob, fileName, 'application/json');
+        } catch (patchErr) {
+          if (patchErr.status === 404 || patchErr.status === 403) {
+            console.warn(`PATCH ${patchErr.status} for desk "${label}", uploading as new file.`);
+            driveFile = await postMultipart(blob, fileName, 'application/json');
+          } else {
+            throw patchErr;
+          }
+        }
+      } else {
+        driveFile = await postMultipart(blob, fileName, 'application/json');
+      }
+      await onSetDriveId(id, 'desks', driveFile.id, { modifiedTime: driveFile.modifiedTime });
+      backed++;
+    } catch (err) {
+      console.warn(`Backup failed for desk "${label}":`, err.message);
+      failed++;
     }
   }
 

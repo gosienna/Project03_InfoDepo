@@ -1,6 +1,6 @@
 # Data stores
 
-Current IndexedDB database: `InfoDepo`, schema version `7`.
+Current IndexedDB database: `InfoDepo`, schema version `8`.
 
 ## Stores
 
@@ -11,6 +11,7 @@ Current IndexedDB database: `InfoDepo`, schema version `7`.
 | `videos` | YouTube link records (`application/x-youtube`) |
 | `images` | legacy note images (new notes prefer `note.assets`) |
 | `channels` | YouTube channel records |
+| `desks` | Infinite-canvas layout records |
 | `pdfAnnotations` | per-PDF annotation sidecar |
 
 `shares` store was removed in v7.
@@ -45,9 +46,27 @@ Additional fields:
 - `channels`: `channelId`, `handle`, `thumbnailUrl`, `videos[]`, etc.
 - `pdfAnnotations`: `sidecarKey`, `pdfDriveId`, `annotationDriveId`, `annotations[]`, `version`
 
+## Desk record fields
+
+```js
+{
+  id,                   // auto-increment integer
+  name,                 // string
+  layout,               // { [key]: { x, y } } — positions of items on the canvas
+  tags,                 // string[]
+  driveId,              // string | undefined — Drive file ID of backup .desk.json
+  modifiedTime,         // string | undefined
+  localModifiedAt,      // number | undefined
+  sharedWith,           // string[]
+  ownerEmail            // string
+}
+```
+
+Layout key format: `"books:N"` | `"notes:N"` | `"videos:N"` | `"channel:N"` | `"desk:N"` where `N` is the IndexedDB record id.
+
 ## Key indexes
 
-- `driveId` index on `books`, `notes`, `videos`
+- `driveId` index on `books`, `notes`, `videos`, `desks`
 - `noteId` index on `images`
 - unique `channelId` index on `channels`
 
@@ -57,6 +76,7 @@ Additional fields:
 
 - `items` = merged `books` + `notes` + `videos`
 - `channels`
+- `desks`
 
 There is no `shares` collection anymore.
 
@@ -74,6 +94,10 @@ Viewer prune helpers use these fields to remove revoked peer-owned items:
 - `deleteChannelByDriveId`
 
 ## Schema history note
+
+v8 changes:
+
+- added `desks` object store with `driveId` index
 
 v7 changes:
 

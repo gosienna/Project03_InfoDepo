@@ -1,0 +1,442 @@
+
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { DataTile } from './DataTile.js';
+import { DeskTile } from './DeskTile.js';
+import { AddContentDropdown } from './AddContentDropdown.js';
+
+const CARD_W = 250;
+const DRAG_BAR_H = 26;
+const DEFAULT_ZOOM_MIN = 0.1;
+const DEFAULT_ZOOM_MAX = 5;
+
+// --- Key helpers ---
+
+export const itemEntryKey = (item) => `${item.idbStore}:${item.id}`;
+export const channelEntryKey = (ch) => `channel:${ch.id}`;
+export const deskEntryKey = (d) => `desk:${d.id}`;
+
+function resolveEntry(key, items, channels, desks) {
+  if (key.startsWith('channel:')) {
+    const id = Number(key.slice(8));
+    const ch = channels.find((c) => c.id === id);
+    return ch ? { ...ch, _entryType: 'channel' } : null;
+  }
+  if (key.startsWith('desk:')) {
+    const id = Number(key.slice(5));
+    const d = (desks || []).find((x) => x.id === id);
+    return d ? { ...d, _entryType: 'desk' } : null;
+  }
+  const sep = key.lastIndexOf(':');
+  const store = key.slice(0, sep);
+  const id = Number(key.slice(sep + 1));
+  const item = items.find((i) => i.idbStore === store && i.id === id);
+  return item ? { ...item, _entryType: 'item' } : null;
+}
+
+// --- Dot grid background ---
+
+const DotGrid = ({ panX, panY, zoom }) => {
+  const gridSize = 40;
+  const scaled = gridSize * zoom;
+  const ox = ((panX % scaled) + scaled) % scaled;
+  const oy = ((panY % scaled) + scaled) % scaled;
+  return React.createElement(
+    'svg',
+    { style: { position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' } },
+    React.createElement(
+      'defs', null,
+      React.createElement('pattern', {
+        id: 'desk-dot-grid', x: ox, y: oy, width: scaled, height: scaled, patternUnits: 'userSpaceOnUse',
+      }, React.createElement('circle', { cx: 0, cy: 0, r: 1.2, fill: '#374151' }))
+    ),
+    React.createElement('rect', { width: '100%', height: '100%', fill: 'url(#desk-dot-grid)' })
+  );
+};
+
+// --- Inline search to add existing items to desk ---
+
+const subColor = (sub) => {
+  if (sub === 'channel') return 'bg-red-900/60 text-red-200';
+  if (sub === 'desk') return 'bg-indigo-900/60 text-indigo-200';
+  if (sub === 'notes') return 'bg-emerald-900/60 text-emerald-200';
+  return 'bg-gray-700 text-gray-300';
+};
+
+const InlineAddSearch = ({ items, channels, desks, currentDeskId, currentLayout, onAdd }) => {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const q = query.trim().toLowerCase();
+
+  const available = useMemo(() => {
+    const inLayout = new Set(Object.keys(currentLayout));
+    const rows = [];
+    for (const item of items) {
+      const key = itemEntryKey(item);
+      if (inLayout.has(key)) continue;
+      const label = (item.name || '').replace(/\.youtube$/i, '');
+      if (q && !label.toLowerCase().includes(q)) continue;
+      rows.push({ key, label, sub: item.idbStore });
+    }
+    for (const ch of channels) {
+      const key = channelEntryKey(ch);
+      if (inLayout.has(key)) continue;
+      const label = ch.name || ch.handle || '';
+      if (q && !label.toLowerCase().includes(q)) continue;
+      rows.push({ key, label, sub: 'channel' });
+    }
+    for (const d of (desks || [])) {
+      if (d.id === currentDeskId) continue;
+      const key = deskEntryKey(d);
+      if (inLayout.has(key)) continue;
+      const label = d.name || 'Untitled Desk';
+      if (q && !label.toLowerCase().includes(q)) continue;
+      rows.push({ key, label, sub: 'desk' });
+    }
+    return rows.slice(0, 8);
+  }, [items, channels, desks, currentDeskId, currentLayout, q]);
+
+  const showDropdown = open && (q.length > 0 || available.length > 0);
+
+  return React.createElement(
+    'div',
+    { style: { position: 'relative' }, onClick: (e) => e.stopPropagation() },
+    React.createElement('input', {
+      type: 'text',
+      value: query,
+      placeholder: 'Search to add items…',
+      onChange: (e) => { setQuery(e.target.value); setOpen(true); },
+      onFocus: () => setOpen(true),
+      onBlur: () => setTimeout(() => setOpen(false), 150),
+      style: {
+        background: '#1f2937', border: '1px solid #374151', borderRadius: 10,
+        padding: '8px 32px 8px 12px', fontSize: 13, color: '#e5e7eb',
+        outline: 'none', width: 210,
+      },
+    }),
+    React.createElement(
+      'svg',
+      { xmlns: 'http://www.w3.org/2000/svg', width: 14, height: 14, fill: 'none', viewBox: '0 0 24 24', stroke: '#6b7280', strokeWidth: 2, style: { position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' } },
+      React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' })
+    ),
+    showDropdown && React.createElement(
+      'div',
+      {
+        style: {
+          position: 'absolute', top: 'calc(100% + 4px)', right: 0,
+          background: '#1f2937', border: '1px solid #374151', borderRadius: 10,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.4)', zIndex: 50,
+          width: 260, maxHeight: 280, overflowY: 'auto',
+        },
+      },
+      available.length === 0
+        ? React.createElement('p', { style: { color: '#6b7280', fontSize: 13, textAlign: 'center', padding: '16px' } },
+            q ? 'No matches.' : 'All items are on this desk.')
+        : available.map(({ key, label, sub }) =>
+            React.createElement(
+              'button',
+              {
+                key,
+                onMouseDown: (e) => { e.preventDefault(); onAdd(key); setQuery(''); setOpen(false); },
+                style: {
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '8px 12px', background: 'none', border: 'none', cursor: 'pointer',
+                  textAlign: 'left', color: '#d1d5db', fontSize: 13, borderBottom: '1px solid #111827',
+                },
+                onMouseEnter: (e) => { e.currentTarget.style.background = '#374151'; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'none'; },
+              },
+              React.createElement('span', { className: `text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${subColor(sub)}` }, sub),
+              React.createElement('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, label)
+            )
+          )
+    )
+  );
+};
+
+// --- Main Desk canvas ---
+
+export const Desk = ({
+  desk,
+  items,
+  channels,
+  desks,
+  onSelectItem,
+  onSelectChannel,
+  onSelectDesk,
+  onUpdateLayout,
+  readOnly,
+  onOpenNewNote,
+  onOpenYoutube,
+  onOpenChannel,
+  onOpenFile,
+}) => {
+  const viewportRef = useRef(null);
+
+  // Refs for real-time drag values (avoids stale closures in event handlers)
+  const panRef = useRef({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
+  const [renderTick, setRenderTick] = useState(0);
+  const rerender = useCallback(() => setRenderTick((n) => n + 1), []);
+
+  // Layout: layoutRef is the live truth during drag; state is committed on drag-end
+  const layoutRef = useRef(desk?.layout || {});
+  useEffect(() => {
+    // Sync ref when desk prop changes (e.g. after a save)
+    layoutRef.current = desk?.layout || {};
+    rerender();
+  }, [desk?.layout]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const commitLayout = useCallback((newLayout) => {
+    layoutRef.current = newLayout;
+    if (onUpdateLayout && desk?.id != null) onUpdateLayout(desk.id, newLayout);
+    rerender();
+  }, [onUpdateLayout, desk?.id, rerender]);
+
+
+  // --- Pan ---
+  const panningRef = useRef(null);
+  const spaceRef = useRef(false);
+
+  useEffect(() => {
+    const down = (e) => {
+      if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); spaceRef.current = true; rerender(); }
+    };
+    const up = (e) => { if (e.code === 'Space') { spaceRef.current = false; rerender(); } };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
+  }, [rerender]);
+
+  const onViewportPointerDown = useCallback((e) => {
+    if (e.button === 1 || (e.button === 0 && spaceRef.current)) {
+      e.preventDefault();
+      panningRef.current = { startX: e.clientX, startY: e.clientY, originX: panRef.current.x, originY: panRef.current.y };
+      viewportRef.current?.setPointerCapture(e.pointerId);
+    }
+  }, []);
+
+  const onViewportPointerMove = useCallback((e) => {
+    if (!panningRef.current) return;
+    panRef.current = {
+      x: panningRef.current.originX + (e.clientX - panningRef.current.startX),
+      y: panningRef.current.originY + (e.clientY - panningRef.current.startY),
+    };
+    rerender();
+  }, [rerender]);
+
+  const onViewportPointerUp = useCallback(() => { panningRef.current = null; }, []);
+
+  // --- Zoom ---
+  const onWheel = useCallback((e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    const oldZoom = zoomRef.current;
+    const newZoom = Math.max(DEFAULT_ZOOM_MIN, Math.min(DEFAULT_ZOOM_MAX, oldZoom * factor));
+    const rect = viewportRef.current.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    panRef.current = {
+      x: cx - (cx - panRef.current.x) * (newZoom / oldZoom),
+      y: cy - (cy - panRef.current.y) * (newZoom / oldZoom),
+    };
+    zoomRef.current = newZoom;
+    rerender();
+  }, [rerender]);
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [onWheel]);
+
+  // --- Item drag ---
+  const itemDragRef = useRef(null);
+
+  const onHandlePointerDown = useCallback((e, key) => {
+    e.stopPropagation();
+    const worldX = (e.clientX - panRef.current.x) / zoomRef.current;
+    const worldY = (e.clientY - panRef.current.y) / zoomRef.current;
+    const pos = layoutRef.current[key] || { x: 0, y: 0 };
+    itemDragRef.current = { key, startWorldX: worldX, startWorldY: worldY, startItemX: pos.x, startItemY: pos.y };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, []);
+
+  const onHandlePointerMove = useCallback((e, key) => {
+    const drag = itemDragRef.current;
+    if (!drag || drag.key !== key) return;
+    const worldX = (e.clientX - panRef.current.x) / zoomRef.current;
+    const worldY = (e.clientY - panRef.current.y) / zoomRef.current;
+    layoutRef.current = {
+      ...layoutRef.current,
+      [key]: { x: drag.startItemX + worldX - drag.startWorldX, y: drag.startItemY + worldY - drag.startWorldY },
+    };
+    rerender();
+  }, [rerender]);
+
+  const onHandlePointerUp = useCallback((e, key) => {
+    if (!itemDragRef.current || itemDragRef.current.key !== key) return;
+    commitLayout({ ...layoutRef.current });
+    itemDragRef.current = null;
+  }, [commitLayout]);
+
+  // --- Add item to desk ---
+  const addItemToDesk = useCallback((key) => {
+    const el = viewportRef.current;
+    const w = el ? el.clientWidth : 800;
+    const h = el ? el.clientHeight : 600;
+    const centerX = (w / 2 - panRef.current.x) / zoomRef.current;
+    const centerY = (h / 2 - panRef.current.y) / zoomRef.current;
+    const offset = Object.keys(layoutRef.current).length * 20;
+    const newLayout = { ...layoutRef.current, [key]: { x: centerX - CARD_W / 2 + offset % 200, y: centerY - 150 + offset % 100 } };
+    commitLayout(newLayout);
+  }, [commitLayout]);
+
+  // --- Remove item from desk ---
+  const removeFromDesk = useCallback((key) => {
+    const newLayout = { ...layoutRef.current };
+    delete newLayout[key];
+    commitLayout(newLayout);
+  }, [commitLayout]);
+
+  const { x: panX, y: panY } = panRef.current;
+  const zoom = zoomRef.current;
+  const isPanning = !!panningRef.current;
+
+  const layoutEntries = useMemo(() => {
+    const layout = layoutRef.current;
+    return Object.entries(layout).map(([key, pos]) => {
+      const entry = resolveEntry(key, items, channels, desks);
+      return entry ? { key, pos, entry } : null;
+    }).filter(Boolean);
+  }, [renderTick, items, channels, desks]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return React.createElement(
+    'div',
+    {
+      ref: viewportRef,
+      className: 'flex-1 min-h-0 w-full',
+      style: {
+        position: 'relative', overflow: 'hidden',
+        background: '#111827',
+        cursor: isPanning ? 'grabbing' : spaceRef.current ? 'grab' : 'default',
+      },
+      onPointerDown: onViewportPointerDown,
+      onPointerMove: onViewportPointerMove,
+      onPointerUp: onViewportPointerUp,
+    },
+    // Dot grid background
+    React.createElement(DotGrid, { panX, panY, zoom }),
+    // Canvas container — transform applied here
+    React.createElement(
+      'div',
+      {
+        style: {
+          position: 'absolute', top: 0, left: 0,
+          transformOrigin: '0 0',
+          transform: `translate(${panX}px,${panY}px) scale(${zoom})`,
+          willChange: 'transform',
+        },
+      },
+      layoutEntries.map(({ key, pos, entry }) =>
+        React.createElement(
+          'div',
+          {
+            key,
+            style: { position: 'absolute', left: pos.x, top: pos.y, width: CARD_W, userSelect: 'none' },
+          },
+          // Drag handle bar
+          !readOnly && React.createElement(
+            'div',
+            {
+              style: {
+                height: DRAG_BAR_H, background: '#1f2937', borderRadius: '8px 8px 0 0',
+                border: '1px solid #374151', borderBottom: 'none',
+                cursor: 'grab', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '0 8px', color: '#4b5563',
+              },
+              onPointerDown: (e) => onHandlePointerDown(e, key),
+              onPointerMove: (e) => onHandlePointerMove(e, key),
+              onPointerUp: (e) => onHandlePointerUp(e, key),
+            },
+            React.createElement('span', { style: { fontSize: 14, letterSpacing: '0.2em', pointerEvents: 'none' } }, '· · ·'),
+            React.createElement(
+              'button',
+              {
+                onClick: (e) => { e.stopPropagation(); removeFromDesk(key); },
+                style: { color: '#6b7280', cursor: 'pointer', fontSize: 16, lineHeight: 1, background: 'none', border: 'none', padding: '0 2px' },
+                title: 'Remove from desk',
+                onPointerDown: (e) => e.stopPropagation(),
+              },
+              '×'
+            )
+          ),
+          // Tile content
+          React.createElement(
+            'div',
+            { style: { borderRadius: readOnly ? 8 : '0 0 8px 8px', overflow: 'hidden' } },
+            entry._entryType === 'item'
+              ? React.createElement(DataTile, { tileType: 'item', item: entry, onSelect: onSelectItem, readOnly: true })
+              : entry._entryType === 'channel'
+              ? React.createElement(DataTile, { tileType: 'channel', channel: entry, onSelect: onSelectChannel, readOnly: true })
+              : React.createElement(DeskTile, { desk: entry, onSelect: onSelectDesk, readOnly: true })
+          )
+        )
+      )
+    ),
+    // Top-right toolbar: search to add existing items + add new content
+    !readOnly && React.createElement(
+      'div',
+      {
+        style: {
+          position: 'absolute', top: 16, right: 16, zIndex: 35,
+          display: 'flex', alignItems: 'center', gap: 8,
+        },
+      },
+      React.createElement(InlineAddSearch, {
+        items,
+        channels,
+        desks,
+        currentDeskId: desk?.id,
+        currentLayout: layoutRef.current,
+        onAdd: addItemToDesk,
+      }),
+      (onOpenNewNote || onOpenFile) && React.createElement(AddContentDropdown, {
+        onNewNote: onOpenNewNote,
+        onAddYoutube: onOpenYoutube,
+        onAddChannel: onOpenChannel,
+        onAddFile: onOpenFile,
+      })
+    ),
+    // Zoom indicator
+    React.createElement(
+      'div',
+      {
+        style: {
+          position: 'absolute', bottom: 16, left: 16, zIndex: 30, background: '#1f2937',
+          border: '1px solid #374151', borderRadius: 8, padding: '4px 10px',
+          color: '#9ca3af', fontSize: 12, fontFamily: 'monospace', pointerEvents: 'none',
+        },
+      },
+      `${Math.round(zoom * 100)}%`
+    ),
+    // Empty state
+    layoutEntries.length === 0 && React.createElement(
+      'div',
+      {
+        style: {
+          position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', pointerEvents: 'none',
+        },
+      },
+      React.createElement('p', { style: { color: '#4b5563', fontSize: 18, fontWeight: 600, marginBottom: 8 } }, desk?.name || 'Desk'),
+      React.createElement(
+        'p',
+        { style: { color: '#374151', fontSize: 14, maxWidth: 360, textAlign: 'center', lineHeight: 1.5 } },
+        'This desk is empty. Use the search bar or ',
+        React.createElement('span', { style: { color: '#a5b4fc', fontWeight: 600 } }, '+ Add Content'),
+        ' (top-right) to place items here.'
+      )
+    )
+  );
+};
