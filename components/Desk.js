@@ -15,6 +15,28 @@ const CARD_H = 220;
 const snapToGrid = (v) => Math.round(v / GRID_SIZE) * GRID_SIZE;
 const snapPoint = (p) => ({ x: snapToGrid(p.x), y: snapToGrid(p.y) });
 const connectionId = () => `conn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const fullWidthCharRe = /[\u1100-\u115F\u2E80-\uA4CF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/;
+const measureLineUnits = (line) => {
+  let units = 0;
+  for (const ch of String(line || '')) units += fullWidthCharRe.test(ch) ? 1 : 0.58;
+  return units;
+};
+const estimateTextBounds = (item) => {
+  const fontSize = item?.fontSize || 16;
+  const text = String(item?.text || '');
+  const lines = text.split('\n');
+  const widestUnits = lines.reduce((m, line) => Math.max(m, measureLineUnits(line)), 0);
+  const estimatedWidth = Math.max(40, widestUnits * fontSize + 16);
+  const estimatedHeight = Math.max(fontSize + 8, lines.length * fontSize * 1.4 + 8);
+  const width = Math.max(40, Number(item?.width) || estimatedWidth);
+  const height = Math.max(fontSize + 8, Number(item?.height) || estimatedHeight);
+  return {
+    left: item.x,
+    right: item.x + width,
+    top: item.y,
+    bottom: item.y + height,
+  };
+};
 
 // --- Key helpers ---
 
@@ -517,6 +539,9 @@ const InlineAddSearch = ({ items, channels, desks, currentDeskId, currentLayout,
 
 // --- Main Desk canvas ---
 
+const TEXT_FONT_SIZES = [12, 14, 16, 20, 24, 32, 40, 48, 64];
+const textItemId = () => `text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
 export const Desk = ({
   desk,
   items,
@@ -527,6 +552,7 @@ export const Desk = ({
   onSelectDesk,
   onUpdateLayout,
   onUpdateConnections,
+  onUpdateTextItems,
   onRenameDesk,
   onSetTags,
   onSetSharedWith,
@@ -577,12 +603,16 @@ export const Desk = ({
     historyRef.current = { past: [], future: [] };
   }, [desk?.id]);
 
+  // Text items on the canvas
+  const textItemsRef = useRef(Array.isArray(desk?.textItems) ? desk.textItems : []);
+
   useEffect(() => {
     // Sync refs when desk data changes (e.g. after persistence round-trip).
     layoutRef.current = desk?.layout || {};
     connectionsRef.current = Array.isArray(desk?.connections) ? desk.connections : [];
+    textItemsRef.current = Array.isArray(desk?.textItems) ? desk.textItems : [];
     rerender();
-  }, [desk?.layout, desk?.connections]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [desk?.layout, desk?.connections, desk?.textItems]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const commitLayout = useCallback((newLayout, options = {}) => {
     if (options.recordHistory !== false) {
@@ -603,6 +633,12 @@ export const Desk = ({
     if (onUpdateConnections && desk?.id != null) onUpdateConnections(desk.id, connectionsRef.current);
     rerender();
   }, [onUpdateConnections, desk?.id, rerender, snapshotState]);
+
+  const commitTextItems = useCallback((next) => {
+    textItemsRef.current = Array.isArray(next) ? next : [];
+    if (onUpdateTextItems && desk?.id != null) onUpdateTextItems(desk.id, textItemsRef.current);
+    rerender();
+  }, [onUpdateTextItems, desk?.id, rerender]);
 
   const applyDeskState = useCallback((state) => {
     layoutRef.current = cloneLayout(state?.layout);
@@ -635,11 +671,14 @@ export const Desk = ({
   const [connectMode, setConnectMode] = useState(false);
   const [connectStartKey, setConnectStartKey] = useState(null);
   const [selectedItemKeys, setSelectedItemKeys] = useState([]);
+  const [selectedTextIds, setSelectedTextIds] = useState([]);
   const [selectedConnectionIds, setSelectedConnectionIds] = useState([]);
   const [selectedNodeIds, setSelectedNodeIds] = useState([]);
   const selectedNodeIdsRef = useRef([]);
   const mouseRef = useRef({ x: 120, y: 120 });
   const [slashMenu, setSlashMenu] = useState({ open: false, x: 120, y: 120 });
+  const [editingTextId, setEditingTextId] = useState(null);
+  const [textFontSizeMenu, setTextFontSizeMenu] = useState(null);
   const lineDragRef = useRef(null);
   useEffect(() => {
     selectedNodeIdsRef.current = selectedNodeIds;
@@ -682,10 +721,11 @@ export const Desk = ({
         }
         return;
       }
-      if ((key === 'backspace' || key === 'delete') && (selectedConnectionIds.length > 0 || selectedItemKeys.length > 0)) {
+      if ((key === 'backspace' || key === 'delete') && (selectedConnectionIds.length > 0 || selectedItemKeys.length > 0 || selectedTextIds.length > 0)) {
         e.preventDefault();
         const selectedLineSet = new Set(selectedConnectionIds);
         const selectedItemSet = new Set(selectedItemKeys);
+        const selectedTextSet = new Set(selectedTextIds);
         if (selectedItemSet.size > 0) {
           const nextLayout = { ...(layoutRef.current || {}) };
           selectedItemSet.forEach((k) => { delete nextLayout[k]; });
@@ -697,8 +737,13 @@ export const Desk = ({
         } else {
           commitConnections((connectionsRef.current || []).filter((c) => !selectedLineSet.has(c.id)));
         }
+        if (selectedTextSet.size > 0) {
+          const nextTextItems = (textItemsRef.current || []).filter((t) => !selectedTextSet.has(t.id));
+          commitTextItems(nextTextItems);
+        }
         setSelectedConnectionIds([]);
         setSelectedItemKeys([]);
+        setSelectedTextIds([]);
         setSelectedNodeIds([]);
         return;
       }
@@ -716,7 +761,7 @@ export const Desk = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [commitConnections, commitLayout, connectMode, readOnly, redoDesk, selectedConnectionIds, selectedItemKeys, slashMenu.open, undoDesk]);
+  }, [commitConnections, commitLayout, commitTextItems, connectMode, readOnly, redoDesk, selectedConnectionIds, selectedItemKeys, selectedTextIds, slashMenu.open, undoDesk]);
 
   const onViewportPointerDown = useCallback((e) => {
     if (e.target === e.currentTarget && e.button === 0 && !spaceRef.current) {
@@ -727,6 +772,7 @@ export const Desk = ({
       setMarqueeBox({ x: startX, y: startY, w: 0, h: 0 });
       setSelectedConnectionIds([]);
       setSelectedItemKeys([]);
+      setSelectedTextIds([]);
       setSelectedNodeIds([]);
       setSlashMenu((prev) => prev.open ? { ...prev, open: false } : prev);
       setConnectMode(false);
@@ -793,6 +839,13 @@ export const Desk = ({
       })
       .map(([key]) => key);
     setSelectedItemKeys(itemKeys);
+    const textIds = (textItemsRef.current || [])
+      .filter((item) => {
+        const b = estimateTextBounds(item);
+        return b.left <= ex && b.right >= sx && b.top <= ey && b.bottom >= sy;
+      })
+      .map((item) => item.id);
+    setSelectedTextIds(textIds);
 
     const connIds = (connectionsRef.current || [])
       .map((conn) => ({ conn, points: connectionPointsFor(conn, layoutRef.current || {}) }))
@@ -866,10 +919,23 @@ export const Desk = ({
     const selected = selectedItemKeys.includes(key) ? selectedItemKeys : [key];
     const startPositions = {};
     selected.forEach((k) => { startPositions[k] = layoutRef.current[k] || { x: 0, y: 0 }; });
-    itemDragRef.current = { keys: selected, startWorldX: world.x, startWorldY: world.y, startPositions };
+    const selectedTexts = selectedItemKeys.includes(key) ? selectedTextIds : [];
+    const startTextPositions = {};
+    selectedTexts.forEach((textId) => {
+      const item = (textItemsRef.current || []).find((t) => t.id === textId);
+      if (item) startTextPositions[textId] = { x: item.x, y: item.y };
+    });
+    itemDragRef.current = {
+      keys: selected,
+      textIds: selectedTexts,
+      startWorldX: world.x,
+      startWorldY: world.y,
+      startPositions,
+      startTextPositions,
+    };
     setSelectedItemKeys(selected);
     e.currentTarget.setPointerCapture(e.pointerId);
-  }, [pointerToWorld, selectedItemKeys]);
+  }, [pointerToWorld, selectedItemKeys, selectedTextIds]);
 
   const onHandlePointerMove = useCallback((e, key) => {
     const drag = itemDragRef.current;
@@ -883,14 +949,25 @@ export const Desk = ({
       nextLayout[k] = { x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
     });
     layoutRef.current = nextLayout;
+    if (Array.isArray(drag.textIds) && drag.textIds.length > 0) {
+      const nextTexts = (textItemsRef.current || []).map((t) => {
+        if (!drag.textIds.includes(t.id)) return t;
+        const base = drag.startTextPositions[t.id] || { x: t.x, y: t.y };
+        return { ...t, x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
+      });
+      textItemsRef.current = nextTexts;
+    }
     rerender();
   }, [pointerToWorld, rerender]);
 
   const onHandlePointerUp = useCallback((e, key) => {
     if (!itemDragRef.current || !itemDragRef.current.keys.includes(key)) return;
     commitLayout({ ...layoutRef.current });
+    if (Array.isArray(itemDragRef.current.textIds) && itemDragRef.current.textIds.length > 0) {
+      commitTextItems([...(textItemsRef.current || [])]);
+    }
     itemDragRef.current = null;
-  }, [commitLayout]);
+  }, [commitLayout, commitTextItems]);
 
   // --- Add item to desk ---
   const addItemToDesk = useCallback((key) => {
@@ -912,6 +989,106 @@ export const Desk = ({
     commitLayout(newLayout);
     commitConnections(nextConnections, { recordHistory: false });
   }, [commitConnections, commitLayout]);
+
+  // --- Text items ---
+  const measuredTextSize = useCallback((el, fallback, fontSize) => {
+    const fs = fontSize || 16;
+    const nextWidth = Math.max(120, Math.ceil(el?.scrollWidth || el?.offsetWidth || Number(fallback?.width) || 180));
+    const nextHeight = Math.max(fs + 16, Math.ceil(el?.scrollHeight || el?.offsetHeight || Number(fallback?.height) || 40));
+    return { width: nextWidth, height: nextHeight };
+  }, []);
+
+  const addTextItem = useCallback(() => {
+    const rect = viewportRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const mx = mouseRef.current.x;
+    const my = mouseRef.current.y;
+    const worldX = (mx - panRef.current.x) / zoomRef.current;
+    const worldY = (my - panRef.current.y) / zoomRef.current;
+    const snapped = snapPoint({ x: worldX, y: worldY });
+    const id = textItemId();
+    const newItem = { id, text: '', x: snapped.x, y: snapped.y, fontSize: 16, width: 180, height: 40 };
+    const next = [...(textItemsRef.current || []), newItem];
+    commitTextItems(next);
+    setEditingTextId(id);
+    setSlashMenu((prev) => ({ ...prev, open: false }));
+    setConnectMode(false);
+    setConnectStartKey(null);
+  }, [commitTextItems]);
+
+  const updateTextItem = useCallback((id, updates) => {
+    const next = (textItemsRef.current || []).map((t) =>
+      t.id === id ? { ...t, ...updates } : t
+    );
+    commitTextItems(next);
+  }, [commitTextItems]);
+
+  const deleteTextItem = useCallback((id) => {
+    const next = (textItemsRef.current || []).filter((t) => t.id !== id);
+    commitTextItems(next);
+    if (editingTextId === id) setEditingTextId(null);
+    setSelectedTextIds((prev) => prev.filter((x) => x !== id));
+  }, [commitTextItems, editingTextId]);
+
+  const textItemDragRef = useRef(null);
+
+  const onTextHandlePointerDown = useCallback((e, id) => {
+    e.stopPropagation();
+    const world = pointerToWorld(e);
+    const selected = selectedTextIds.includes(id) ? selectedTextIds : [id];
+    const startPositions = {};
+    selected.forEach((textId) => {
+      const item = (textItemsRef.current || []).find((t) => t.id === textId);
+      if (item) startPositions[textId] = { x: item.x, y: item.y };
+    });
+    const selectedItems = selectedTextIds.includes(id) ? selectedItemKeys : [];
+    const startItemPositions = {};
+    selectedItems.forEach((k) => {
+      startItemPositions[k] = layoutRef.current[k] || { x: 0, y: 0 };
+    });
+    textItemDragRef.current = {
+      ids: selected,
+      itemKeys: selectedItems,
+      startWorldX: world.x,
+      startWorldY: world.y,
+      startPositions,
+      startItemPositions,
+    };
+    setSelectedTextIds(selected);
+    setSelectedConnectionIds([]);
+    setSelectedNodeIds([]);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, [pointerToWorld, selectedItemKeys, selectedTextIds]);
+
+  const onTextHandlePointerMove = useCallback((e, id) => {
+    const drag = textItemDragRef.current;
+    if (!drag || !drag.ids.includes(id)) return;
+    const world = pointerToWorld(e);
+    const dx = world.x - drag.startWorldX;
+    const dy = world.y - drag.startWorldY;
+    const next = (textItemsRef.current || []).map((t) =>
+      drag.ids.includes(t.id) ? { ...t, x: snapToGrid((drag.startPositions[t.id]?.x || t.x) + dx), y: snapToGrid((drag.startPositions[t.id]?.y || t.y) + dy) } : t
+    );
+    textItemsRef.current = next;
+    if (Array.isArray(drag.itemKeys) && drag.itemKeys.length > 0) {
+      const nextLayout = { ...layoutRef.current };
+      drag.itemKeys.forEach((k) => {
+        const base = drag.startItemPositions[k] || layoutRef.current[k] || { x: 0, y: 0 };
+        nextLayout[k] = { x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
+      });
+      layoutRef.current = nextLayout;
+    }
+    rerender();
+  }, [pointerToWorld, rerender]);
+
+  const onTextHandlePointerUp = useCallback((e, id) => {
+    if (!textItemDragRef.current || !textItemDragRef.current.ids.includes(id)) return;
+    commitTextItems([...(textItemsRef.current || [])]);
+    if (Array.isArray(textItemDragRef.current.itemKeys) && textItemDragRef.current.itemKeys.length > 0) {
+      commitLayout({ ...layoutRef.current });
+    }
+    textItemDragRef.current = null;
+  }, [commitLayout, commitTextItems]);
 
   const { x: panX, y: panY } = panRef.current;
   const zoom = zoomRef.current;
@@ -1187,6 +1364,7 @@ export const Desk = ({
             onClick: (e) => {
               setSelectedConnectionIds([]);
               setSelectedNodeIds([]);
+              setSelectedTextIds([]);
               setSlashMenu((prev) => prev.open ? { ...prev, open: false } : prev);
               if (!connectMode) return;
               e.preventDefault();
@@ -1259,6 +1437,217 @@ export const Desk = ({
                 })
               : React.createElement(DeskTile, { desk: entry, onSelect: onSelectDesk, readOnly: true })
           )
+        )
+      ),
+      // Text items on canvas (top-left corner anchors to grid)
+      (textItemsRef.current || []).map((ti) =>
+        React.createElement(
+          'div',
+          {
+            key: ti.id,
+            style: {
+              position: 'absolute',
+              left: ti.x,
+              top: ti.y,
+              userSelect: 'none',
+              outline: selectedTextIds.includes(ti.id) ? '2px solid #c4b5fd' : 'none',
+              outlineOffset: 2,
+              borderRadius: 6,
+              width: Math.max(40, Number(ti.width) || 180),
+              height: Math.max((ti.fontSize || 16) + 8, Number(ti.height) || 40),
+            },
+            onClick: (e) => {
+              e.stopPropagation();
+              if (editingTextId === ti.id) return;
+              setSelectedTextIds([ti.id]);
+              setSelectedItemKeys([]);
+              setSelectedConnectionIds([]);
+              setSelectedNodeIds([]);
+            },
+          },
+          // Drag handle
+          !readOnly && React.createElement(
+            'div',
+            {
+              style: {
+                height: 18, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '0 4px', cursor: 'grab', color: '#4b5563', fontSize: 10,
+                background: editingTextId === ti.id ? '#1f2937' : 'transparent',
+                borderRadius: '6px 6px 0 0',
+                border: editingTextId === ti.id ? '1px solid #374151' : 'none',
+                borderBottom: 'none',
+              },
+              onPointerDown: (e) => onTextHandlePointerDown(e, ti.id),
+              onPointerMove: (e) => onTextHandlePointerMove(e, ti.id),
+              onPointerUp: (e) => onTextHandlePointerUp(e, ti.id),
+            },
+            React.createElement('span', { style: { letterSpacing: '0.15em', pointerEvents: 'none' } }, '· · ·'),
+            React.createElement(
+              'div',
+              { style: { display: 'flex', gap: 4, alignItems: 'center' } },
+              // Font size button
+              React.createElement(
+                'button',
+                {
+                  onClick: (e) => { e.stopPropagation(); setTextFontSizeMenu(textFontSizeMenu === ti.id ? null : ti.id); },
+                  style: {
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: '#9ca3af', fontSize: 10, padding: '0 3px',
+                  },
+                  title: 'Font size',
+                  onPointerDown: (e) => e.stopPropagation(),
+                },
+                `${ti.fontSize || 16}px`
+              ),
+              // Delete button
+              React.createElement(
+                'button',
+                {
+                  onClick: (e) => { e.stopPropagation(); deleteTextItem(ti.id); },
+                  style: { background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', fontSize: 12, lineHeight: 1, padding: '0 2px' },
+                  title: 'Remove text',
+                  onPointerDown: (e) => e.stopPropagation(),
+                },
+                '×'
+              )
+            )
+          ),
+          // Font size picker dropdown
+          !readOnly && textFontSizeMenu === ti.id && React.createElement(
+            'div',
+            {
+              style: {
+                position: 'absolute', top: 18, right: 0, zIndex: 50,
+                background: '#1f2937', border: '1px solid #374151', borderRadius: 8,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.4)', padding: 4,
+                display: 'flex', flexWrap: 'wrap', gap: 2, width: 140,
+              },
+              onPointerDown: (e) => e.stopPropagation(),
+            },
+            TEXT_FONT_SIZES.map((sz) =>
+              React.createElement(
+                'button',
+                {
+                  key: sz,
+                  onClick: (e) => { e.stopPropagation(); updateTextItem(ti.id, { fontSize: sz }); setTextFontSizeMenu(null); },
+                  style: {
+                    padding: '3px 7px', borderRadius: 5, fontSize: 11, fontWeight: 600,
+                    cursor: 'pointer', border: 'none',
+                    background: (ti.fontSize || 16) === sz ? '#4f46e5' : '#374151',
+                    color: (ti.fontSize || 16) === sz ? '#fff' : '#9ca3af',
+                  },
+                },
+                `${sz}px`
+              )
+            )
+          ),
+          // Text content: editable textarea or display
+          editingTextId === ti.id
+            ? React.createElement('textarea', {
+                autoFocus: true,
+                value: ti.text || '',
+                onFocus: (e) => {
+                  const size = measuredTextSize(e.currentTarget, ti, ti.fontSize || 16);
+                  const next = (textItemsRef.current || []).map((t) =>
+                    t.id === ti.id ? { ...t, ...size } : t
+                  );
+                  textItemsRef.current = next;
+                  rerender();
+                },
+                onChange: (e) => {
+                  const el = e.currentTarget;
+                  const size = measuredTextSize(el, ti, ti.fontSize || 16);
+                  const next = (textItemsRef.current || []).map((t) =>
+                    t.id === ti.id
+                      ? {
+                          ...t,
+                          text: e.target.value,
+                          ...size,
+                        }
+                      : t
+                  );
+                  textItemsRef.current = next;
+                  rerender();
+                },
+                onBlur: (e) => {
+                  const el = e.currentTarget;
+                  const size = measuredTextSize(el, ti, ti.fontSize || 16);
+                  const next = (textItemsRef.current || []).map((t) =>
+                    t.id === ti.id
+                      ? {
+                          ...t,
+                          ...size,
+                        }
+                      : t
+                  );
+                  commitTextItems(next);
+                  setEditingTextId(null);
+                  setTextFontSizeMenu(null);
+                },
+                onKeyDown: (e) => {
+                  if (e.key === 'Escape') {
+                    commitTextItems([...(textItemsRef.current || [])]);
+                    setEditingTextId(null);
+                    setTextFontSizeMenu(null);
+                    return;
+                  }
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    const size = measuredTextSize(e.currentTarget, ti, ti.fontSize || 16);
+                    const next = (textItemsRef.current || []).map((t) =>
+                      t.id === ti.id ? { ...t, ...size } : t
+                    );
+                    commitTextItems(next);
+                    setEditingTextId(null);
+                    setTextFontSizeMenu(null);
+                  }
+                },
+                onMouseUp: (e) => {
+                  const el = e.currentTarget;
+                  const size = measuredTextSize(el, ti, ti.fontSize || 16);
+                  const next = (textItemsRef.current || []).map((t) =>
+                    t.id === ti.id
+                      ? {
+                          ...t,
+                          ...size,
+                        }
+                      : t
+                  );
+                  textItemsRef.current = next;
+                  rerender();
+                },
+                style: {
+                  background: '#111827', border: '1px solid #4f46e5', borderRadius: 6,
+                  padding: '4px 8px', fontSize: ti.fontSize || 16, color: '#e5e7eb',
+                  outline: 'none', minWidth: 120, minHeight: (ti.fontSize || 16) + 16,
+                  width: Math.max(120, Number(ti.width) || 180),
+                  height: Math.max((ti.fontSize || 16) + 16, Number(ti.height) || 40),
+                  resize: 'both', fontFamily: 'inherit', lineHeight: 1.4,
+                  boxSizing: 'border-box',
+                  overflow: 'hidden',
+                },
+              })
+            : React.createElement(
+                'div',
+                {
+                  onDoubleClick: () => { if (!readOnly) setEditingTextId(ti.id); },
+                  style: {
+                    fontSize: ti.fontSize || 16, color: '#e5e7eb', whiteSpace: 'pre-wrap',
+                    cursor: readOnly ? 'default' : 'text', padding: '4px 8px',
+                    minWidth: 40, minHeight: (ti.fontSize || 16) + 8,
+                    width: Math.max(40, Number(ti.width) || 180),
+                    height: Math.max((ti.fontSize || 16) + 8, Number(ti.height) || 40),
+                    borderRadius: 4,
+                    border: '1px solid transparent',
+                    lineHeight: 1.4,
+                    boxSizing: 'border-box',
+                    overflow: 'hidden',
+                  },
+                  onMouseEnter: (e) => { if (!readOnly) e.currentTarget.style.border = '1px dashed #374151'; },
+                  onMouseLeave: (e) => { e.currentTarget.style.border = '1px solid transparent'; },
+                },
+                ti.text || (readOnly ? '' : 'Double-click to edit')
+              )
         )
       ),
       !readOnly && connectMode && React.createElement(
@@ -1346,6 +1735,27 @@ export const Desk = ({
         },
         onPointerDown: (e) => e.stopPropagation(),
       },
+      // Text input option
+      React.createElement(
+        'button',
+        {
+          onClick: addTextItem,
+          style: {
+            width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+            border: '1px solid #374151', borderRadius: 8, background: '#111827',
+            color: '#e5e7eb', padding: '8px 10px', fontSize: 13, cursor: 'pointer',
+            marginBottom: 8, textAlign: 'left',
+          },
+          onMouseEnter: (e) => { e.currentTarget.style.background = '#1e293b'; },
+          onMouseLeave: (e) => { e.currentTarget.style.background = '#111827'; },
+        },
+        React.createElement(
+          'svg', { xmlns: 'http://www.w3.org/2000/svg', width: 14, height: 14, fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2 },
+          React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-7-10h6m-3 0v12' })
+        ),
+        'Text'
+      ),
+      // Connections section
       React.createElement('p', { style: { color: '#9ca3af', fontSize: 11, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'Connections'),
       React.createElement('p', { style: { color: '#a5b4fc', fontSize: 11, lineHeight: 1.5, marginBottom: 8 } }, 'Line edit mode is active. Press "/" again to exit.'),
       connectMode && React.createElement('p', { style: { color: '#a5b4fc', fontSize: 11, lineHeight: 1.5, marginBottom: 8 } }, connectStartKey ? 'Select the second item to complete line.' : 'Click first item, then second item.'),
