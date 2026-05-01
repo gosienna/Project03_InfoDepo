@@ -104,6 +104,7 @@ export const PdfViewer = ({
   const didRestoreScrollRef = useRef(false);
   const lastSavedPositionKeyRef = useRef(null);
   const saveScrollDebounceRef = useRef(null);
+  const savePageDebounceRef = useRef(null);
   const useWindowScrollRef = useRef(false);
   const lastKnownPageRef = useRef(1);
   const lastUserScrollAtRef = useRef(0);
@@ -622,6 +623,12 @@ export const PdfViewer = ({
       if (!didRestoreScrollRef.current) {
         didRestoreScrollRef.current = true;
       }
+      const livePage = getCurrentPage();
+      if (Number.isInteger(livePage) && livePage > 0 && livePage !== lastKnownPageRef.current) {
+        lastKnownPageRef.current = livePage;
+        if (savePageDebounceRef.current) clearTimeout(savePageDebounceRef.current);
+        savePageDebounceRef.current = setTimeout(saveNow, 120);
+      }
       if (saveScrollDebounceRef.current) clearTimeout(saveScrollDebounceRef.current);
       saveScrollDebounceRef.current = setTimeout(saveNow, 300);
     };
@@ -651,6 +658,10 @@ export const PdfViewer = ({
       if (saveScrollDebounceRef.current) {
         clearTimeout(saveScrollDebounceRef.current);
         saveScrollDebounceRef.current = null;
+      }
+      if (savePageDebounceRef.current) {
+        clearTimeout(savePageDebounceRef.current);
+        savePageDebounceRef.current = null;
       }
       clearTimeout(postRestoreSaveTimer);
     };

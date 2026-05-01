@@ -9,6 +9,9 @@ const CARD_W = 250;
 const DRAG_BAR_H = 26;
 const DEFAULT_ZOOM_MIN = 0.1;
 const DEFAULT_ZOOM_MAX = 5;
+const GRID_SIZE = 40;
+
+const snapToGrid = (v) => Math.round(v / GRID_SIZE) * GRID_SIZE;
 
 // --- Key helpers ---
 
@@ -37,8 +40,7 @@ function resolveEntry(key, items, channels, desks) {
 // --- Dot grid background ---
 
 const DotGrid = ({ panX, panY, zoom }) => {
-  const gridSize = 40;
-  const scaled = gridSize * zoom;
+  const scaled = GRID_SIZE * zoom;
   const ox = ((panX % scaled) + scaled) % scaled;
   const oy = ((panY % scaled) + scaled) % scaled;
   return React.createElement(
@@ -567,9 +569,11 @@ export const Desk = ({
     if (!drag || drag.key !== key) return;
     const worldX = (e.clientX - panRef.current.x) / zoomRef.current;
     const worldY = (e.clientY - panRef.current.y) / zoomRef.current;
+    const rawX = drag.startItemX + worldX - drag.startWorldX;
+    const rawY = drag.startItemY + worldY - drag.startWorldY;
     layoutRef.current = {
       ...layoutRef.current,
-      [key]: { x: drag.startItemX + worldX - drag.startWorldX, y: drag.startItemY + worldY - drag.startWorldY },
+      [key]: { x: snapToGrid(rawX), y: snapToGrid(rawY) },
     };
     rerender();
   }, [rerender]);
@@ -588,7 +592,7 @@ export const Desk = ({
     const centerX = (w / 2 - panRef.current.x) / zoomRef.current;
     const centerY = (h / 2 - panRef.current.y) / zoomRef.current;
     const offset = Object.keys(layoutRef.current).length * 20;
-    const newLayout = { ...layoutRef.current, [key]: { x: centerX - CARD_W / 2 + offset % 200, y: centerY - 150 + offset % 100 } };
+    const newLayout = { ...layoutRef.current, [key]: { x: snapToGrid(centerX - CARD_W / 2 + offset % 200), y: snapToGrid(centerY - 150 + offset % 100) } };
     commitLayout(newLayout);
   }, [commitLayout]);
 
