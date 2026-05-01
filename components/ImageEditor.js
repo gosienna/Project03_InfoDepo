@@ -20,15 +20,20 @@ export const ImageEditor = ({
   backgroundColor = '#ffffff',
 }) => {
   const canvasRef      = useRef(null);
+  const viewportRef    = useRef(null);
   const imgRef         = useRef(null);
   const isDrawingRef   = useRef(false);
   const lastPosRef     = useRef({ x: 0, y: 0 });
   const activePointerIdRef = useRef(null);
+  const tiltDragRef = useRef(null); // { pointerId, anchorX, anchorY }
+  const panRef = useRef(null); // { startX, startY, startLeft, startTop }
 
   const [tool,       setTool]       = useState('pen');   // 'pen' | 'text'
   const [color,      setColor]      = useState('#ef4444');
   const [lineWidth,  setLineWidth]  = useState(3);
   const [fontSize,   setFontSize]   = useState(20);
+  const [textTilt,   setTextTilt]   = useState(0);       // degrees
+  const [zoom,       setZoom]       = useState(1);       // canvas edit zoom
   const [undoStack,  setUndoStack]  = useState([]);      // ImageData[]
   const [inputState, setInputState] = useState(null);    // { x, y, value } | null
   const [isSaving,   setIsSaving]   = useState(false);
@@ -84,18 +89,20 @@ export const ImageEditor = ({
     img.src = src;
   }, [src, isBlank, initialWidth, initialHeight, initBlankCanvas]);
 
-  // Get canvas-relative position from pointer event
-  const getCanvasPos = useCallback((e) => {
+  const getCanvasPosFromClient = useCallback((clientX, clientY) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width  / rect.width;
     const scaleY = canvas.height / rect.height;
     return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top)  * scaleY,
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top)  * scaleY,
     };
   }, []);
+
+  // Get canvas-relative position from pointer event
+  const getCanvasPos = useCallback((e) => getCanvasPosFromClient(e.clientX, e.clientY), [getCanvasPosFromClient]);
 
   // Push current canvas state onto undo stack
   const pushUndo = useCallback(() => {
@@ -160,9 +167,19 @@ export const ImageEditor = ({
     const ctx    = canvas.getContext('2d');
     ctx.font         = `bold ${fontSize}px sans-serif`;
     ctx.fillStyle    = color;
-    ctx.fillText(inputState.value, inputState.canvasX, inputState.canvasY);
+    ctx.textBaseline = 'top';
+    const lines = String(inputState.value).replace(/\r/g, '').split('\n');
+    const lineHeight = Math.max(12, Math.round(fontSize * 1.25));
+    const tiltRad = (textTilt * Math.PI) / 180;
+    ctx.save();
+    ctx.translate(inputState.canvasX, inputState.canvasY);
+    ctx.rotate(tiltRad);
+    lines.forEach((line, idx) => {
+      if (line.length > 0) ctx.fillText(line, 0, idx * lineHeight);
+    });
+    ctx.restore();
     setInputState(null);
-  }, [inputState, color, fontSize, pushUndo]);
+  }, [inputState, color, fontSize, textTilt, pushUndo]);
 
   // ── Undo ────────────────────────────────────────────────────────
   const handleUndo = useCallback(() => {
@@ -195,6 +212,42 @@ export const ImageEditor = ({
       setIsSaving(false);
     }, 'image/png');
   }, [filename, onSave]);
+
+  const handleCanvasWheel = useCallback((e) => {
+    if (!loaded) return;
+    const delta = e.deltaY;
+    const factor = delta < 0 ? 1.1 : 0.9;
+    setZoom((prev) => Math.max(0.2, Math.min(5, Number((prev * factor).toFixed(3)))));
+  }, [loaded]);
+
+  const handleViewportMouseDown = useCallback((e) => {
+    if (e.button !== 1) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    e.preventDefault();
+    panRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startLeft: viewport.scrollLeft,
+      startTop: viewport.scrollTop,
+    };
+    viewport.style.cursor = 'grabbing';
+  }, []);
+
+  const handleViewportMouseMove = useCallback((e) => {
+    const viewport = viewportRef.current;
+    const pan = panRef.current;
+    if (!viewport || !pan) return;
+    e.preventDefault();
+    viewport.scrollLeft = pan.startLeft - (e.clientX - pan.startX);
+    viewport.scrollTop = pan.startTop - (e.clientY - pan.startY);
+  }, []);
+
+  const endViewportPan = useCallback(() => {
+    const viewport = viewportRef.current;
+    panRef.current = null;
+    if (viewport) viewport.style.cursor = '';
+  }, []);
 
   // ── Keyboard shortcuts ──────────────────────────────────────────
   useEffect(() => {
@@ -325,6 +378,12 @@ export const ImageEditor = ({
         // Spacer
         React.createElement('div', { className: 'flex-1' }),
 
+        React.createElement(
+          'span',
+          { className: 'text-xs text-gray-400 font-mono mr-1', title: 'Mouse wheel to zoom' },
+          `${Math.round(zoom * 100)}%`
+        ),
+
         // Undo
         React.createElement(
           'button',
@@ -381,8 +440,15 @@ export const ImageEditor = ({
       React.createElement(
         'div',
         {
+          ref: viewportRef,
           className: 'overflow-auto flex-1 bg-gray-950',
           style: { position: 'relative', minHeight: 200 },
+          onWheel: handleCanvasWheel,
+          onMouseDown: handleViewportMouseDown,
+          onMouseMove: handleViewportMouseMove,
+          onMouseUp: endViewportPan,
+          onMouseLeave: endViewportPan,
+          onAuxClick: (e) => { if (e.button === 1) e.preventDefault(); },
         },
 
         !loaded && React.createElement(
@@ -397,7 +463,8 @@ export const ImageEditor = ({
           style: {
             display: loaded ? 'block' : 'none',
             cursor: tool === 'pen' ? 'crosshair' : 'text',
-            maxWidth: '100%',
+            width: canvasRef.current ? `${Math.max(1, Math.round(canvasRef.current.width * zoom))}px` : undefined,
+            height: canvasRef.current ? `${Math.max(1, Math.round(canvasRef.current.height * zoom))}px` : undefined,
             touchAction: 'none',
           },
           onPointerDown: handlePointerDown,
@@ -407,41 +474,108 @@ export const ImageEditor = ({
           onPointerLeave: handlePointerUp,
         }),
 
-        // Floating text input overlay
+        // Floating text input overlay with tilt dot on right edge
         inputState && React.createElement(
           'div',
           {
             style: {
               position: 'fixed',
-              top:  inputState.y - 18,
+              top:  inputState.y,
               left: inputState.x,
               zIndex: 200,
+              transform: `rotate(${textTilt}deg)`,
+              transformOrigin: 'top left',
             },
           },
-          React.createElement('input', {
-            autoFocus: true,
-            value: inputState.value,
-            onChange: (e) => setInputState(s => ({ ...s, value: e.target.value })),
-            onKeyDown: (e) => {
-              if (e.key === 'Enter')  { e.preventDefault(); commitText(); }
-              if (e.key === 'Escape') { setInputState(null); }
-            },
-            onBlur: commitText,
-            style: {
-              background: 'transparent',
-              border: 'none',
-              borderBottom: `2px solid ${color}`,
-              outline: 'none',
-              color: color,
-              fontSize: `${fontSize}px`,
-              fontWeight: 'bold',
-              fontFamily: 'sans-serif',
-              minWidth: 80,
-              padding: '0 2px',
-              caretColor: color,
-            },
-            placeholder: 'Type text…',
-          })
+          React.createElement(
+            'div',
+            { style: { position: 'relative', display: 'inline-block' } },
+            React.createElement('textarea', {
+              autoFocus: true,
+              value: inputState.value,
+              onChange: (e) => {
+                e.target.style.height = 'auto';
+                e.target.style.height = `${e.target.scrollHeight}px`;
+                setInputState(s => ({ ...s, value: e.target.value }));
+              },
+              onKeyDown: (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitText(); }
+                if (e.key === 'Escape') { setInputState(null); }
+              },
+              onBlur: (e) => {
+                if (tiltDragRef.current) return;
+                commitText();
+              },
+              rows: 2,
+              style: {
+                background: 'transparent',
+                border: `1.5px solid ${color}`,
+                borderRadius: '4px',
+                outline: 'none',
+                color: color,
+                fontSize: `${fontSize}px`,
+                fontWeight: 'bold',
+                fontFamily: 'sans-serif',
+                minWidth: 120,
+                minHeight: fontSize * 1.8,
+                padding: '2px 4px',
+                caretColor: color,
+                resize: 'none',
+                overflow: 'hidden',
+                whiteSpace: 'pre',
+                lineHeight: `${Math.max(12, Math.round(fontSize * 1.25))}px`,
+              },
+              placeholder: 'Shift+Enter for new line',
+            }),
+            React.createElement('div', {
+              style: {
+                position: 'absolute',
+                top: '50%',
+                right: -7,
+                width: 14,
+                height: 14,
+                borderRadius: '50%',
+                background: '#6366f1',
+                border: '2px solid white',
+                cursor: 'grab',
+                transform: 'translateY(-50%)',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.5)',
+              },
+              title: 'Drag to tilt text',
+              onPointerDown: (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                tiltDragRef.current = {
+                  pointerId: e.pointerId,
+                  anchorX: inputState.x,
+                  anchorY: inputState.y,
+                };
+                e.currentTarget.setPointerCapture?.(e.pointerId);
+              },
+              onPointerMove: (e) => {
+                const d = tiltDragRef.current;
+                if (!d || d.pointerId !== e.pointerId) return;
+                e.preventDefault();
+                const dx = e.clientX - d.anchorX;
+                const dy = e.clientY - d.anchorY;
+                const angle = Math.round(Math.atan2(dy, dx) * (180 / Math.PI));
+                const clamped = Math.max(-80, Math.min(80, angle));
+                setTextTilt(clamped);
+              },
+              onPointerUp: (e) => {
+                if (tiltDragRef.current?.pointerId === e.pointerId) {
+                  tiltDragRef.current = null;
+                  e.currentTarget.releasePointerCapture?.(e.pointerId);
+                }
+              },
+              onPointerCancel: (e) => {
+                if (tiltDragRef.current?.pointerId === e.pointerId) {
+                  tiltDragRef.current = null;
+                  e.currentTarget.releasePointerCapture?.(e.pointerId);
+                }
+              },
+            })
+          )
         ),
       ),
 
@@ -450,8 +584,8 @@ export const ImageEditor = ({
         'div',
         { className: 'px-4 py-1.5 text-xs text-gray-600 border-t border-gray-800 shrink-0 bg-gray-900' },
         tool === 'pen'
-          ? 'Click and drag to draw. ⌘Z to undo.'
-          : 'Click to place text, type, then press Enter to stamp. ⌘Z to undo.'
+          ? 'Click and drag to draw. Mouse wheel to zoom. Middle-click drag to pan. ⌘Z to undo.'
+          : 'Click to place text, drag dot to tilt, Shift+Enter for new line, Enter to stamp. Mouse wheel to zoom. Middle-click drag to pan. ⌘Z to undo.'
       ),
     )
   );
