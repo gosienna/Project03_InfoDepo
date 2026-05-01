@@ -80,6 +80,11 @@ export const Library = ({
   onOpenYoutube,
   onOpenChannel,
   onOpenFile,
+  isSyncing,
+  setIsSyncing,
+  syncProgress,
+  setSyncProgress,
+  onRegisterSync,
 }) => {
   const isEditor = userType === 'master' || userType === 'editor';
   const normalizedUserEmail = String(googleUserEmail || '').trim().toLowerCase();
@@ -107,10 +112,7 @@ export const Library = ({
   const [libraryDisplayPolicy, setLibraryDisplayPolicy] = useState(() => readLibraryDisplayPolicy());
   const [activeFilters,    setActiveFilters]    = useState(new Set());
 
-  // Sync + Backup state (combined operation)
-  const [isSyncing,   setIsSyncing]   = useState(false);
   const [syncResult,  setSyncResult]  = useState(null);
-  const [syncProgress, setSyncProgress] = useState('');
 
   const hasCredentials = !!(
     credentials.clientId &&
@@ -694,6 +696,7 @@ export const Library = ({
   const runSync = () => runOwnerSync();
 
   runOwnerSyncRef.current = runOwnerSync;
+  onRegisterSync?.(runOwnerSync);
 
   useEffect(() => {
     if (!hasCredentials || !String(driveFolderId || '').trim()) return;
@@ -890,23 +893,6 @@ export const Library = ({
     driveFolderId.length > 14 ? `${driveFolderId.slice(0, 8)}…${driveFolderId.slice(-4)}` : driveFolderId || '—',
   );
 
-  const syncButton = hasCredentials && isEditor && React.createElement(
-    'button',
-    {
-      onClick: runSync,
-      disabled: isSyncing,
-      className: 'flex items-center gap-1.5 bg-teal-800 hover:bg-teal-700 disabled:opacity-50 text-white text-sm font-bold py-2 px-4 rounded-xl transition-all active:scale-95',
-      title: 'Back up local items to Drive, then sync Drive → local',
-    },
-    isSyncing
-      ? React.createElement('div', { className: 'h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin' })
-      : React.createElement(
-          'svg',
-          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
-          React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' })
-        ),
-    isSyncing ? (syncProgress || 'Syncing...') : 'Sync'
-  );
 
   return React.createElement(
     React.Fragment,
@@ -933,9 +919,6 @@ export const Library = ({
         ),
 
         folderBadge,
-
-        // Sync button (backup local → Drive, then sync Drive → local)
-        hasCredentials && syncButton,
 
         // Add Content dropdown (editor/master only)
         isEditor && React.createElement(AddContentDropdown, {
@@ -1064,6 +1047,7 @@ export const Library = ({
           { key: 'notes',    label: 'Notes',    activeClass: 'bg-emerald-600 border-emerald-500 text-white' },
           { key: 'videos',   label: 'Videos',   activeClass: 'bg-red-600 border-red-500 text-white' },
           { key: 'channels', label: 'Channels', activeClass: 'bg-red-900 border-red-800 text-white' },
+          { key: 'desks',    label: 'Desk',     activeClass: 'bg-violet-700 border-violet-600 text-white' },
         ].map(({ key, label, activeClass }) =>
           React.createElement(
             'button',

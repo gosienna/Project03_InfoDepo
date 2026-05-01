@@ -53,6 +53,168 @@ const DotGrid = ({ panX, panY, zoom }) => {
   );
 };
 
+// --- Desk selector dropdown ---
+
+const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
+  const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editValue, setEditValue] = useState('');
+  const editingRef = useRef(false);
+  const current = desks.find((d) => d.id === currentDeskId);
+
+  const startEdit = (e, d) => {
+    e.preventDefault();
+    e.stopPropagation();
+    editingRef.current = true;
+    setEditingId(d.id);
+    setEditValue(d.name || '');
+  };
+
+  const commitEdit = (id) => {
+    const trimmed = editValue.trim();
+    if (trimmed && onRename) onRename(id, trimmed);
+    editingRef.current = false;
+    setEditingId(null);
+  };
+
+  const cancelEdit = () => {
+    editingRef.current = false;
+    setEditingId(null);
+  };
+
+  return React.createElement(
+    'div',
+    { style: { position: 'relative' }, onClick: (e) => e.stopPropagation() },
+    React.createElement(
+      'button',
+      {
+        onClick: () => setOpen((v) => !v),
+        onBlur: () => setTimeout(() => { if (!editingRef.current) setOpen(false); }, 150),
+        style: {
+          background: 'none', border: 'none', borderRadius: 10,
+          padding: '4px 10px', fontSize: 20, fontWeight: 700, color: '#e5e7eb',
+          cursor: desks.length > 1 ? 'pointer' : 'default',
+          display: 'flex', alignItems: 'center', gap: 8,
+          letterSpacing: '-0.02em',
+        },
+      },
+      React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, current?.name || 'Desk'),
+      desks.length > 1 && React.createElement(
+        'svg',
+        { xmlns: 'http://www.w3.org/2000/svg', width: 14, height: 14, fill: 'none', viewBox: '0 0 24 24', stroke: '#6b7280', strokeWidth: 2.5, style: { flexShrink: 0 } },
+        React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M19 9l-7 7-7-7' })
+      )
+    ),
+    open && desks.length > 1 && React.createElement(
+      'div',
+      {
+        style: {
+          position: 'absolute', top: 'calc(100% + 4px)', left: '50%', transform: 'translateX(-50%)',
+          background: '#1f2937', border: '1px solid #374151', borderRadius: 10,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.4)', zIndex: 50,
+          minWidth: 220, maxHeight: 300, overflowY: 'auto',
+        },
+      },
+      desks.map((d) =>
+        React.createElement(
+          'div',
+          {
+            key: d.id,
+            style: {
+              display: 'flex', alignItems: 'center', gap: 6,
+              background: d.id === currentDeskId ? '#374151' : 'none',
+              borderBottom: '1px solid #111827',
+              padding: editingId === d.id ? '4px 8px' : '0',
+            },
+          },
+          editingId === d.id
+            // Inline edit mode
+            ? React.createElement(
+                React.Fragment, null,
+                React.createElement('input', {
+                  autoFocus: true,
+                  value: editValue,
+                  onChange: (e) => setEditValue(e.target.value),
+                  onKeyDown: (e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); commitEdit(d.id); }
+                    if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+                  },
+                  onBlur: () => commitEdit(d.id),
+                  style: {
+                    flex: 1, background: '#111827', border: '1px solid #4f46e5',
+                    borderRadius: 6, padding: '4px 8px', fontSize: 13, color: '#e5e7eb',
+                    outline: 'none', minWidth: 0,
+                  },
+                }),
+                React.createElement(
+                  'button',
+                  {
+                    onMouseDown: (e) => { e.preventDefault(); commitEdit(d.id); },
+                    style: { background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#818cf8', flexShrink: 0 },
+                    title: 'Save',
+                  },
+                  React.createElement(
+                    'svg', { xmlns: 'http://www.w3.org/2000/svg', width: 13, height: 13, fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2.5 },
+                    React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M5 13l4 4L19 7' })
+                  )
+                ),
+                React.createElement(
+                  'button',
+                  {
+                    onMouseDown: (e) => { e.preventDefault(); cancelEdit(); },
+                    style: { background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#6b7280', flexShrink: 0 },
+                    title: 'Cancel',
+                  },
+                  React.createElement(
+                    'svg', { xmlns: 'http://www.w3.org/2000/svg', width: 13, height: 13, fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2.5 },
+                    React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M6 18L18 6M6 6l12 12' })
+                  )
+                )
+              )
+            // Normal row
+            : React.createElement(
+                React.Fragment, null,
+                React.createElement(
+                  'button',
+                  {
+                    onMouseDown: (e) => { e.preventDefault(); onSelect(d); setOpen(false); },
+                    style: {
+                      flex: 1, textAlign: 'left', padding: '8px 10px 8px 12px',
+                      background: 'none', border: 'none',
+                      color: d.id === currentDeskId ? '#a5b4fc' : '#e5e7eb',
+                      fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
+                      minWidth: 0,
+                    },
+                    onMouseEnter: (e) => { if (d.id !== currentDeskId) e.currentTarget.closest('div').style.background = '#2d3748'; },
+                    onMouseLeave: (e) => { if (d.id !== currentDeskId) e.currentTarget.closest('div').style.background = 'none'; },
+                  },
+                  d.id === currentDeskId && React.createElement('span', { style: { color: '#818cf8', fontSize: 8, lineHeight: 1, flexShrink: 0 } }, '●'),
+                  React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, d.name || 'Untitled Desk')
+                ),
+                onRename && React.createElement(
+                  'button',
+                  {
+                    onMouseDown: (e) => startEdit(e, d),
+                    style: {
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      padding: '8px 10px', color: '#4b5563', flexShrink: 0,
+                    },
+                    title: 'Rename desk',
+                    onMouseEnter: (e) => { e.currentTarget.style.color = '#9ca3af'; },
+                    onMouseLeave: (e) => { e.currentTarget.style.color = '#4b5563'; },
+                  },
+                  React.createElement(
+                    'svg', { xmlns: 'http://www.w3.org/2000/svg', width: 12, height: 12, fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2 },
+                    React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z' })
+                  )
+                )
+              )
+        )
+      )
+    )
+  );
+};
+
 // --- Inline search to add existing items to desk ---
 
 const subColor = (sub) => {
@@ -164,6 +326,7 @@ export const Desk = ({
   onSelectChannel,
   onSelectDesk,
   onUpdateLayout,
+  onRenameDesk,
   readOnly,
   onOpenNewNote,
   onOpenYoutube,
@@ -383,6 +546,20 @@ export const Desk = ({
           )
         )
       )
+    ),
+    // Top-center: desk title (always shown)
+    React.createElement(
+      'div',
+      {
+        style: { position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 35 },
+        onClick: (e) => e.stopPropagation(),
+      },
+      React.createElement(DeskSelector, {
+        desks: desks || [],
+        currentDeskId: desk?.id,
+        onSelect: onSelectDesk,
+        onRename: onRenameDesk,
+      })
     ),
     // Top-right toolbar: search to add existing items + add new content
     !readOnly && React.createElement(

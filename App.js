@@ -61,13 +61,16 @@ const App = () => {
   const [currentChannel, setCurrentChannel] = useState(null);
   const [currentDesk, setCurrentDesk] = useState(null);
   const [view, setView] = useState('library');
-  const [mode, setMode] = useState('library'); // 'library' | 'desk' | 'explorer'
+  const [mode, setMode] = useState('desk'); // 'library' | 'desk' | 'explorer'
   /** Step 1 gate: Google sign-in (all users). True when credentials configured but no valid token. */
   const [loginGateActive, setLoginGateActive] = useState(() => needsGoogleSignIn());
   /** Step 2 gate: Drive folder setup (MASTER/EDITOR only). True until folder ID is saved. */
   const [driveFolderReady, setDriveFolderReady] = useState(() => !!getDriveFolderId().trim());
   const [pendingChannelDelete, setPendingChannelDelete] = useState(null);
   const [isSystemSettingsOpen, setIsSystemSettingsOpen] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState('');
+  const syncFnRef = useRef(null);
   const [isNewNoteOpen, setIsNewNoteOpen] = useState(false);
   const [isYoutubeOpen, setIsYoutubeOpen] = useState(false);
   const [isChannelOpen, setIsChannelOpen] = useState(false);
@@ -155,10 +158,12 @@ const App = () => {
     if (updated) setCurrentDesk(updated);
   }, [desks]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // When switching to desk mode, auto-select the most-recently-modified desk.
+  // When switching to desk mode, auto-select the most-recently-visited desk.
   useEffect(() => {
     if (mode === 'desk' && !currentDesk && desks.length > 0) {
-      setCurrentDesk(desks[0]);
+      const timeOf = (d) => new Date(d.lastVisitedAt ?? d.localModifiedAt ?? d.modifiedTime ?? 0).getTime();
+      const mostRecent = desks.reduce((best, d) => timeOf(d) > timeOf(best) ? d : best, desks[0]);
+      setCurrentDesk(mostRecent);
     }
   }, [mode, desks]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -232,6 +237,7 @@ const App = () => {
     setCurrentDesk(desk);
     setMode('desk');
     setView('library');
+    touchItemVisit(desk.id, 'desks');
   };
 
   const handleAddDesk = async (name) => {
@@ -395,6 +401,9 @@ const App = () => {
       showModeToggle: view === 'library',
       userType,
       onSystemSettings: isEditorOrMaster ? () => setIsSystemSettingsOpen(true) : undefined,
+      onSync: isEditorOrMaster && hasDriveLibrarySetup ? () => syncFnRef.current?.() : undefined,
+      isSyncing,
+      syncProgress,
     }),
     React.createElement('input', {
       ref: fileInputRef,
@@ -417,15 +426,88 @@ const App = () => {
     }),
     React.createElement(
       "main",
-      { className: `flex-grow flex flex-col min-h-0 ${(mode === 'explorer' || mode === 'desk') ? '' : 'p-4 sm:p-6 md:p-8'}` },
-      mode === 'explorer'
-        ? React.createElement(Explorer, {
-            addItem,
-            addImage,
-            onSaved: () => setMode('library'),
-          })
-        : mode === 'desk' && view === 'library'
-        ? currentDesk
+      { className: "flex-grow flex flex-col min-h-0" },
+
+      // Library: always mounted so sync stays registered; hidden when another view is active
+      React.createElement(
+        "div",
+        {
+          className: mode === 'library' && view === 'library'
+            ? 'flex-grow flex flex-col min-h-0 p-4 sm:p-6 md:p-8'
+            : 'hidden',
+        },
+        React.createElement(Library, {
+          items,
+          channels,
+          desks,
+          onSelectItem: handleSelectVideo,
+          onSelectChannel: handleSelectChannel,
+          onSelectDesk: handleSelectDesk,
+          onAddDesk: handleAddDesk,
+          onDeleteDesk: deleteDesk,
+          onAddItem: addItem,
+          onDeleteItem: deleteItem,
+          onClearLibrary: clearAll,
+          onSetDriveId: setItemDriveId,
+          onSetNoteFolderData: setNoteFolderData,
+          onGetAllImages: getAllImages,
+          getImagesForNote,
+          onAddChannel: addChannel,
+          onDeleteChannel: deleteChannel,
+          getChannelByDriveId,
+          upsertDriveChannel,
+          getDeskByDriveId,
+          upsertDriveDesk,
+          getBookByDriveId,
+          getBookByName,
+          upsertDriveBook,
+          deleteItemByDriveId,
+          deleteChannelByDriveId,
+          getLocalRecordsByOwnerEmail,
+          getImageByDriveId,
+          getImageByName,
+          upsertDriveImage,
+          getNotes,
+          getPdfAnnotationSidecar,
+          setPdfAnnotationDriveSync,
+          upsertDrivePdfAnnotation,
+          setRecordTags,
+          setItemSharedWith,
+          renameItem,
+          getMergedLibraryItems,
+          getTotalStorageUsed,
+          onGoogleUserEmail: setGoogleUserEmail,
+          onDriveCredentialsChanged: recheckDriveOAuthGate,
+          loadItems,
+          loadChannels,
+          loadAll,
+          userType,
+          userConfig,
+          googleUserEmail,
+          isSystemSettingsOpen,
+          setIsSystemSettingsOpen,
+          onOpenNewNote: () => setIsNewNoteOpen(true),
+          onOpenYoutube: () => setIsYoutubeOpen(true),
+          onOpenChannel: () => setIsChannelOpen(true),
+          onOpenFile: () => fileInputRef.current?.click(),
+          isSyncing,
+          setIsSyncing,
+          syncProgress,
+          setSyncProgress,
+          onRegisterSync: (fn) => { syncFnRef.current = fn; },
+        })
+      ),
+
+      // Explorer
+      mode === 'explorer' && React.createElement(Explorer, {
+        addItem,
+        addImage,
+        onSaved: () => setMode('library'),
+      }),
+
+      // Desk
+      mode === 'desk' && view === 'library' && (
+        currentDesk
           ? React.createElement(Desk, {
               desk: currentDesk,
               items,
@@ -435,7 +517,8 @@ const App = () => {
               onSelectChannel: handleSelectChannel,
               onSelectDesk: handleSelectDesk,
               onUpdateLayout: setDeskLayout,
-              readOnly: userType === 'viewer',
+              onRenameDesk: (id, name) => renameItem(id, 'desks', name),
+              readOnly: false,
               onOpenNewNote: () => setIsNewNoteOpen(true),
               onOpenYoutube: () => setIsYoutubeOpen(true),
               onOpenChannel: () => setIsChannelOpen(true),
@@ -445,7 +528,7 @@ const App = () => {
               'div',
               { className: 'flex flex-col items-center justify-center h-full gap-4' },
               React.createElement('p', { className: 'text-gray-400 text-lg' }, 'No desk selected.'),
-              userType !== 'viewer' && React.createElement(
+              React.createElement(
                 'button',
                 {
                   onClick: () => handleAddDesk('New Desk'),
@@ -454,97 +537,47 @@ const App = () => {
                 'Create First Desk'
               )
             )
-        : view === 'library'
-        ? React.createElement(Library, {
-            items,
-            channels,
-            desks,
-            onSelectItem: handleSelectVideo,
-            onSelectChannel: handleSelectChannel,
-            onSelectDesk: handleSelectDesk,
-            onAddDesk: userType !== 'viewer' ? handleAddDesk : undefined,
-            onDeleteDesk: userType !== 'viewer' ? deleteDesk : undefined,
-            onAddItem: addItem,
-            onDeleteItem: deleteItem,
-            onClearLibrary: clearAll,
-            onSetDriveId: setItemDriveId,
-            onSetNoteFolderData: setNoteFolderData,
-            onGetAllImages: getAllImages,
-            getImagesForNote,
-            onAddChannel: addChannel,
-            onDeleteChannel: deleteChannel,
-            getChannelByDriveId,
-            upsertDriveChannel,
-            getDeskByDriveId,
-            upsertDriveDesk,
-            getBookByDriveId,
-            getBookByName,
-            upsertDriveBook,
-            deleteItemByDriveId,
-            deleteChannelByDriveId,
-            getLocalRecordsByOwnerEmail,
-            getImageByDriveId,
-            getImageByName,
-            upsertDriveImage,
-            getNotes,
-            getPdfAnnotationSidecar,
-            setPdfAnnotationDriveSync,
-            upsertDrivePdfAnnotation,
-            setRecordTags,
-            setItemSharedWith,
-            renameItem,
-            getMergedLibraryItems,
-            getTotalStorageUsed,
-            onGoogleUserEmail: setGoogleUserEmail,
-            onDriveCredentialsChanged: recheckDriveOAuthGate,
-            loadItems,
-            loadChannels,
-            loadAll,
-            userType,
-            userConfig,
-            googleUserEmail,
-            isSystemSettingsOpen,
-            setIsSystemSettingsOpen,
-            onOpenNewNote: () => setIsNewNoteOpen(true),
-            onOpenYoutube: () => setIsYoutubeOpen(true),
-            onOpenChannel: () => setIsChannelOpen(true),
-            onOpenFile: () => fileInputRef.current?.click(),
-          })
-        : view === 'channel' && currentChannel
-        ? React.createElement(YoutubeChannelViewer, {
-            channel: currentChannel,
-            onBack: handleBackToLibrary,
-            onSelectItem: handleSelectVideo,
-            onDeleteChannel: deleteChannel,
-            onRequestDeleteChannel: handleRequestDeleteChannel,
-            onUpdateChannel: updateChannel,
-            readOnly: false,
-          })
-        : currentVideo
-        ? React.createElement(Reader, {
-            key: libraryItemKey(currentVideo),
-            video: currentVideo,
-            onUpdateItem: updateItem,
-            onSaveReadingPosition: setItemReadingPosition,
-            getPdfAnnotationSidecar,
-            putPdfAnnotationsForItem,
-            onAddImage: addImage,
-            onGetImages: getImagesForNote,
-            readOnly: false,
-            onSelectChannel: handleSelectChannel,
-            onAddChannel: addChannel,
-            onRename: renameItem,
-          })
-        : React.createElement(
-            "div",
-            { className: "flex flex-col items-center justify-center h-64" },
-            React.createElement("p", { className: "text-gray-400" }, "No item selected."),
-            React.createElement(
-              "button",
-              { onClick: handleBackToLibrary, className: "mt-4 text-indigo-400 hover:underline" },
-              "Return to Library"
-            )
+      ),
+
+      // Channel viewer
+      view === 'channel' && currentChannel && React.createElement(YoutubeChannelViewer, {
+        channel: currentChannel,
+        onBack: handleBackToLibrary,
+        onSelectItem: handleSelectVideo,
+        onDeleteChannel: deleteChannel,
+        onRequestDeleteChannel: handleRequestDeleteChannel,
+        onUpdateChannel: updateChannel,
+        readOnly: false,
+      }),
+
+      // Reader
+      view === 'reader' && currentVideo && React.createElement(Reader, {
+        key: libraryItemKey(currentVideo),
+        video: currentVideo,
+        onUpdateItem: updateItem,
+        onSaveReadingPosition: setItemReadingPosition,
+        getPdfAnnotationSidecar,
+        putPdfAnnotationsForItem,
+        onAddImage: addImage,
+        onGetImages: getImagesForNote,
+        readOnly: false,
+        onSelectChannel: handleSelectChannel,
+        onAddChannel: addChannel,
+        onRename: renameItem,
+      }),
+
+      // Fallback
+      view !== 'library' && view !== 'channel' && view !== 'reader' && mode !== 'explorer' && mode !== 'desk' &&
+        React.createElement(
+          "div",
+          { className: "flex flex-col items-center justify-center h-64 p-4" },
+          React.createElement("p", { className: "text-gray-400" }, "No item selected."),
+          React.createElement(
+            "button",
+            { onClick: handleBackToLibrary, className: "mt-4 text-indigo-400 hover:underline" },
+            "Return to Library"
           )
+        )
     ),
     pendingChannelDelete &&
       React.createElement(DeleteContentModal, {

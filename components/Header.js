@@ -5,7 +5,7 @@ import { UserConfigModal } from './UserConfigModal.js';
 import { fetchUserConfig } from '../utils/userConfig.js';
 import { getOwnerDriveAccessToken } from '../utils/driveAccessToken.js';
 
-export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, userType, onSystemSettings }) => {
+export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, userType, onSystemSettings, onSync, isSyncing, syncProgress }) => {
   const [userConfigOpen, setUserConfigOpen] = useState(false);
   const [configData, setConfigData] = useState(null);
   const normalizedRole = String(userType || '').trim().toLowerCase();
@@ -65,7 +65,7 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
           )
         )
       ),
-      showModeToggle && userType !== 'viewer' &&
+      showModeToggle &&
         React.createElement(
           "div",
           { className: "flex items-center gap-1 bg-gray-700 rounded-lg p-1 flex-shrink-0" },
@@ -109,6 +109,24 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
       React.createElement(
         "div",
         { className: "flex items-center gap-2 flex-shrink-0" },
+        onSync &&
+          React.createElement(
+            "button",
+            {
+              onClick: onSync,
+              disabled: isSyncing,
+              className: "flex items-center gap-1.5 bg-teal-800 hover:bg-teal-700 disabled:opacity-50 text-white text-sm font-bold py-2 px-4 rounded-xl transition-all active:scale-95",
+              title: "Back up local items to Drive, then sync Drive → local",
+            },
+            isSyncing
+              ? React.createElement("div", { className: "h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" })
+              : React.createElement(
+                  "svg",
+                  { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor" },
+                  React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: 2, d: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" })
+                ),
+            isSyncing ? (syncProgress || "Syncing...") : "Sync"
+          ),
         onSystemSettings &&
           React.createElement(
             "button",
