@@ -94,6 +94,49 @@ function errorMessage(err) {
   return err?.message || 'Failed to open book.';
 }
 
+/**
+ * IndexedDB-backed Blobs on Safari (especially iOS) often break when sliced or
+ * re-wrapped as blob: URLs inside foliate-js / zip.js (WebKitBlobResource error 1).
+ * Copy into a normal ArrayBuffer-backed File before open().
+ * @param {Blob|ArrayBuffer|ArrayBufferView} data
+ * @param {string} [name]
+ * @param {string} [type]
+ */
+async function materializeAsFile(data, name, type) {
+  if (data == null) throw new Error('No book data');
+  let bytes = data;
+  if (typeof data.arrayBuffer === 'function') {
+    bytes = await data.arrayBuffer();
+  }
+  const mime = (type && String(type).trim()) || 'application/octet-stream';
+  return new File([bytes], name || 'book', { type: mime, lastModified: Date.now() });
+}
+
+/** Paginator layout math assumes a non-zero host box; iPad can paint one frame at 0x0. */
+function waitForLayout(el, { timeoutMs = 8000 } = {}) {
+  if (!el) return Promise.resolve();
+  const sized = () => {
+    const r = el.getBoundingClientRect();
+    return r.width > 2 && r.height > 2;
+  };
+  if (sized()) return Promise.resolve();
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      ro.disconnect();
+      clearTimeout(tid);
+      resolve();
+    };
+    const ro = new ResizeObserver(() => {
+      if (sized()) finish();
+    });
+    ro.observe(el);
+    const tid = setTimeout(finish, timeoutMs);
+  });
+}
+
 /** Kindle/VIZ-style comics: every spine item has page-spread-* but no pre-paginated rendition (no display-options.xml). Foliate would use column "spread manga" mode and mis-paint image pages. */
 function shouldReopenAsFixedSpreadComic(view) {
   if (view.isFixedLayout) return false;
@@ -184,7 +227,8 @@ export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition
 
     (async () => {
       try {
-        const file = new File([data], name || 'book', { type: type || '' });
+        await waitForLayout(container);
+        const file = await materializeAsFile(data, name, type);
         await view.open(file);
         if (cancelled) return;
 
@@ -248,6 +292,7 @@ export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition
         });
 
         const savedCfi = initialReadingPosition?.cfi ?? null;
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
         if (savedCfi) {
           await view.goTo(savedCfi);
         } else {

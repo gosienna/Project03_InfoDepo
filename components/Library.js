@@ -88,6 +88,7 @@ export const Library = ({
   onRegisterSync,
 }) => {
   const isEditor = userType === 'master' || userType === 'editor';
+  const showLibraryAddMenu = isEditor || (userType === 'viewer' && typeof onAddDesk === 'function');
   const normalizedUserEmail = String(googleUserEmail || '').trim().toLowerCase();
   const searchInputRef    = useRef(null);
   const uploadTokenRef    = useRef(null);
@@ -921,13 +922,13 @@ export const Library = ({
 
         folderBadge,
 
-        // Add Content dropdown (editor/master only)
-        isEditor && React.createElement(AddContentDropdown, {
-          onNewNote: onOpenNewNote,
-          onAddYoutube: onOpenYoutube,
-          onAddChannel: onOpenChannel,
-          onAddFile: onOpenFile,
-          onAddUrl: onOpenUrl,
+        // Add Content: editors get full menu; viewers may create desks only
+        showLibraryAddMenu && React.createElement(AddContentDropdown, {
+          onNewNote: isEditor ? onOpenNewNote : undefined,
+          onAddYoutube: isEditor ? onOpenYoutube : undefined,
+          onAddChannel: isEditor ? onOpenChannel : undefined,
+          onAddFile: isEditor ? onOpenFile : undefined,
+          onAddUrl: isEditor ? onOpenUrl : undefined,
           onAddDesk: onAddDesk ? () => {
             const name = window.prompt('Desk name:', 'New Desk');
             if (name && name.trim()) onAddDesk(name.trim());

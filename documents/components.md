@@ -90,11 +90,23 @@
 ### `Reader.js`
 
 - Dispatches viewers by extension/MIME:
-  - EPUB -> `reader.html` (new tab)
-  - PDF -> `PdfViewer`
-  - TXT -> `TxtViewer`
-  - Markdown -> `MarkdownEditor`
-  - YouTube -> `YoutubeViewer`
+  - EPUB / MOBI / AZW / AZW3 → `FoliateViewer` (inline, same tab)
+  - PDF → `PdfViewer`
+  - TXT → `TxtViewer`
+  - Markdown → `MarkdownEditor`
+  - YouTube → `YoutubeViewer`
+
+### `FoliateViewer.js`
+
+- Wraps the foliate-js `<foliate-view>` custom element.
+- Detects renderer type after `view.open()`: `foliate-fxl` (true fixed-layout) vs `foliate-paginator` (reflowable + spread manga).
+- Spread manga detection: if every spine section has `pageSpread` set and `view.isFixedLayout` is false, treats the book as spread manga (KCC EPUBs lack standard `rendition:layout` metadata).
+- Flow mode:
+  - Reflowable text: scrolled by default, togglable to paginated.
+  - Fixed-layout (fxl): locked to paginated; layout toggle hidden.
+  - Spread manga: scrolled flow on paginator; navigation via `view.goTo(sectionIndex)` to avoid blank boundary columns; Prev/Next shown, toggle hidden.
+- Saves/restores reading position as EPUB CFI via `onSaveReadingPosition`.
+- Props: `{ data, name, type, itemId, initialReadingPosition, onSaveReadingPosition, storeName }`
 
 ### `YoutubeChannelViewer.js`
 

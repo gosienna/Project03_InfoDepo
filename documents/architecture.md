@@ -10,9 +10,8 @@ User
       ├── React app (Vite)
       │    ├── Library (items/channels/desks, sync, sharing)
       │    ├── Desk (infinite canvas for item layout)
-      │    ├── Reader (PDF/TXT/MD/YouTube)
+      │    ├── Reader (EPUB/MOBI/AZW3/PDF/TXT/MD/YouTube — all inline)
       │    └── Explorer (web page → markdown note)
-      ├── reader.html (EPUB in new tab)
       └── IndexedDB (InfoDepo, v8)
 ```
 
@@ -37,6 +36,7 @@ App.js
 │   └── DeskTile.js
 ├── YoutubeChannelViewer.js
 └── Reader.js
+    ├── FoliateViewer.js   ← EPUB / MOBI / AZW / AZW3 (foliate-js, inline)
     ├── PdfViewer.js
     ├── TxtViewer.js
     ├── MarkdownEditor.js

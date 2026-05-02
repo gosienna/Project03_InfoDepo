@@ -1,113 +1,139 @@
-# EPUB Reader
+# Ebook Reader (FoliateViewer)
 
-## How EPUB Rendering Works
+## Supported Formats
 
-EPUB files are zip archives — each spine item is a self-contained XHTML file with its own CSS and assets. The renderer extracts and displays them one at a time.
-
-```
-book.epub (zip)
-├── META-INF/container.xml      ← points to the OPF file
-└── OEBPS/
-    ├── content.opf             ← manifest (all files) + spine (reading order)
-    ├── Text/chapter1.xhtml
-    ├── Text/chapter2.xhtml
-    ├── Styles/style.css
-    └── Images/
-```
-
-The renderer parses the OPF spine to determine reading order, then loads each chapter on demand.
-
-## Why a Separate Page (reader.html)
-
-The app originally rendered EPUB inside `EpubViewer.js` (a React component) using an `<iframe>`. This caused two browser security conflicts:
-
-### Problem 1 — Sandbox script blocking
-EPUB.js renders chapter HTML into `<iframe srcdoc="...">`. Chrome sandboxes `srcdoc` iframes, blocking script execution inside them:
-```
-about:srcdoc:1 Blocked script execution — 'allow-scripts' permission is not set
-```
-This broke Next/Prev page navigation.
-
-### Problem 2 — Sandbox escape warning
-Fixing Problem 1 required `allowScriptedContent: true`, which adds both `allow-scripts` and `allow-same-origin` to the iframe sandbox. Chrome warns that this combination allows the iframe to escape its own sandbox:
-```
-An iframe which has both allow-scripts and allow-same-origin can escape its sandboxing
-```
-
-### Solution — No iframe at all
-EPUB.js was removed. `reader.html` uses JSZip + Shadow DOM directly. No iframe is created at any point.
+EPUB, MOBI, AZW3 — all opened inline in the same tab via `FoliateViewer.js` using the [foliate-js](https://github.com/johnfactotum/foliate-js) library.
 
 ```
-Before: React App → EpubViewer → <iframe sandbox> → EPUB.js (restricted)
-After:  React App → window.open('/reader.html?id=X')
-        reader.html → JSZip → Shadow DOM (no iframe, no sandbox)
+book.epub / .mobi / .azw3
+  └── foliate-js (view.js)
+        ├── epub.js     ← parses OPF manifest + spine
+        ├── mobi.js     ← decodes MOBI/AZW3
+        ├── paginator.js  ← reflowable renderer (foliate-paginator)
+        └── fixed-layout.js  ← fixed-layout renderer (foliate-fxl)
 ```
 
-## reader.html
+AZW (KFX format / DRM) cannot be opened — foliate-js throws `UnsupportedTypeError` and a descriptive message is shown.
 
-Located at project root, served by Vite at `http://localhost:3001/reader.html`.
+## Architecture
 
-**Flow:**
-1. Reads `?id=` from URL params
-2. Opens the shared `InfoDepo` IndexedDB
-3. Fetches the book Blob by ID
-4. Parses `META-INF/container.xml` → OPF path → manifest + spine
-5. Per chapter: extracts XHTML, rewrites asset URLs (`img src`, `link href`) to `blob:` URLs
-6. Injects content into a Shadow DOM on `#viewer`
-7. Prev/Next navigate by spine index; shows chapter `X / Y` counter
+`Reader.js` dispatches by file extension/MIME type. For EPUB/MOBI/AZW/AZW3 it renders `FoliateViewer`:
 
-**CSS isolation:** `attachShadow({ mode: 'open' })` scopes all book styles inside the shadow root — book CSS cannot leak into page chrome, and Tailwind cannot bleed into book content.
+```
+Reader.js
+  └── FoliateViewer.js
+        └── <foliate-view> (custom element from foliate-js)
+              ├── foliate-paginator  ← reflowable text EPUBs
+              └── foliate-fxl        ← pre-paginated / fixed-layout EPUBs
+```
 
-## Shadow DOM Layout Containment
+## FoliateViewer Behaviour
 
-Book CSS sometimes uses `position: absolute` elements. Without a containing block inside the shadow root, these escape the shadow boundary and overlay page chrome (nav buttons, header), intercepting clicks.
+### Opening a book
 
-Two rules are always injected ahead of book styles:
+1. Creates a `<foliate-view>` element, appends it to the DOM.
+2. Calls `view.open(file)` — foliate-js parses the file and mounts the appropriate renderer.
+3. After open, inspects `view.isFixedLayout` and `view.book.sections` to determine the book type.
+4. Sets up renderer attributes (`flow`, `max-column-count`) and styles.
+5. Navigates to the saved CFI position, or calls `view.renderer.next()` to land on the first page.
+
+### Reading position
+
+Saved on the `relocate` event as `{ kind: 'foliate-cfi', cfi }` via `onSaveReadingPosition`. Restored via `view.goTo(cfi)` on next open.
+
+### Layout toggle
+
+For reflowable (text) EPUBs a **Scrolled / Paginated** toggle is shown. Default is scrolled. Fixed-layout books and manga lock to paginated (toggle hidden).
+
+## Renderer selection and book type detection
+
+foliate-js selects the renderer from `book.rendition.layout`:
+
+| `rendition.layout` | Renderer |
+|---|---|
+| `'pre-paginated'` | `foliate-fxl` (fixed-layout) |
+| anything else | `foliate-paginator` (reflowable) |
+
+`rendition.layout` is read from EPUB3 `<meta property="rendition:layout">` or from `META-INF/com.apple.ibooks.display-options.xml`. KCC-generated manga EPUBs use the non-standard `<meta name="fixed-layout" content="true">` and lack a display-options file, so foliate-js does **not** detect them as fixed-layout — they use `foliate-paginator`.
+
+`FoliateViewer` adds a second detection pass:
+
+```js
+const isSpreadManga = !fxl
+    && sections.length > 0
+    && sections.every(s => s.pageSpread != null);
+```
+
+If every spine item has a `page-spread-left` or `page-spread-right` property, the book is treated as a spread manga even though `view.isFixedLayout` is false.
+
+## Blank page problem (paginator, paginated mode)
+
+`foliate-paginator` adds two blank boundary columns around each section's content:
+
+```
+[blank col 0] [content col 1 … col N] [blank col N+1]
+```
+
+In a two-column spread viewport, each manga section (one image) occupies col 1 while col 2 is blank. Clicking Next scrolls to the blank boundary, causing "one white page between every page."
+
+### Why `next()` shows the blank
+
+`renderer.next()` → `#scrollToPage(page + 1)` — when `page+1` equals the trailing blank boundary, the blank is rendered before `#goTo(nextSection)` is called.
+
+### Fix — direct section navigation for spread manga
+
+For spread manga, `prevPage`/`nextPage` bypass `view.next()`/`view.prev()` entirely and call `view.goTo(sectionIndex ± 1)` instead. The paginator's `goTo` loads the new section directly through `#createView()` (old view removed → new iframe loaded → shown), never passing through the blank boundary column.
+
+The current section index is tracked in `sectionIndexRef` from `view.renderer.addEventListener('relocate', ...)`.
+
+Additionally, spread manga is kept in `flow='scrolled'` on the paginator — in scrolled mode the boundary columns do not exist at all, so even edge cases cannot produce a blank.
+
+## Fixed-layout EPUBs (foliate-fxl)
+
+When `view.isFixedLayout` is true, foliate-js uses `foliate-fxl`:
+
+- `flow` attribute is ignored (only `zoom` is observed).
+- `setStyles()` is not available.
+- `next()`/`prev()` toggle between pages within a spread, then advance to the next spread.
+- RTL manga: `next()` calls `#goLeft()` (right-to-left page order).
+
+FoliateViewer sets `flowMode = 'paginated'` for fxl books, shows Prev/Next and edge-tap buttons, and hides the Scrolled/Paginated toggle.
+
+A `load` event listener injects `FXL_HIDE_CSS` into each iframe as it loads, hiding Kindle overlay elements:
 
 ```css
-/* Creates a containing block so book's absolutely-positioned elements
-   (e.g. Kindle zoom overlays) cannot escape the shadow root */
-.epub-content {
-  position: relative;
-  overflow: hidden;
-}
-
-/* Kindle-specific zoom widget — hidden, non-functional outside Kindle */
 #PV, .PV-P { display: none !important; }
 ```
 
-This was triggered by the One-Punch Man manga EPUB, which uses a `#PV` overlay (`position: absolute; width: 100%; height: 100%`) from Kindle Comic Creator. Without containment it covered the entire page and swallowed all click events.
+## Sandbox warning
+
+foliate-js deliberately uses `sandbox="allow-same-origin allow-scripts"` on its content iframes (needed for a WebKit event bug). The browser console warning about sandbox escape is expected and comes from foliate-js itself, not from application code.
 
 ## File Type Routing
 
-`App.js` detects EPUB before passing to `Reader.js`:
-
-```js
-const isEpub = ext === 'epub' || mime === 'application/epub+zip';
-if (isEpub) {
-  window.open(`/reader.html?id=${book.id}`, '_blank');
-  return;
-}
-// PDF and TXT fall through to inline viewers
-```
-
-`Reader.js` also has MIME type fallback for files imported from Google Drive that may lack a `.epub` extension:
+`Reader.js` MIME-to-extension map:
 
 ```js
 const MIME_TO_EXT = {
   'application/epub+zip': 'epub',
+  'application/x-mobipocket-ebook': 'mobi',
+  'application/vnd.amazon.ebook': 'azw',
+  'application/vnd.amazon.mobi8-ebook': 'azw3',
   'application/pdf': 'pdf',
   'text/plain': 'txt',
+  'text/markdown': 'md',
+  'application/x-youtube': 'youtube',
 };
-const ext = getFileExtension(book.name) || MIME_TO_EXT[book.type] || '';
 ```
 
-## Known Browser Behaviour
+`epub`, `mobi`, `azw`, `azw3` all route to `FoliateViewer`.
+
+## Known Behaviour
 
 | Issue | Cause | Status |
 |-------|-------|--------|
-| `unload` Permissions Policy violation | EPUB.js registers `unload` listeners, deprecated in Chrome 117+ | N/A — EPUB.js removed |
-| Sandbox script blocking | `srcdoc` iframe lacks `allow-scripts` | Resolved — no iframe created; Shadow DOM used instead |
-| Sandbox escape warning | `allow-scripts` + `allow-same-origin` together | Resolved — no iframe created |
-| Absolutely-positioned book elements overlaying page chrome | Book CSS `position: absolute` escapes shadow root if no containing block | Resolved — `.epub-content { position: relative; overflow: hidden }` |
-| Kindle zoom overlay (`#PV`) eating click events | KCC-generated EPUB includes full-page invisible overlay | Resolved — `#PV, .PV-P { display: none !important }` |
+| Sandbox escape warning in console | foliate-js uses `allow-scripts` + `allow-same-origin` for WebKit event bug | Expected — from foliate-js, not app code |
+| AZW / KFX files with DRM | foliate-js throws `UnsupportedTypeError` | Handled — descriptive error shown |
+| Blank white page between manga pages (paginator) | Paginator `next()` scrolls through trailing blank boundary column | Fixed — spread manga uses `view.goTo(index)` + scrolled flow |
+| Fixed-layout manga not detected as fxl | KCC EPUBs use non-standard `<meta name="fixed-layout">` | Fixed — FoliateViewer detects via `sections.every(s => s.pageSpread != null)` |
+| Kindle zoom overlay (`#PV`) in fxl iframes | KCC EPUB injects full-page tap-zone overlay | Fixed — `FXL_HIDE_CSS` injected on `load` event |

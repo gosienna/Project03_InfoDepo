@@ -11,6 +11,8 @@ export const AddContentDropdown = ({
   onAddUrl,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const hasPrimaryActions = !!(onNewNote || onAddYoutube || onAddUrl || onAddChannel || onAddFile);
+  if (!hasPrimaryActions && !onAddDesk) return null;
 
   return React.createElement(
     'div',
@@ -39,10 +41,10 @@ export const AddContentDropdown = ({
         className: 'absolute right-0 mt-1 w-48 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden',
         onMouseLeave: () => setIsOpen(false),
       },
-      React.createElement(
+      onNewNote && React.createElement(
         'button',
         {
-          onClick: () => { setIsOpen(false); onNewNote?.(); },
+          onClick: () => { setIsOpen(false); onNewNote(); },
           className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors',
         },
         React.createElement(
@@ -52,10 +54,10 @@ export const AddContentDropdown = ({
         ),
         'New Note'
       ),
-      React.createElement(
+      onAddYoutube && React.createElement(
         'button',
         {
-          onClick: () => { setIsOpen(false); onAddYoutube?.(); },
+          onClick: () => { setIsOpen(false); onAddYoutube(); },
           className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors',
         },
         React.createElement(
@@ -65,10 +67,10 @@ export const AddContentDropdown = ({
         ),
         'Add YouTube'
       ),
-      React.createElement(
+      onAddUrl && React.createElement(
         'button',
         {
-          onClick: () => { setIsOpen(false); onAddUrl?.(); },
+          onClick: () => { setIsOpen(false); onAddUrl(); },
           className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors',
         },
         React.createElement(
@@ -78,10 +80,10 @@ export const AddContentDropdown = ({
         ),
         'Add URL'
       ),
-      React.createElement(
+      onAddChannel && React.createElement(
         'button',
         {
-          onClick: () => { setIsOpen(false); onAddChannel?.(); },
+          onClick: () => { setIsOpen(false); onAddChannel(); },
           className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors',
         },
         React.createElement(
@@ -91,10 +93,10 @@ export const AddContentDropdown = ({
         ),
         'Add Channel'
       ),
-      React.createElement(
+      onAddFile && React.createElement(
         'button',
         {
-          onClick: () => { setIsOpen(false); onAddFile?.(); },
+          onClick: () => { setIsOpen(false); onAddFile(); },
           className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors',
         },
         React.createElement(BookIcon, { className: 'h-4 w-4 text-indigo-400' }),
@@ -104,7 +106,9 @@ export const AddContentDropdown = ({
         'button',
         {
           onClick: () => { setIsOpen(false); onAddDesk(); },
-          className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors border-t border-gray-700/60',
+          className:
+            'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors' +
+            (hasPrimaryActions ? ' border-t border-gray-700/60' : ''),
         },
         React.createElement(
           'svg',
