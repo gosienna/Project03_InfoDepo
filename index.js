@@ -1,4 +1,5 @@
 import './utils/mapGetOrInsertComputedPolyfill.js';
+import './utils/safariDeferredBlobUrlRevoke.js';
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
