@@ -1,7 +1,7 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
 import { getFileExtension } from '../utils/fileUtils.js';
-import { EpubViewer } from './EpubViewer.js';
+import { FoliateViewer } from './FoliateViewer.js';
 import { PdfViewer } from './PdfViewer.js';
 import { TxtViewer } from './TxtViewer.js';
 import { MarkdownEditor } from './MarkdownEditor.js';
@@ -10,6 +10,9 @@ import { UnsupportedViewer } from './UnsupportedViewer.js';
 
 const MIME_TO_EXT = {
   'application/epub+zip': 'epub',
+  'application/x-mobipocket-ebook': 'mobi',
+  'application/vnd.amazon.ebook': 'azw',
+  'application/vnd.amazon.mobi8-ebook': 'azw3',
   'application/pdf': 'pdf',
   'text/plain': 'txt',
   'text/markdown': 'md',
@@ -91,8 +94,13 @@ export const Reader = ({
   const renderContent = () => {
     switch (fileExtension) {
       case 'epub':
-        return React.createElement(EpubViewer, {
+      case 'mobi':
+      case 'azw':
+      case 'azw3':
+        return React.createElement(FoliateViewer, {
           data: video.data,
+          name: video.name,
+          type: video.type,
           itemId: video.id,
           initialReadingPosition: video.readingPosition,
           onSaveReadingPosition,

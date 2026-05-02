@@ -213,11 +213,6 @@ const App = () => {
   const openVideo = (video) => {
     const ext = video.name?.split('.').pop()?.toLowerCase() ?? '';
     const mime = video.type || '';
-    const isEpub = ext === 'epub' || mime === 'application/epub+zip';
-    if (isEpub) {
-      window.open(`/reader.html?id=${video.id}`, '_blank');
-      return;
-    }
     const isUrl = ext === 'url' || mime === 'application/x-url';
     if (isUrl) {
       if (video.data) {
@@ -439,7 +434,7 @@ const App = () => {
     React.createElement('input', {
       ref: fileInputRef,
       type: 'file',
-      accept: '.epub,.pdf,.txt,.md,application/epub+zip,application/pdf,text/plain,text/markdown',
+      accept: '.epub,.mobi,.azw,.azw3,.pdf,.txt,.md,application/epub+zip,application/x-mobipocket-ebook,application/vnd.amazon.ebook,application/pdf,text/plain,text/markdown',
       onChange: handleFileChange,
       className: 'hidden',
     }),

@@ -27,7 +27,7 @@ export const UnsupportedViewer = ({ filename }) => {
     React.createElement(
       "p",
       { className: "mt-4 text-gray-400 text-sm" },
-      "Supported formats are EPUB, PDF, and TXT."
+      "Supported formats: EPUB, MOBI, AZW3, PDF, TXT, and Markdown."
     )
   );
 };
