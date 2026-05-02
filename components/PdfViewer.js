@@ -1,8 +1,8 @@
-
+import '../utils/mapGetOrInsertComputedPolyfill.js';
 import React, { useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import pdfWorker from '../utils/pdfjsWorkerEntry.js?worker&url';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 

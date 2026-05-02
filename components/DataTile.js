@@ -1,7 +1,7 @@
-
+import '../utils/mapGetOrInsertComputedPolyfill.js';
 import React, { useState, useEffect, useRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import pdfWorker from '../utils/pdfjsWorkerEntry.js?worker&url';
 import JSZip from 'jszip';
 import { formatBytes, getFileExtension } from '../utils/fileUtils.js';
 import { BookIcon } from './icons/BookIcon.js';
