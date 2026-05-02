@@ -1,6 +1,30 @@
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import 'foliate-js/view.js';
+
+/** @param {number} deg @param {number} w @param {number} h */
+function rotationWrapStyle(deg, w, h) {
+  const base = { position: 'absolute' };
+  if (!w || !h) return { ...base, inset: 0 };
+  if (deg === 0) return { ...base, inset: 0, transform: 'none' };
+  if (deg === 180) {
+    return {
+      ...base,
+      inset: 0,
+      transform: 'rotate(180deg)',
+      transformOrigin: 'center center',
+    };
+  }
+  return {
+    ...base,
+    left: '50%',
+    top: '50%',
+    width: h,
+    height: w,
+    transform: `translate(-50%, -50%) rotate(${deg}deg)`,
+    transformOrigin: 'center center',
+  };
+}
 
 const BASE_CSS = `
   @namespace epub "http://www.idpf.org/2007/ops";
@@ -80,6 +104,7 @@ function shouldReopenAsFixedSpreadComic(view) {
 }
 
 export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition, onSaveReadingPosition, storeName }) => {
+  const viewportRef = useRef(null);
   const containerRef = useRef(null);
   const viewRef = useRef(null);
   const saveRef = useRef({ onSaveReadingPosition, itemId, storeName });
@@ -92,6 +117,8 @@ export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition
   const [flowMode, setFlowMode] = useState('scrolled');
   const [spreadLayout, setSpreadLayout] = useState(SPREAD_DOUBLE_ODD_LEFT);
   const [isFixedLayout, setIsFixedLayout] = useState(false);
+  const [rotationDeg, setRotationDeg] = useState(0);
+  const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 });
 
   flowModeRef.current = flowMode;
   spreadLayoutRef.current = spreadLayout;
@@ -99,6 +126,23 @@ export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition
   useEffect(() => {
     saveRef.current = { onSaveReadingPosition, itemId, storeName };
   }, [onSaveReadingPosition, itemId, storeName]);
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      const cr = entries[0]?.contentRect;
+      if (!cr) return;
+      setViewportSize({ w: cr.width, h: cr.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const wrapStyle = useMemo(
+    () => rotationWrapStyle(rotationDeg, viewportSize.w, viewportSize.h),
+    [rotationDeg, viewportSize.w, viewportSize.h],
+  );
 
   useEffect(() => {
     if (isLoading || error || isFixedLayout) return;
@@ -281,10 +325,21 @@ export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition
     React.createElement(
       'div',
       { className: 'relative flex-1 min-h-0 w-full overflow-hidden isolate' },
-      React.createElement('div', {
-        ref: containerRef,
-        className: 'absolute inset-0 z-0 bg-white overflow-hidden',
-      }),
+      React.createElement(
+        'div',
+        {
+          ref: viewportRef,
+          className: 'absolute inset-0 z-0 bg-white overflow-hidden',
+        },
+        React.createElement(
+          'div',
+          { style: wrapStyle },
+          React.createElement('div', {
+            ref: containerRef,
+            className: 'absolute inset-0 z-0 min-w-0 min-h-0 w-full h-full',
+          }),
+        ),
+      ),
       !isLoading && !error && flowMode === 'paginated' && React.createElement(
         'div',
         { className: 'pointer-events-none absolute inset-0 z-[60]', 'aria-hidden': true },
@@ -340,7 +395,14 @@ export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition
         onClick: toggleLayout,
         className: 'min-h-[44px] min-w-[44px] px-4 py-2.5 sm:py-2 bg-gray-700 text-white text-sm sm:text-base rounded-lg hover:bg-gray-600 transition-colors touch-manipulation',
         'aria-pressed': flowMode === 'paginated',
-      }, flowMode === 'scrolled' ? 'Paginated' : 'Scrolled')
+      }, flowMode === 'scrolled' ? 'Paginated' : 'Scrolled'),
+      !isLoading && !error && React.createElement('button', {
+        type: 'button',
+        onClick: () => { setRotationDeg(d => (d + 90) % 360); },
+        className: 'min-h-[44px] min-w-[44px] px-4 py-2.5 sm:py-2 bg-gray-700 text-white text-sm sm:text-base rounded-lg hover:bg-gray-600 transition-colors touch-manipulation',
+        'aria-label': `Rotate view (currently ${rotationDeg} degrees)`,
+        title: 'Rotate 90°',
+      }, rotationDeg === 0 ? 'Rotate' : `${rotationDeg}°`)
     )
   );
 };
