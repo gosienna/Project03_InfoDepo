@@ -80,6 +80,7 @@ export const Library = ({
   onOpenYoutube,
   onOpenChannel,
   onOpenFile,
+  onOpenUrl,
   isSyncing,
   setIsSyncing,
   syncProgress,
@@ -926,6 +927,7 @@ export const Library = ({
           onAddYoutube: onOpenYoutube,
           onAddChannel: onOpenChannel,
           onAddFile: onOpenFile,
+          onAddUrl: onOpenUrl,
           onAddDesk: onAddDesk ? () => {
             const name = window.prompt('Desk name:', 'New Desk');
             if (name && name.trim()) onAddDesk(name.trim());

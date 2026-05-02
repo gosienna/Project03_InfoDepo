@@ -99,7 +99,8 @@ export const DataTile = ({
 
   const fileExtension = !isChannel && video?.name ? getFileExtension(video.name) : '';
   const isYoutube = !isChannel && video?.type === 'application/x-youtube';
-  const isBookTile = !isChannel && video?.idbStore === 'books';
+  const isUrl = !isChannel && video?.type === 'application/x-url';
+  const isBookTile = !isChannel && video?.idbStore === 'books' && !isUrl;
   const isMarkdownNote = !isChannel && video?.idbStore === 'notes';
   const isPdfBook =
     isBookTile &&
@@ -727,7 +728,17 @@ export const DataTile = ({
     }
   };
 
-  const thumbnailContent = isYoutube
+  const thumbnailContent = isUrl
+    ? React.createElement(
+        'div',
+        { className: 'flex items-center justify-center w-full h-full' },
+        React.createElement(
+          'svg',
+          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-cyan-400/70', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+          React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 1.5, d: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' })
+        )
+      )
+    : isYoutube
     ? thumbVideoId
       ? React.createElement('img', {
           src: `https://img.youtube.com/vi/${thumbVideoId}/mqdefault.jpg`,
@@ -778,9 +789,11 @@ export const DataTile = ({
         {
           className: isYoutube
             ? 'absolute top-2 right-2 bg-red-600 text-white text-xs font-bold px-2 py-1 rounded'
-            : 'absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded',
+            : isUrl
+              ? 'absolute top-2 right-2 bg-cyan-700 text-white text-xs font-bold px-2 py-1 rounded'
+              : 'absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded',
         },
-        isYoutube ? 'YouTube' : fileExtension.toUpperCase()
+        isYoutube ? 'YouTube' : isUrl ? 'URL' : fileExtension.toUpperCase()
       ),
       React.createElement(
         'div',

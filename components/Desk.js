@@ -567,6 +567,7 @@ export const Desk = ({
   onOpenYoutube,
   onOpenChannel,
   onOpenFile,
+  onOpenUrl,
 }) => {
   const viewportRef = useRef(null);
   const historyRef = useRef({ past: [], future: [] });
@@ -1820,6 +1821,7 @@ export const Desk = ({
         onAddYoutube: onOpenYoutube,
         onAddChannel: onOpenChannel,
         onAddFile: onOpenFile,
+        onAddUrl: onOpenUrl,
       })
     ),
     // Slash menu ("/" at mouse location)

@@ -8,6 +8,7 @@ export const AddContentDropdown = ({
   onAddChannel,
   onAddFile,
   onAddDesk,
+  onAddUrl,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -63,6 +64,19 @@ export const AddContentDropdown = ({
           React.createElement('path', { d: 'M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z' })
         ),
         'Add YouTube'
+      ),
+      React.createElement(
+        'button',
+        {
+          onClick: () => { setIsOpen(false); onAddUrl?.(); },
+          className: 'flex items-center gap-3 w-full px-4 py-3 text-sm text-gray-200 hover:bg-gray-700 transition-colors',
+        },
+        React.createElement(
+          'svg',
+          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4 text-cyan-400', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+          React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' })
+        ),
+        'Add URL'
       ),
       React.createElement(
         'button',

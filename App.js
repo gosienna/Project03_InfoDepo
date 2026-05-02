@@ -24,6 +24,7 @@ import { fetchNewChannelVideos } from './utils/youtubeApi.js';
 import { NewNoteModal } from './components/NewNoteModal.js';
 import { NewYoutubeModal } from './components/NewYoutubeModal.js';
 import { NewChannelModal } from './components/NewChannelModal.js';
+import { NewUrlModal } from './components/NewUrlModal.js';
 
 const App = () => {
   const {
@@ -76,6 +77,7 @@ const App = () => {
   const [isNewNoteOpen, setIsNewNoteOpen] = useState(false);
   const [isYoutubeOpen, setIsYoutubeOpen] = useState(false);
   const [isChannelOpen, setIsChannelOpen] = useState(false);
+  const [isUrlOpen, setIsUrlOpen] = useState(false);
   const fileInputRef = useRef(null);
 
   const recheckDriveOAuthGate = useCallback(() => {
@@ -214,6 +216,18 @@ const App = () => {
     const isEpub = ext === 'epub' || mime === 'application/epub+zip';
     if (isEpub) {
       window.open(`/reader.html?id=${video.id}`, '_blank');
+      return;
+    }
+    const isUrl = ext === 'url' || mime === 'application/x-url';
+    if (isUrl) {
+      if (video.data) {
+        video.data.text().then((text) => {
+          try {
+            const { url } = JSON.parse(text);
+            if (url) window.open(url, '_blank');
+          } catch {}
+        }).catch(() => {});
+      }
       return;
     }
     setCurrentVideo(video);
@@ -441,6 +455,10 @@ const App = () => {
       onSave: async (channelData) => { const id = await addChannel(channelData); addToDeskIfActive('channel', id); },
       onClose: () => setIsChannelOpen(false),
     }),
+    isUrlOpen && React.createElement(NewUrlModal, {
+      onSave: async (name, type, data) => { const id = await addItem(name, type, data); addToDeskIfActive('books', id); },
+      onClose: () => setIsUrlOpen(false),
+    }),
     React.createElement(
       "main",
       { className: "flex-grow flex flex-col min-h-0" },
@@ -508,6 +526,7 @@ const App = () => {
           onOpenYoutube: () => setIsYoutubeOpen(true),
           onOpenChannel: () => setIsChannelOpen(true),
           onOpenFile: () => fileInputRef.current?.click(),
+          onOpenUrl: () => setIsUrlOpen(true),
           isSyncing,
           setIsSyncing,
           syncProgress,
@@ -551,6 +570,7 @@ const App = () => {
               onOpenYoutube: isEditor ? () => setIsYoutubeOpen(true) : undefined,
               onOpenChannel: isEditor ? () => setIsChannelOpen(true) : undefined,
               onOpenFile: isEditor ? () => fileInputRef.current?.click() : undefined,
+              onOpenUrl: isEditor ? () => setIsUrlOpen(true) : undefined,
             })
           : React.createElement(
               'div',
