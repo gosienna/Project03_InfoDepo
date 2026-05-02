@@ -57,6 +57,12 @@ const SPREAD_SINGLE = 'single';
 const SPREAD_DOUBLE_ODD_LEFT = 'double-odd-left';
 const SPREAD_DOUBLE_EVEN_LEFT = 'double-even-left';
 
+function setRendererColumnVars(renderer, count) {
+  if (!renderer?.style) return;
+  renderer.style.setProperty('--_max-column-count', String(count));
+  renderer.style.setProperty('--_max-column-count-portrait', String(count));
+}
+
 /** Reflowable foliate-paginator only (not FXL / spine spread-manga). */
 function applyReflowableSpread(view, flowMode, spreadLayout, isSpreadManga) {
   const r = view?.renderer;
@@ -64,21 +70,24 @@ function applyReflowableSpread(view, flowMode, spreadLayout, isSpreadManga) {
 
   if (flowMode === 'scrolled') {
     r.removeAttribute('max-column-count');
+    setRendererColumnVars(r, 1);
     r.setStyles?.(BASE_CSS);
     return;
   }
   if (spreadLayout === SPREAD_SINGLE) {
     r.setAttribute('max-column-count', '1');
+    setRendererColumnVars(r, 1);
     r.setStyles?.(BASE_CSS);
     return;
   }
   if (spreadLayout === SPREAD_DOUBLE_EVEN_LEFT) {
     r.setAttribute('max-column-count', '2');
+    setRendererColumnVars(r, 2);
     r.setStyles?.(EVEN_LEFT_SPREAD_CSS + BASE_CSS);
     return;
   }
-  // Two-up default: let foliate own --_max-column-count / portrait rules (do not force "2").
-  r.removeAttribute('max-column-count');
+  r.setAttribute('max-column-count', '2');
+  setRendererColumnVars(r, 2);
   r.setStyles?.(BASE_CSS);
 }
 
@@ -144,6 +153,39 @@ function shouldReopenAsFixedSpreadComic(view) {
   if (!sections.length) return false;
   if (!sections.every(s => s.pageSpread != null)) return false;
   return view.book?.rendition?.layout !== 'pre-paginated';
+}
+
+/**
+ * Some kepub comic files omit page-spread metadata but each spine item is still
+ * a single image page. Re-open those as fixed-layout so facing-page behavior is
+ * handled by foliate-fxl rather than reflow pagination.
+ */
+async function shouldReopenAsFixedImageComic(view) {
+  if (view.isFixedLayout) return false;
+  const sections = view.book?.sections ?? [];
+  if (sections.length < 8) return false;
+
+  const sample = sections.slice(0, Math.min(8, sections.length));
+  let imagePageCount = 0;
+  let checked = 0;
+
+  for (const section of sample) {
+    if (typeof section?.createDocument !== 'function') continue;
+    try {
+      const doc = await section.createDocument();
+      const body = doc?.body;
+      if (!body) continue;
+      checked += 1;
+      const text = (body.textContent || '').replace(/\s+/g, '');
+      const images = body.querySelectorAll('img, svg image, object[type^="image/"]');
+      if (images.length === 1 && text.length <= 20) imagePageCount += 1;
+    } catch (_) {
+      // Ignore parse failures and continue sampling.
+    }
+  }
+
+  if (!checked) return false;
+  return imagePageCount >= Math.max(3, Math.ceil(checked * 0.7));
 }
 
 export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition, onSaveReadingPosition, storeName }) => {
@@ -234,7 +276,7 @@ export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition
 
         let fxl = !!view.isFixedLayout;
         let sections = view.book?.sections ?? [];
-        if (shouldReopenAsFixedSpreadComic(view)) {
+        if (shouldReopenAsFixedSpreadComic(view) || await shouldReopenAsFixedImageComic(view)) {
           const book = view.book;
           book.rendition = {
             ...book.rendition,

@@ -3,23 +3,30 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 
 /**
- * Patch foliate-js/view.js at build time: re-materialize every blob extracted
- * from the EPUB zip through an ArrayBuffer round-trip before handing it to
- * epub.js's URL.createObjectURL chain.
+ * Two Vite transform plugins that fix "WebKitBlobResource error 1" on iOS/iPadOS Safari.
  *
- * zip.js's BlobWriter produces streaming-backed Blobs whose underlying data
- * can become inaccessible on iOS/iPadOS Safari (WebKitBlobResource error 1)
- * when those blobs are later accessed via blob: URLs inside iframes.
- * Forcing the data through arrayBuffer() produces a plain RAM-backed Blob that
- * WebKit can reliably serve from blob: URLs.
+ * ROOT CAUSE A — foliate-js/view.js: zip.js's BlobWriter produces streaming-backed
+ * Blobs for each extracted EPUB resource. iOS WebKit can lose the backing data for
+ * these blobs before the blob: URL is served to the iframe, causing the error.
+ * Fix: materialise every extracted blob through arrayBuffer() so its data sits in
+ * a plain RAM ArrayBuffer that WebKit can always read.
+ *
+ * ROOT CAUSE B — foliate-js/epub.js: EPUB chapters are re-serialised with
+ * XMLSerializer (producing XML-syntax HTML) and stored as blob: URLs with MIME type
+ * "application/xhtml+xml". iOS Safari silently refuses to load blob: URLs with that
+ * content type in sandboxed iframes — this is the direct cause of the two UUID
+ * errors the user sees. Fix: coerce the type to "text/html;charset=utf-8" in
+ * createURL so WebKit treats the content as regular HTML5 (which its lenient parser
+ * handles without issue).
  */
-const foliateIosBlobFix = {
-  name: 'foliate-ios-blob-fix',
+
+const foliateViewIosBlobFix = {
+  name: 'foliate-view-ios-blob-fix',
   transform(code, id) {
     if (!id.includes('foliate-js/view.js') && !id.includes('foliate-js\\view.js')) return;
     const target = 'const loadBlob = load((entry, type) => entry.getData(new BlobWriter(type)))';
     if (!code.includes(target)) {
-      console.warn('[foliate-ios-blob-fix] Target line not found in foliate-js/view.js — patch not applied');
+      console.warn('[foliate-view-ios-blob-fix] Target not found in foliate-js/view.js — patch not applied');
       return;
     }
     return {
@@ -30,6 +37,29 @@ const foliateIosBlobFix = {
     const ab = await blob.arrayBuffer();
     return new Blob([ab], { type: type || 'application/octet-stream' });
 })`,
+      ),
+      map: null,
+    };
+  },
+};
+
+const foliateEpubXhtmlFix = {
+  name: 'foliate-epub-xhtml-fix',
+  transform(code, id) {
+    if (!id.includes('foliate-js/epub.js') && !id.includes('foliate-js\\epub.js')) return;
+    const target = 'const url = URL.createObjectURL(new Blob([newData], { type: newType }))';
+    if (!code.includes(target)) {
+      console.warn('[foliate-epub-xhtml-fix] Target not found in foliate-js/epub.js — patch not applied');
+      return;
+    }
+    return {
+      code: code.replace(
+        target,
+        // iOS Safari will not load blob: URLs with application/xhtml+xml in iframes.
+        // Serving the same content as text/html is safe: HTML5's parser handles
+        // XMLSerializer output (valid XHTML-syntax) without issues.
+        `const _iosBlobType = newType === 'application/xhtml+xml' ? 'text/html;charset=utf-8' : newType;
+        const url = URL.createObjectURL(new Blob([newData], { type: _iosBlobType }))`,
       ),
       map: null,
     };
@@ -47,7 +77,7 @@ export default defineConfig(({ mode }) => {
           'Cross-Origin-Opener-Policy': 'unsafe-none',
         },
       },
-      plugins: [foliateIosBlobFix, react()],
+      plugins: [foliateViewIosBlobFix, foliateEpubXhtmlFix, react()],
       build: {
         rollupOptions: {
           input: {
