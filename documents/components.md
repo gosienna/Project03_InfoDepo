@@ -3,7 +3,7 @@
 ## Startup sequence
 
 1. `index.js` mounts `App`.
-2. `useIndexedDB()` initializes `InfoDepo` (schema v8), loads merged `items`, `channels`, and `desks`.
+2. `useIndexedDB()` initializes `InfoDepo` (schema v9), loads merged `items`, `channels`, and `desks`.
 3. If Google credentials are configured and no valid token exists, show `GoogleLoginGate`.
 4. Resolve user role from `VITE_MASTER` + `config.json` users map.
 5. For `master`/`editor`, run `DriveFolderGate` until folder ID exists.
@@ -89,16 +89,23 @@
 
 ### `Reader.js`
 
-- Dispatches viewers by extension/MIME:
-  - EPUB / MOBI / AZW / AZW3 → `FoliateViewer` (inline, same tab)
+- Dispatches viewers by extension/MIME for inline (same-tab) viewers:
   - PDF → `PdfViewer`
   - TXT → `TxtViewer`
   - Markdown → `MarkdownEditor`
   - YouTube → `YoutubeViewer`
+- EPUB / MOBI / AZW / AZW3 are **not** dispatched here for the primary path — `App.js`'s `openVideo()` calls `window.open('/reader.html?id=X&store=Y', '_blank')` directly so the book opens in its own tab (avoids `WebKitBlobResource error 1` on iOS/iPadOS).
+
+### `reader.html` / `reader-entry.js`
+
+- Standalone page and React entry for EPUB/MOBI/AZW reading.
+- Reads `?id=X&store=Y` from the URL, opens IndexedDB directly, and renders `FoliateViewer`.
+- Saves reading position back to IndexedDB without going through the main app's state.
+- Both files are Vite build entry points.
 
 ### `FoliateViewer.js`
 
-- Wraps the foliate-js `<foliate-view>` custom element.
+- Wraps the foliate-js `<foliate-view>` custom element. Used only inside `reader.html` (new-tab context).
 - Detects renderer type after `view.open()`: `foliate-fxl` (true fixed-layout) vs `foliate-paginator` (reflowable + spread manga).
 - Spread manga detection: if every spine section has `pageSpread` set and `view.isFixedLayout` is false, treats the book as spread manga (KCC EPUBs lack standard `rendition:layout` metadata).
 - Flow mode:

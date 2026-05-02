@@ -225,6 +225,17 @@ const App = () => {
       }
       return;
     }
+    // EPUB/MOBI/AZW files open in a dedicated tab (reader.html) so that
+    // foliate-js's blob: URLs run in a top-level browsing context, avoiding
+    // WebKitBlobResource errors that occur when iframes are nested inside a
+    // Shadow DOM inside the main React app on iOS/iPadOS Safari.
+    const isEpub = ['epub', 'mobi', 'azw', 'azw3'].includes(ext)
+      || ['application/epub+zip', 'application/x-mobipocket-ebook',
+          'application/vnd.amazon.ebook', 'application/vnd.amazon.mobi8-ebook'].includes(mime);
+    if (isEpub && video.id != null) {
+      window.open(`/reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+      return;
+    }
     setCurrentVideo(video);
     setView('reader');
   };

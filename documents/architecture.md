@@ -7,12 +7,13 @@ InfoDepo is a browser-only app (no backend database). Content is stored in Index
 ```
 User
  └── Browser
-      ├── React app (Vite)
+      ├── React app (Vite) — index.html
       │    ├── Library (items/channels/desks, sync, sharing)
       │    ├── Desk (infinite canvas for item layout)
-      │    ├── Reader (EPUB/MOBI/AZW3/PDF/TXT/MD/YouTube — all inline)
+      │    ├── Reader (PDF/TXT/MD/YouTube — inline)
       │    └── Explorer (web page → markdown note)
-      └── IndexedDB (InfoDepo, v8)
+      ├── EPUB reader tab — reader.html   ← new tab, opened for EPUB/MOBI/AZW
+      └── IndexedDB (InfoDepo, v9)        ← shared by both tabs
 ```
 
 ## Current component map
@@ -35,13 +36,14 @@ App.js
 │   ├── AddContentDropdown.js  # same component reused here
 │   └── DeskTile.js
 ├── YoutubeChannelViewer.js
-└── Reader.js
-    ├── FoliateViewer.js   ← EPUB / MOBI / AZW / AZW3 (foliate-js, inline)
-    ├── PdfViewer.js
-    ├── TxtViewer.js
-    ├── MarkdownEditor.js
-    ├── YoutubeViewer.js
-    └── UnsupportedViewer.js
+├── Reader.js              ← PDF / TXT / MD / YouTube (inline)
+│   ├── PdfViewer.js
+│   ├── TxtViewer.js
+│   ├── MarkdownEditor.js
+│   ├── YoutubeViewer.js
+│   └── UnsupportedViewer.js
+└── (reader.html / reader-entry.js)  ← separate tab for EPUB/MOBI/AZW
+    └── FoliateViewer.js   ← foliate-js wrapper (used only in reader tab)
 ```
 
 ## Sharing model (current)
