@@ -418,7 +418,8 @@ export const PdfViewer = ({
 
           const page = await pdfDoc.getPage(i);
           const w = mount.clientWidth || containerWidth;
-          const { canvas, viewportCss } = await renderPageToCanvas(page, w, rotationDeg);
+          const effectiveWidth = isTwoPageActive ? Math.ceil(w / 2) : w;
+          const { canvas, viewportCss } = await renderPageToCanvas(page, effectiveWidth, rotationDeg);
 
           // position:relative wrapper so the SVG overlay (position:absolute) stays on top
           const pageWrapper = document.createElement('div');
