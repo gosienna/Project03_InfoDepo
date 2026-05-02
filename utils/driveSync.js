@@ -5,6 +5,7 @@ import {
   serializePdfAnnotationSidecar,
   pdfAnnotationSidecarNeedsBackup,
 } from './pdfAnnotationSidecar.js';
+import { cloneBlobForNetwork } from './cloneBlobForNetwork.js';
 
 export const CHANNEL_JSON_MARKER = 'infodepo-channel';
 export const DESK_JSON_MARKER = 'infodepo-desk';
@@ -402,14 +403,16 @@ export async function backupAllToGDrive({
 
   const postMultipart = async (blob, name, mimeType, targetParentId) => {
     const parentId = targetParentId || folderId;
+    const mt = mimeType || 'application/octet-stream';
     const metadata = {
       name,
-      mimeType: mimeType || 'application/octet-stream',
+      mimeType: mt,
       ...(parentId ? { parents: [parentId] } : {}),
     };
+    const bodyBlob = await cloneBlobForNetwork(blob, mt);
     const form = new FormData();
     form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-    form.append('file', blob);
+    form.append('file', bodyBlob);
     const res = await fetch(
       'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime',
       { method: 'POST', headers: { Authorization: `Bearer ${accessToken}` }, body: form }
@@ -422,13 +425,15 @@ export async function backupAllToGDrive({
   };
 
   const patchMultipart = async (fileId, blob, name, mimeType) => {
+    const mt = mimeType || 'application/octet-stream';
     const metadata = {
       name,
-      mimeType: mimeType || 'application/octet-stream',
+      mimeType: mt,
     };
+    const bodyBlob = await cloneBlobForNetwork(blob, mt);
     const form = new FormData();
     form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-    form.append('file', blob);
+    form.append('file', bodyBlob);
     const res = await fetch(
       `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=multipart&fields=id,name,modifiedTime`,
       { method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}` }, body: form }

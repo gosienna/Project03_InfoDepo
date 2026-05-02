@@ -37,6 +37,7 @@ import {
 } from '../utils/libraryDisplayPolicy.js';
 import { formatBytes } from '../utils/fileUtils.js';
 import { getSyncSettings, saveSyncSettings } from '../utils/syncSettings.js';
+import { cloneBlobForNetwork } from '../utils/cloneBlobForNetwork.js';
 
 /** Ensures startup background sync runs once per page load (survives React Strict Mode remount). */
 let ownerBackgroundSyncScheduled = false;
@@ -537,9 +538,10 @@ export const Library = ({
         parents: [driveFolderId],
       };
 
+      const fileBody = await cloneBlobForNetwork(video.data, driveMime);
       const form = new FormData();
       form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-      form.append('file', video.data);
+      form.append('file', fileBody);
 
       const existingDriveId = String(video.driveId || '').trim();
       const uploadUrl = existingDriveId
