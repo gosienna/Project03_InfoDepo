@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import JSZip from 'jszip';
 import { formatBytes, getFileExtension } from '../utils/fileUtils.js';
 import { BookIcon } from './icons/BookIcon.js';
 import { TrashIcon } from './icons/TrashIcon.js';
@@ -204,11 +205,66 @@ export const DataTile = ({
   }, [isPdfBook, video?.id, video?.data, video?.size]);
 
   useEffect(() => {
-    if (!isEpubBook || !video?.data) return () => {};
-    // Avoid epubjs runtime crashes in tile preview generation.
-    // Reader view still fully supports EPUB; tile falls back to generic thumbnail.
-    setBookFirstPageThumb(null);
-    return () => {};
+    if (!isEpubBook || !video?.data) {
+      setBookFirstPageThumb(null);
+      return () => {};
+    }
+    let cancelled = false;
+    let objectUrl = null;
+    (async () => {
+      try {
+        const buffer = await video.data.arrayBuffer();
+        if (cancelled) return;
+        const zip = await JSZip.loadAsync(buffer);
+        if (cancelled) return;
+
+        // 1. Locate the OPF file via META-INF/container.xml
+        const containerXml = await zip.file('META-INF/container.xml')?.async('string');
+        if (cancelled || !containerXml) return;
+        const containerDoc = new DOMParser().parseFromString(containerXml, 'application/xml');
+        const opfPath = containerDoc.querySelector('rootfile')?.getAttribute('full-path');
+        if (!opfPath) return;
+
+        const opfXml = await zip.file(opfPath)?.async('string');
+        if (cancelled || !opfXml) return;
+        const opfDoc = new DOMParser().parseFromString(opfXml, 'application/xml');
+
+        // 2. Find the cover image item in the manifest
+        // Strategy A: item with properties="cover-image"
+        let coverHref = opfDoc.querySelector('item[properties~="cover-image"]')?.getAttribute('href');
+
+        // Strategy B: <meta name="cover"> pointing to a manifest item id
+        if (!coverHref) {
+          const coverId = opfDoc.querySelector('meta[name="cover"]')?.getAttribute('content');
+          if (coverId) {
+            coverHref = opfDoc.querySelector(`item[id="${coverId}"]`)?.getAttribute('href');
+          }
+        }
+
+        if (!coverHref) return;
+
+        // 3. Resolve path relative to the OPF directory
+        const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : '';
+        const coverPath = opfDir + coverHref;
+
+        const coverData = await zip.file(coverPath)?.async('uint8array');
+        if (cancelled || !coverData) return;
+
+        // Determine MIME type from extension
+        const ext = coverPath.split('.').pop().toLowerCase();
+        const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+        const url = URL.createObjectURL(new Blob([coverData], { type: mime }));
+        if (cancelled) { URL.revokeObjectURL(url); return; }
+        objectUrl = url;
+        setBookFirstPageThumb(objectUrl);
+      } catch {
+        if (!cancelled) setBookFirstPageThumb(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
   }, [isEpubBook, video?.id, video?.data, video?.size]);
 
   useEffect(() => {
