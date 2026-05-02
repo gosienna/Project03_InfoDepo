@@ -562,6 +562,7 @@ export const Desk = ({
   onRenameChannel,
   onSetNoteCoverImage,
   readOnly,
+  role,
   onOpenNewNote,
   onOpenYoutube,
   onOpenChannel,
@@ -1794,7 +1795,7 @@ export const Desk = ({
         currentLayout: layoutRef.current,
         onAdd: addItemToDesk,
       }),
-      React.createElement(
+      role !== 'viewer' && React.createElement(
         'button',
         {
           onClick: addTextItemAtCenter,
@@ -1814,7 +1815,7 @@ export const Desk = ({
         ),
         'Text'
       ),
-      (onOpenNewNote || onOpenFile) && React.createElement(AddContentDropdown, {
+      role !== 'viewer' && (onOpenNewNote || onOpenFile) && React.createElement(AddContentDropdown, {
         onNewNote: onOpenNewNote,
         onAddYoutube: onOpenYoutube,
         onAddChannel: onOpenChannel,

@@ -546,10 +546,11 @@ const App = () => {
               onRenameChannel: (rec, storeName, name) => renameItem(rec.id, storeName, name),
               onSetNoteCoverImage: (v, file) => setNoteCoverImage(v.id, file),
               readOnly: false,
-              onOpenNewNote: () => setIsNewNoteOpen(true),
-              onOpenYoutube: () => setIsYoutubeOpen(true),
-              onOpenChannel: () => setIsChannelOpen(true),
-              onOpenFile: () => fileInputRef.current?.click(),
+              role: userType,
+              onOpenNewNote: isEditor ? () => setIsNewNoteOpen(true) : undefined,
+              onOpenYoutube: isEditor ? () => setIsYoutubeOpen(true) : undefined,
+              onOpenChannel: isEditor ? () => setIsChannelOpen(true) : undefined,
+              onOpenFile: isEditor ? () => fileInputRef.current?.click() : undefined,
             })
           : React.createElement(
               'div',
