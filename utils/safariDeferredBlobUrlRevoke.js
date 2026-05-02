@@ -17,7 +17,7 @@
   if (!appleMobile && !desktopSafari) return;
 
   const native = URL.revokeObjectURL.bind(URL);
-  const DELAY_MS = 450;
+  const DELAY_MS = 1500;
   const timers = new Map();
 
   URL.revokeObjectURL = function revokeObjectURLDeferred(href) {
