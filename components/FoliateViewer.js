@@ -118,7 +118,7 @@ export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition
     let cancelled = false;
 
     const container = containerRef.current;
-    const view = document.createElement('foliate-view');
+    let view = document.createElement('foliate-view');
     view.style.cssText = 'display:block;position:absolute;inset:0;width:100%;height:100%;';
     container.appendChild(view);
     viewRef.current = view;
@@ -148,19 +148,22 @@ export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition
         let sections = view.book?.sections ?? [];
         if (shouldReopenAsFixedSpreadComic(view)) {
           const book = view.book;
-          // Paginator only allocates its inner View after a section loads; close() → destroy()
-          // would otherwise throw (destroy on undefined). Prime the first spine item first.
-          const firstLinear = book.sections?.findIndex(s => s.linear !== 'no') ?? -1;
-          const primeIdx = firstLinear >= 0 ? firstLinear : 0;
-          try {
-            await view.goTo(primeIdx);
-          } catch (_) { /* ignore */ }
-          view.close();
           book.rendition = {
             ...book.rendition,
             layout: 'pre-paginated',
             spread: book.rendition?.spread ?? 'both',
           };
+          // Do not rely on view.close(): Paginator.destroy() throws if no spine frame ever
+          // mounted (#view still undefined). That can happen in production (timing/chunks).
+          try {
+            view.close();
+          } catch (_) { /* ignore */ }
+          if (container.contains(view)) container.removeChild(view);
+          const next = document.createElement('foliate-view');
+          next.style.cssText = 'display:block;position:absolute;inset:0;width:100%;height:100%;';
+          container.appendChild(next);
+          view = next;
+          viewRef.current = view;
           await view.open(book);
           if (cancelled) return;
           fxl = !!view.isFixedLayout;
