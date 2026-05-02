@@ -680,6 +680,8 @@ export const Desk = ({
   const [editingTextId, setEditingTextId] = useState(null);
   const [textFontSizeMenu, setTextFontSizeMenu] = useState(null);
   const lineDragRef = useRef(null);
+  const activePointersRef = useRef(new Map());
+  const pinchStartRef = useRef(null);
   useEffect(() => {
     selectedNodeIdsRef.current = selectedNodeIds;
   }, [selectedNodeIds]);
@@ -764,6 +766,30 @@ export const Desk = ({
   }, [commitConnections, commitLayout, commitTextItems, connectMode, readOnly, redoDesk, selectedConnectionIds, selectedItemKeys, selectedTextIds, slashMenu.open, undoDesk]);
 
   const onViewportPointerDown = useCallback((e) => {
+    activePointersRef.current.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+
+    if (activePointersRef.current.size >= 2) {
+      marqueeRef.current = null;
+      setMarqueeBox(null);
+      panningRef.current = null;
+      const pts = [...activePointersRef.current.values()];
+      const dx = pts[1].clientX - pts[0].clientX;
+      const dy = pts[1].clientY - pts[0].clientY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const rect = viewportRef.current?.getBoundingClientRect();
+      const midX = (pts[0].clientX + pts[1].clientX) / 2 - (rect?.left || 0);
+      const midY = (pts[0].clientY + pts[1].clientY) / 2 - (rect?.top || 0);
+      pinchStartRef.current = { distance, midX, midY, originPanX: panRef.current.x, originPanY: panRef.current.y, originZoom: zoomRef.current };
+      viewportRef.current?.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (e.pointerType === 'touch' && e.target === e.currentTarget) {
+      panningRef.current = { startX: e.clientX, startY: e.clientY, originX: panRef.current.x, originY: panRef.current.y };
+      viewportRef.current?.setPointerCapture(e.pointerId);
+      return;
+    }
+
     if (e.target === e.currentTarget && e.button === 0 && !spaceRef.current) {
       const rect = viewportRef.current?.getBoundingClientRect();
       const startX = e.clientX - (rect?.left || 0);
@@ -786,6 +812,27 @@ export const Desk = ({
   }, []);
 
   const onViewportPointerMove = useCallback((e) => {
+    if (activePointersRef.current.has(e.pointerId)) {
+      activePointersRef.current.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+    }
+
+    if (pinchStartRef.current && activePointersRef.current.size >= 2) {
+      const pts = [...activePointersRef.current.values()];
+      const dx = pts[1].clientX - pts[0].clientX;
+      const dy = pts[1].clientY - pts[0].clientY;
+      const newDistance = Math.sqrt(dx * dx + dy * dy);
+      const { distance, midX, midY, originPanX, originPanY, originZoom } = pinchStartRef.current;
+      const scale = newDistance / distance;
+      const newZoom = Math.max(DEFAULT_ZOOM_MIN, Math.min(DEFAULT_ZOOM_MAX, originZoom * scale));
+      panRef.current = {
+        x: midX - (midX - originPanX) * (newZoom / originZoom),
+        y: midY - (midY - originPanY) * (newZoom / originZoom),
+      };
+      zoomRef.current = newZoom;
+      rerender();
+      return;
+    }
+
     if (viewportRef.current) {
       const rect = viewportRef.current.getBoundingClientRect();
       const localX = e.clientX - rect.left;
@@ -810,8 +857,21 @@ export const Desk = ({
     rerender();
   }, [rerender]);
 
-  const onViewportPointerUp = useCallback(() => {
+  const onViewportPointerUp = useCallback((e) => {
+    activePointersRef.current.delete(e.pointerId);
+    if (activePointersRef.current.size < 2) pinchStartRef.current = null;
+    const pan = panningRef.current;
     panningRef.current = null;
+    if (e.pointerType === 'touch' && pan && !marqueeRef.current) {
+      const dx = Math.abs(e.clientX - pan.startX);
+      const dy = Math.abs(e.clientY - pan.startY);
+      if (dx < 8 && dy < 8) {
+        setSelectedConnectionIds([]);
+        setSelectedItemKeys([]);
+        setSelectedTextIds([]);
+        setSelectedNodeIds([]);
+      }
+    }
     if (!marqueeRef.current || !viewportRef.current) return;
     const m = marqueeRef.current;
     marqueeRef.current = null;
@@ -1005,6 +1065,23 @@ export const Desk = ({
     const my = mouseRef.current.y;
     const worldX = (mx - panRef.current.x) / zoomRef.current;
     const worldY = (my - panRef.current.y) / zoomRef.current;
+    const snapped = snapPoint({ x: worldX, y: worldY });
+    const id = textItemId();
+    const newItem = { id, text: '', x: snapped.x, y: snapped.y, fontSize: 16, width: 180, height: 40 };
+    const next = [...(textItemsRef.current || []), newItem];
+    commitTextItems(next);
+    setEditingTextId(id);
+    setSlashMenu((prev) => ({ ...prev, open: false }));
+    setConnectMode(false);
+    setConnectStartKey(null);
+  }, [commitTextItems]);
+
+  const addTextItemAtCenter = useCallback(() => {
+    const el = viewportRef.current;
+    const w = el ? el.clientWidth : 800;
+    const h = el ? el.clientHeight : 600;
+    const worldX = (w / 2 - panRef.current.x) / zoomRef.current;
+    const worldY = (h / 2 - panRef.current.y) / zoomRef.current;
     const snapped = snapPoint({ x: worldX, y: worldY });
     const id = textItemId();
     const newItem = { id, text: '', x: snapped.x, y: snapped.y, fontSize: 16, width: 180, height: 40 };
@@ -1224,10 +1301,18 @@ export const Desk = ({
         position: 'relative', overflow: 'hidden',
         background: '#111827',
         cursor: isPanning ? 'grabbing' : spaceRef.current ? 'grab' : 'default',
+        touchAction: 'none',
       },
       onPointerDown: onViewportPointerDown,
       onPointerMove: onViewportPointerMove,
       onPointerUp: onViewportPointerUp,
+      onPointerCancel: (e) => {
+        activePointersRef.current.delete(e.pointerId);
+        if (activePointersRef.current.size < 2) pinchStartRef.current = null;
+        panningRef.current = null;
+        marqueeRef.current = null;
+        setMarqueeBox(null);
+      },
     },
     // Dot grid background
     React.createElement(DotGrid, { panX, panY, zoom }),
@@ -1380,7 +1465,7 @@ export const Desk = ({
                 height: DRAG_BAR_H, background: '#1f2937', borderRadius: '8px 8px 0 0',
                 border: '1px solid #374151', borderBottom: 'none',
                 cursor: 'grab', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '0 8px', color: '#4b5563',
+                padding: '0 8px', color: '#4b5563', touchAction: 'none',
               },
               onPointerDown: (e) => onHandlePointerDown(e, key),
               onPointerMove: (e) => onHandlePointerMove(e, key),
@@ -1472,7 +1557,7 @@ export const Desk = ({
                 background: editingTextId === ti.id ? '#1f2937' : 'transparent',
                 borderRadius: '6px 6px 0 0',
                 border: editingTextId === ti.id ? '1px solid #374151' : 'none',
-                borderBottom: 'none',
+                borderBottom: 'none', touchAction: 'none',
               },
               onPointerDown: (e) => onTextHandlePointerDown(e, ti.id),
               onPointerMove: (e) => onTextHandlePointerMove(e, ti.id),
@@ -1709,6 +1794,26 @@ export const Desk = ({
         currentLayout: layoutRef.current,
         onAdd: addItemToDesk,
       }),
+      React.createElement(
+        'button',
+        {
+          onClick: addTextItemAtCenter,
+          title: 'Add text (T)',
+          style: {
+            background: '#1f2937', border: '1px solid #374151', borderRadius: 10,
+            padding: '7px 12px', fontSize: 13, color: '#e5e7eb',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5,
+            touchAction: 'manipulation',
+          },
+          onMouseEnter: (e) => { e.currentTarget.style.background = '#374151'; },
+          onMouseLeave: (e) => { e.currentTarget.style.background = '#1f2937'; },
+        },
+        React.createElement(
+          'svg', { xmlns: 'http://www.w3.org/2000/svg', width: 14, height: 14, fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2.5 },
+          React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M3 5h18M12 5v14' })
+        ),
+        'Text'
+      ),
       (onOpenNewNote || onOpenFile) && React.createElement(AddContentDropdown, {
         onNewNote: onOpenNewNote,
         onAddYoutube: onOpenYoutube,
