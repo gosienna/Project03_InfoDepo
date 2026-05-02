@@ -4,6 +4,13 @@ import { DataTile } from './DataTile.js';
 import { DeskTile } from './DeskTile.js';
 import { AddContentDropdown } from './AddContentDropdown.js';
 import { normalizeTag } from '../utils/tagUtils.js';
+import {
+  itemEntryKey,
+  channelEntryKey,
+  deskEntryKey,
+  resolveLayoutEntry,
+  migrateDeskDataKeys,
+} from '../utils/deskEntryKeys.js';
 
 const CARD_W = 250;
 const DRAG_BAR_H = 26;
@@ -37,30 +44,6 @@ const estimateTextBounds = (item) => {
     bottom: item.y + height,
   };
 };
-
-// --- Key helpers ---
-
-export const itemEntryKey = (item) => `${item.idbStore}:${item.id}`;
-export const channelEntryKey = (ch) => `channel:${ch.id}`;
-export const deskEntryKey = (d) => `desk:${d.id}`;
-
-function resolveEntry(key, items, channels, desks) {
-  if (key.startsWith('channel:')) {
-    const id = Number(key.slice(8));
-    const ch = channels.find((c) => c.id === id);
-    return ch ? { ...ch, _entryType: 'channel' } : null;
-  }
-  if (key.startsWith('desk:')) {
-    const id = Number(key.slice(5));
-    const d = (desks || []).find((x) => x.id === id);
-    return d ? { ...d, _entryType: 'desk' } : null;
-  }
-  const sep = key.lastIndexOf(':');
-  const store = key.slice(0, sep);
-  const id = Number(key.slice(sep + 1));
-  const item = items.find((i) => i.idbStore === store && i.id === id);
-  return item ? { ...item, _entryType: 'item' } : null;
-}
 
 const cardBoxFor = (pos) => ({
   left: pos.x,
@@ -609,12 +592,25 @@ export const Desk = ({
   const textItemsRef = useRef(Array.isArray(desk?.textItems) ? desk.textItems : []);
 
   useEffect(() => {
-    // Sync refs when desk data changes (e.g. after persistence round-trip).
-    layoutRef.current = desk?.layout || {};
-    connectionsRef.current = Array.isArray(desk?.connections) ? desk.connections : [];
+    // Sync refs when desk data changes; normalize layout keys in the same pass so
+    // we never briefly apply a stale prop layout over a migrated ref.
+    let layout = desk?.layout && typeof desk.layout === 'object' ? desk.layout : {};
+    let connections = Array.isArray(desk?.connections) ? desk.connections : [];
+    const migrated = migrateDeskDataKeys(layout, connections, items, channels, desks);
+    if (migrated.changed && !readOnly && desk?.id != null && onUpdateLayout) {
+      layout = migrated.layout;
+      connections = migrated.connections;
+      layoutRef.current = layout;
+      connectionsRef.current = connections;
+      onUpdateLayout(desk.id, layout);
+      if (onUpdateConnections) onUpdateConnections(desk.id, connections);
+    } else {
+      layoutRef.current = layout;
+      connectionsRef.current = connections;
+    }
     textItemsRef.current = Array.isArray(desk?.textItems) ? desk.textItems : [];
     rerender();
-  }, [desk?.layout, desk?.connections, desk?.textItems]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [desk?.layout, desk?.connections, desk?.textItems, items, channels, desks, readOnly, desk?.id, onUpdateLayout, onUpdateConnections, rerender]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const commitLayout = useCallback((newLayout, options = {}) => {
     if (options.recordHistory !== false) {
@@ -1176,7 +1172,7 @@ export const Desk = ({
   const layoutEntries = useMemo(() => {
     const layout = layoutRef.current;
     return Object.entries(layout).map(([key, pos]) => {
-      const entry = resolveEntry(key, items, channels, desks);
+      const entry = resolveLayoutEntry(key, items, channels, desks);
       return entry ? { key, pos, entry } : null;
     }).filter(Boolean);
   }, [renderTick, items, channels, desks]); // eslint-disable-line react-hooks/exhaustive-deps

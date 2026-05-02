@@ -12,7 +12,7 @@
  * images add: noteId
  * channels use: { id, channelId, handle, name, thumbnailUrl, videos[], tags[], driveId, modifiedTime, sharedWith, ownerEmail }
  * desks use: { id, name, layout: { [key]: { x, y } }, connections?: [{ id, fromKey, toKey, route }], tags[], driveId, modifiedTime, localModifiedAt, sharedWith, ownerEmail }
- *   layout key format: "books:N" | "notes:N" | "videos:N" | "channel:N" | "desk:N"
+ *   layout keys: prefer "drive:{driveId}"; local-only items use "local:{books|notes|videos}:N" or "local:channel:N"; nested desks without Drive use "desk:N" (legacy "store:N" / "channel:N" still load)
  *
  * `pdfAnnotations` — per-PDF annotation sidecar (keyPath sidecarKey = `${idbStore}:${itemId}`).
  *

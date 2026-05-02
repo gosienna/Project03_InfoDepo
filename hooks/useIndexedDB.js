@@ -4,6 +4,7 @@ import { INFO_DEPO_DB_NAME as DB_NAME, INFO_DEPO_DB_VERSION as DB_VERSION } from
 import { normalizeTagsList } from '../utils/tagUtils.js';
 import { parsePdfAnnotationSidecarText, pdfAnnotationSidecarNeedsBackup, timeMs as sidecarTimeMs } from '../utils/pdfAnnotationSidecar.js';
 import { getSyncSettings } from '../utils/syncSettings.js';
+import { deskRecordRemapContentKeys, layoutKeysForLocalRecord } from '../utils/deskEntryKeys.js';
 
 const BOOKS_STORE    = 'books';
 const NOTES_STORE    = 'notes';
@@ -671,18 +672,60 @@ export const useIndexedDB = () => {
             : {}),
         });
         putRequest.onsuccess = () => {
-          if (!silent) {
-            if (storeName === CHANNELS_STORE) loadChannels('setItemDriveId');
-            else if (storeName === DESKS_STORE) loadDesks('setItemDriveId');
-            else loadItems('setItemDriveId');
+          const trimmedDrive = String(driveId || '').trim();
+          const notify = (remappedDesks) => {
+            if (remappedDesks) loadDesks('setItemDriveId/desksRemap');
+            if (!silent) {
+              if (storeName === CHANNELS_STORE) loadChannels('setItemDriveId');
+              else if (storeName === DESKS_STORE) loadDesks('setItemDriveId');
+              else loadItems('setItemDriveId');
+            }
+            resolve();
+          };
+          if (!trimmedDrive) {
+            notify(false);
+            return;
           }
-          resolve();
+          const driveKey = `drive:${trimmedDrive}`;
+          const oldKeys = layoutKeysForLocalRecord(storeName, id);
+          let tx2;
+          try { tx2 = db.transaction(DESKS_STORE, 'readwrite'); } catch {
+            notify(false);
+            return;
+          }
+          const dos = tx2.objectStore(DESKS_STORE);
+          const ga = dos.getAll();
+          ga.onsuccess = () => {
+            const rows = ga.result || [];
+            const toPut = [];
+            for (const desk of rows) {
+              const next = deskRecordRemapContentKeys(desk, oldKeys, driveKey);
+              if (next) toPut.push(next);
+            }
+            if (!toPut.length) {
+              notify(false);
+              return;
+            }
+            let left = toPut.length;
+            toPut.forEach((row) => {
+              const pr = dos.put(row);
+              pr.onsuccess = () => {
+                left -= 1;
+                if (left === 0) notify(true);
+              };
+              pr.onerror = () => {
+                left -= 1;
+                if (left === 0) reject(pr.error);
+              };
+            });
+          };
+          ga.onerror = () => notify(false);
         };
         putRequest.onerror   = () => reject(putRequest.error);
       };
       getRequest.onerror = () => reject(getRequest.error);
     });
-  }, [db, loadItems, loadChannels]);
+  }, [db, loadItems, loadChannels, loadDesks]);
 
   // --- Drive sync operations (books + notes stores) ---
 

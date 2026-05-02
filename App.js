@@ -8,6 +8,7 @@ import { Reader } from './components/Reader.js';
 import { YoutubeChannelViewer } from './components/YoutubeChannelViewer.js';
 import { Explorer } from './components/Explorer.js';
 import { Desk } from './components/Desk.js';
+import { itemEntryKey, channelEntryKey } from './utils/deskEntryKeys.js';
 import { useIndexedDB } from './hooks/useIndexedDB.js';
 import { libraryItemKey } from './utils/libraryItemKey.js';
 import { needsGoogleSignIn } from './utils/driveOAuthGateCheck.js';
@@ -295,7 +296,9 @@ const App = () => {
 
   const addToDeskIfActive = useCallback((store, id) => {
     if (mode !== 'desk' || !currentDesk || id == null) return;
-    const key = store === 'channel' ? `channel:${id}` : `${store}:${id}`;
+    const key = store === 'channel'
+      ? channelEntryKey({ id, driveId: '' })
+      : itemEntryKey({ id, idbStore: store, driveId: '' });
     const currentLayout = currentDesk.layout || {};
     const count = Object.keys(currentLayout).length;
     const newLayout = { ...currentLayout, [key]: { x: 60 + (count * 20) % 200, y: 60 + (count * 20) % 100 } };
