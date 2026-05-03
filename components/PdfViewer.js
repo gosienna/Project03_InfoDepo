@@ -169,6 +169,8 @@ export const PdfViewer = ({
   const primaryPointerIdRef = useRef(null);
   const [textColor, setTextColor] = useState('black');
   const [textFontSize, setTextFontSize] = useState(14);
+  const [lineStrokeColor, setLineStrokeColor] = useState('red');
+  const [lineStrokeWidth, setLineStrokeWidth] = useState(2);
 
   const TEXT_COLOR_OPTIONS = [
     { id: 'black', label: 'Black', css: '#111827', rgb: [0.07, 0.09, 0.16] },
@@ -181,6 +183,19 @@ export const PdfViewer = ({
 
   function getTextColorMeta(colorId) {
     return TEXT_COLOR_OPTIONS.find((opt) => opt.id === colorId) || TEXT_COLOR_OPTIONS[0];
+  }
+
+  /** Legacy draw/line annotations had no `color` — match previous hard-coded red stroke. */
+  function getLineDrawColorMeta(ann) {
+    if (ann && ann.color != null && String(ann.color).length) {
+      return getTextColorMeta(ann.color);
+    }
+    return TEXT_COLOR_OPTIONS.find((opt) => opt.id === 'red') || TEXT_COLOR_OPTIONS[0];
+  }
+
+  function getLineDrawStrokeWidth(ann) {
+    const w = Number(ann?.strokeWidth);
+    return Number.isFinite(w) && w > 0 ? w : 2;
   }
   useEffect(() => {
     if (tool !== 'draw') {
@@ -515,7 +530,7 @@ export const PdfViewer = ({
         const createRow = (withLeftSpacer = false) => {
           const row = document.createElement('div');
           row.style.display = 'flex';
-          row.style.gap = '16px';
+          row.style.gap = '0px';
           row.style.width = '100%';
           row.style.alignItems = 'flex-start';
           row.style.justifyContent = 'center';
@@ -523,7 +538,7 @@ export const PdfViewer = ({
           if (withLeftSpacer) {
             const spacer = document.createElement('div');
             spacer.style.width = '100%';
-            spacer.style.maxWidth = 'calc(50% - 8px)';
+            spacer.style.maxWidth = '50%';
             spacer.style.visibility = 'hidden';
             row.appendChild(spacer);
           }
@@ -947,16 +962,20 @@ export const PdfViewer = ({
           continue;
         }
         if (ann.type === 'line') {
+          const colorMeta = getLineDrawColorMeta(ann);
+          const sw = getLineDrawStrokeWidth(ann);
           page.drawLine({
             start: { x: ann.x1 * scaleX, y: pdfH - ann.y1 * scaleY },
             end: { x: ann.x2 * scaleX, y: pdfH - ann.y2 * scaleY },
-            thickness: 2 * Math.max(scaleX, scaleY),
-            color: rgb(0.85, 0.13, 0.13),
+            thickness: sw * Math.max(scaleX, scaleY),
+            color: rgb(colorMeta.rgb[0], colorMeta.rgb[1], colorMeta.rgb[2]),
             opacity: 0.95,
           });
           continue;
         }
         if (ann.type === 'draw') {
+          const colorMeta = getLineDrawColorMeta(ann);
+          const sw = getLineDrawStrokeWidth(ann);
           const pts = Array.isArray(ann.points) ? ann.points : [];
           for (let i = 1; i < pts.length; i++) {
             const p0 = pts[i - 1];
@@ -964,8 +983,8 @@ export const PdfViewer = ({
             page.drawLine({
               start: { x: p0.x * scaleX, y: pdfH - p0.y * scaleY },
               end: { x: p1.x * scaleX, y: pdfH - p1.y * scaleY },
-              thickness: 2 * Math.max(scaleX, scaleY),
-              color: rgb(0.85, 0.13, 0.13),
+              thickness: sw * Math.max(scaleX, scaleY),
+              color: rgb(colorMeta.rgb[0], colorMeta.rgb[1], colorMeta.rgb[2]),
               opacity: 0.95,
             });
           }
@@ -1089,7 +1108,13 @@ export const PdfViewer = ({
     if (toolRef.current === 'draw') {
       const draft = strokeDraftRef.current;
       if (draft && draft.pageIndex === pageIndex && draft.points.length > 1) {
-        setAnnotations((prev) => [...prev, { type: 'draw', pageIndex, points: draft.points }]);
+        setAnnotations((prev) => [...prev, {
+          type: 'draw',
+          pageIndex,
+          points: draft.points,
+          color: lineStrokeColor,
+          strokeWidth: lineStrokeWidth,
+        }]);
       }
       setStrokeDraft(null);
       strokeDraftRef.current = null;
@@ -1106,7 +1131,16 @@ export const PdfViewer = ({
         const x2 = draft.curX;
         const y2 = draft.curY;
         if (Math.abs(x2 - x1) > 2 || Math.abs(y2 - y1) > 2) {
-          setAnnotations((prev) => [...prev, { type: 'line', pageIndex, x1, y1, x2, y2 }]);
+          setAnnotations((prev) => [...prev, {
+            type: 'line',
+            pageIndex,
+            x1,
+            y1,
+            x2,
+            y2,
+            color: lineStrokeColor,
+            strokeWidth: lineStrokeWidth,
+          }]);
         }
       }
       setLineDraft(null);
@@ -1266,14 +1300,16 @@ export const PdfViewer = ({
             );
           }
           if (ann.type === 'line') {
+            const strokeMeta = getLineDrawColorMeta(ann);
+            const sw = getLineDrawStrokeWidth(ann);
             return React.createElement('line', {
               key: i,
               x1: ann.x1,
               y1: ann.y1,
               x2: ann.x2,
               y2: ann.y2,
-              stroke: 'rgba(220, 38, 38, 0.95)',
-              strokeWidth: 2,
+              stroke: strokeMeta.css,
+              strokeWidth: sw,
               style: { cursor: readOnly ? 'default' : 'pointer', pointerEvents: readOnly ? 'none' : 'auto' },
               ...annRemoveHandlers(i),
             });
@@ -1281,12 +1317,14 @@ export const PdfViewer = ({
           if (ann.type === 'draw') {
             const pts = Array.isArray(ann.points) ? ann.points : [];
             if (pts.length < 2) return null;
+            const strokeMeta = getLineDrawColorMeta(ann);
+            const sw = getLineDrawStrokeWidth(ann);
             return React.createElement('polyline', {
               key: i,
               points: pts.map((p) => `${p.x},${p.y}`).join(' '),
               fill: 'none',
-              stroke: 'rgba(220, 38, 38, 0.95)',
-              strokeWidth: 2,
+              stroke: strokeMeta.css,
+              strokeWidth: sw,
               strokeLinecap: 'round',
               strokeLinejoin: 'round',
               style: { cursor: readOnly ? 'default' : 'pointer', pointerEvents: readOnly ? 'none' : 'auto' },
@@ -1337,8 +1375,9 @@ export const PdfViewer = ({
           React.createElement('polyline', {
             points: strokeDraft.points.map((p) => `${p.x},${p.y}`).join(' '),
             fill: 'none',
-            stroke: 'rgba(220, 38, 38, 0.75)',
-            strokeWidth: 2,
+            stroke: getTextColorMeta(lineStrokeColor).css,
+            strokeOpacity: 0.85,
+            strokeWidth: lineStrokeWidth,
             strokeLinecap: 'round',
             strokeLinejoin: 'round',
           }))
@@ -1362,8 +1401,9 @@ export const PdfViewer = ({
             y1: lineDraft.startY,
             x2: lineDraft.curX,
             y2: lineDraft.curY,
-            stroke: 'rgba(220, 38, 38, 0.8)',
-            strokeWidth: 2,
+            stroke: getTextColorMeta(lineStrokeColor).css,
+            strokeOpacity: 0.85,
+            strokeWidth: lineStrokeWidth,
             strokeDasharray: '6 3',
           }))
         );
@@ -1787,6 +1827,99 @@ export const PdfViewer = ({
         () => setTool((t) => (t === 'line' ? 'none' : 'line')),
         tool === 'line' ? '#fca5a5' : 'rgba(75,85,99,1)',
         tool === 'line' ? '#111' : '#e5e7eb',
+      ),
+      (tool === 'draw' || tool === 'line') && React.createElement(
+        'div',
+        {
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            padding: 8,
+            borderRadius: 8,
+            background: 'rgba(17,24,39,0.85)',
+          },
+        },
+        React.createElement('span', { style: { fontSize: 11, color: '#9ca3af' } }, 'Draw / line stroke'),
+        React.createElement(
+          'div',
+          { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+          React.createElement('label', { style: { fontSize: 10, color: '#6b7280' } }, 'Color'),
+          React.createElement(
+            'select',
+            {
+              value: lineStrokeColor,
+              'aria-label': 'Stroke color for draw and line tools',
+              style: {
+                borderRadius: 6,
+                border: '1px solid rgba(75,85,99,1)',
+                padding: '4px 6px',
+                fontSize: 12,
+                background: 'rgba(255,255,255,0.95)',
+                color: '#111827',
+              },
+              onChange: (e) => setLineStrokeColor(e.target.value),
+            },
+            TEXT_COLOR_OPTIONS.map((opt) =>
+              React.createElement('option', { key: opt.id, value: opt.id }, opt.label)
+            )
+          ),
+        ),
+        React.createElement(
+          'div',
+          { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+          React.createElement(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+              },
+            },
+            React.createElement('label', {
+              htmlFor: 'pdf-line-stroke-width',
+              style: { fontSize: 10, color: '#6b7280', flexShrink: 0 },
+            }, 'Width'),
+            React.createElement('span', {
+              style: { fontSize: 12, color: '#e5e7eb', fontVariantNumeric: 'tabular-nums', minWidth: 36, textAlign: 'right' },
+            }, `${lineStrokeWidth}px`),
+          ),
+          React.createElement(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+              },
+            },
+            React.createElement('span', { style: { fontSize: 9, color: '#6b7280', width: 22, flexShrink: 0 } }, '2'),
+            React.createElement('input', {
+              id: 'pdf-line-stroke-width',
+              type: 'range',
+              min: 2,
+              max: 20,
+              step: 1,
+              value: lineStrokeWidth,
+              'aria-label': 'Stroke width for draw and line tools, 2 to 20 pixels',
+              style: {
+                flex: 1,
+                minWidth: 0,
+                height: 6,
+                accentColor: '#60a5fa',
+                cursor: 'pointer',
+              },
+              onChange: (e) => {
+                const n = Number(e.target.value);
+                if (Number.isFinite(n)) setLineStrokeWidth(Math.min(20, Math.max(2, Math.round(n))));
+              },
+            }),
+            React.createElement('span', { style: { fontSize: 9, color: '#6b7280', width: 22, flexShrink: 0, textAlign: 'right' } }, '20'),
+          ),
+        ),
       ),
       tool === 'text' && React.createElement(
         'div',
