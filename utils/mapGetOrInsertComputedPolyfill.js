@@ -1,19 +1,10 @@
 /**
- * pdfjs-dist 5.x calls Map.prototype.getOrInsertComputed (ES2024); Safari / WebKit
- * before ~18.2 omit it. Install once per JS realm (window, Worker).
+ * Polyfills for pdfjs-dist compatibility.
+ *
+ * pdfjs-dist 4.x: no polyfills required — kept as a no-op import so the worker
+ * entry and PdfViewer can continue to import this file without changes.
+ *
+ * If upgrading to pdfjs-dist 5.x again, restore:
+ *   - Map.prototype.getOrInsertComputed  (ES2024, missing in Safari < 18.2)
+ *   - ReadableStream.prototype[Symbol.asyncIterator]  (missing in Safari < 17.4)
  */
-if (typeof Map !== 'undefined' && typeof Map.prototype.getOrInsertComputed !== 'function') {
-  Object.defineProperty(Map.prototype, 'getOrInsertComputed', {
-    configurable: true,
-    writable: true,
-    value: function getOrInsertComputed(key, callbackfn) {
-      if (typeof callbackfn !== 'function') {
-        throw new TypeError('Map.prototype.getOrInsertComputed: callback must be a function');
-      }
-      if (this.has(key)) return this.get(key);
-      const v = callbackfn.call(undefined, key);
-      this.set(key, v);
-      return v;
-    },
-  });
-}
