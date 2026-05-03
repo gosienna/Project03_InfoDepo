@@ -6,14 +6,11 @@ import { BookIcon } from './icons/BookIcon.js';
 import { getDriveCredentials, hasGoogleApiKeyOrProxy } from '../utils/driveCredentials.js';
 import { getDriveFolderId, setDriveFolderId, parseDriveFolderIdInput } from '../utils/driveFolderStorage.js';
 import {
-  getStoredAccessToken,
-  saveStoredAccessToken,
   removeStoredAccessToken,
   clearAllStoredAccessTokens,
   getAllStoredAccessTokens,
 } from '../utils/driveOAuthStorage.js';
 import { AddContentDropdown } from './AddContentDropdown.js';
-import { CHANNEL_JSON_MARKER } from '../utils/driveSync.js';
 import { runOwnerSyncPipeline } from '../utils/libraryDriveSync.js';
 import { libraryItemKey } from '../utils/libraryItemKey.js';
 import { fetchGoogleUserEmail } from '../utils/googleUser.js';
@@ -37,12 +34,15 @@ import {
 } from '../utils/libraryDisplayPolicy.js';
 import { formatBytes } from '../utils/fileUtils.js';
 import { getSyncSettings, saveSyncSettings } from '../utils/syncSettings.js';
-import { cloneBlobForNetwork } from '../utils/cloneBlobForNetwork.js';
+import {
+  getDriveTokenForScope,
+  peekDriveImplicitUploadToken,
+  resetDriveImplicitUploadToken,
+} from '../utils/driveOAuthImplicitFlowToken.js';
+import { useDriveTileUpload, channelUploadKey } from '../hooks/useDriveTileUpload.js';
 
 /** Ensures startup background sync runs once per page load (survives React Strict Mode remount). */
 let ownerBackgroundSyncScheduled = false;
-
-const channelUploadKey = (ch) => `channel-${ch?.id}`;
 
 const SEARCH_SUGGEST_MAX = 15;
 
@@ -50,7 +50,7 @@ const LIBRARY_PAGE_SIZE = 20;
 
 export const Library = ({
   items, channels, desks,
-  onSelectItem, onSelectChannel, onSelectDesk, onAddDesk, onDeleteDesk,
+  onSelectItem, onSelectChannel, onSelectDesk, onAddDesk, onRequestDeleteDesk,
   onAddItem, onSetNoteCoverImage, onDeleteItem, onClearLibrary,
   onSetDriveId, onSetNoteFolderData, onGetAllImages, getImagesForNote,
   onAddChannel, onDeleteChannel,
@@ -92,14 +92,12 @@ export const Library = ({
   const showLibraryAddMenu = isEditor || (userType === 'viewer' && typeof onAddDesk === 'function');
   const normalizedUserEmail = String(googleUserEmail || '').trim().toLowerCase();
   const searchInputRef    = useRef(null);
-  const uploadTokenRef    = useRef(null);
-  const lastScopeRef      = useRef('');
+  const scheduleAclAfterUploadRef = useRef(() => {});
   const oauthClientModeRef = useRef(null);
   const shareAclTimerRef = useRef(null);
   const syncInFlightRef = useRef(false);
   const runOwnerSyncRef = useRef(() => {});
   const viewerPeerSyncDoneRef = useRef(false);
-  const [uploadStatuses,   setUploadStatuses]   = useState({});
   const credentials = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
   const [driveFolderDraft, setDriveFolderDraft] = useState('');
@@ -143,6 +141,11 @@ export const Library = ({
       return;
     }
     setPendingDelete({ kind: 'channel', channel: ch });
+  };
+
+  const handleDeleteDeskRequest = (desk) => {
+    if (!onRequestDeleteDesk) return;
+    onRequestDeleteDesk(desk);
   };
 
   const closePendingDelete = () => setPendingDelete(null);
@@ -377,6 +380,13 @@ export const Library = ({
     }, 450);
   };
 
+  scheduleAclAfterUploadRef.current = scheduleShareAclReconcile;
+
+  const { uploadStatuses, handleUpload, handleChannelUpload } = useDriveTileUpload({
+    onSetDriveId,
+    scheduleShareAclReconcile: () => scheduleAclAfterUploadRef.current(),
+  });
+
   useEffect(
     () => () => {
       if (shareAclTimerRef.current) clearTimeout(shareAclTimerRef.current);
@@ -393,50 +403,9 @@ export const Library = ({
       clearAllStoredAccessTokens();
       oauthClientModeRef.current = clientId;
     }
-    uploadTokenRef.current = null;
-    lastScopeRef.current = '';
+    resetDriveImplicitUploadToken();
     invalidateDriveAccessTokenCache();
   }, [credentials.clientId]);
-
-  const setStatus = (key, status) =>
-    setUploadStatuses(prev => ({ ...prev, [key]: status }));
-
-  const getDriveTokenForScope = (scope) =>
-    new Promise((resolve, reject) => {
-      if (typeof google === 'undefined' || !google.accounts) {
-        reject(new Error('Google API not loaded'));
-        return;
-      }
-      if (lastScopeRef.current !== scope) {
-        uploadTokenRef.current = null;
-        lastScopeRef.current = scope;
-      }
-      if (!uploadTokenRef.current) {
-        const fromStorage = getStoredAccessToken(credentials.clientId, scope);
-        if (fromStorage) uploadTokenRef.current = fromStorage;
-      }
-      if (uploadTokenRef.current) {
-        resolve(uploadTokenRef.current);
-        return;
-      }
-      const client = google.accounts.oauth2.initTokenClient({
-        client_id: credentials.clientId,
-        scope,
-        callback: (res) => {
-          if (res.error) { reject(new Error(res.error_description || res.error)); return; }
-          uploadTokenRef.current = res.access_token;
-          saveStoredAccessToken(
-            credentials.clientId,
-            scope,
-            res.access_token,
-            res.expires_in,
-          );
-          resolve(res.access_token);
-        },
-      });
-      client.requestAccessToken({ prompt: '' });
-    });
-
 
   useEffect(() => {
     viewerPeerSyncDoneRef.current = false;
@@ -522,101 +491,6 @@ export const Library = ({
     loadAll,
   ]);
 
-  const handleUpload = async (video) => {
-    const uKey = libraryItemKey(video);
-    setStatus(uKey, 'uploading');
-    try {
-      const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
-
-      // YouTube links: upload as .json so Drive can display the content
-      const isYoutube = video.type === 'application/x-youtube';
-      const driveName = isYoutube ? video.name.replace(/\.youtube$/i, '.json') : video.name;
-      const driveMime = isYoutube ? 'application/json' : (video.type || 'application/octet-stream');
-      const metadata = {
-        name: driveName,
-        mimeType: driveMime,
-        parents: [driveFolderId],
-      };
-
-      const fileBody = await cloneBlobForNetwork(video.data, driveMime);
-      const form = new FormData();
-      form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-      form.append('file', fileBody);
-
-      const existingDriveId = String(video.driveId || '').trim();
-      const uploadUrl = existingDriveId
-        ? `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(existingDriveId)}?uploadType=multipart&fields=id,name,modifiedTime`
-        : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime';
-      const uploadMethod = existingDriveId ? 'PATCH' : 'POST';
-      const res = await fetch(uploadUrl, {
-        method: uploadMethod,
-        headers: { Authorization: `Bearer ${token}` },
-        body: form,
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error?.message || res.statusText);
-      }
-
-      const driveFile = await res.json();
-      await onSetDriveId(video.id, video.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
-      setStatus(uKey, 'success');
-      scheduleShareAclReconcile();
-    } catch (err) {
-      console.error('Upload failed:', err.message);
-      uploadTokenRef.current = null;
-      removeStoredAccessToken(credentials.clientId, OWNER_DRIVE_SCOPE);
-      setStatus(uKey, 'error');
-    }
-  };
-
-  const handleChannelUpload = async (ch) => {
-    const uKey = channelUploadKey(ch);
-    if (ch.driveId) {
-      setStatus(uKey, 'success');
-      return;
-    }
-    setStatus(uKey, 'uploading');
-    try {
-      const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
-      const { id: _id, driveId: _d, ...rest } = ch;
-      const payload = JSON.stringify({ _type: CHANNEL_JSON_MARKER, ...rest });
-      const blob = new Blob([payload], { type: 'application/json' });
-      const label = ch.name || ch.handle || ch.channelId;
-      const safeName = String(label).replace(/[/\\?%*:|"<>]/g, '-');
-      const driveName = `${safeName}.channel.json`;
-      const metadata = {
-        name: driveName,
-        mimeType: 'application/json',
-        parents: [driveFolderId],
-      };
-      const form = new FormData();
-      form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-      form.append('file', blob);
-
-      const res = await fetch(
-        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime',
-        { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form }
-      );
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error?.message || res.statusText);
-      }
-
-      const driveFile = await res.json();
-      await onSetDriveId(ch.id, 'channels', driveFile.id, { modifiedTime: driveFile.modifiedTime });
-      setStatus(uKey, 'success');
-      scheduleShareAclReconcile();
-    } catch (err) {
-      console.error('Channel upload failed:', err.message);
-      uploadTokenRef.current = null;
-      removeStoredAccessToken(credentials.clientId, OWNER_DRIVE_SCOPE);
-      setStatus(uKey, 'error');
-    }
-  };
-
   const handleConfirmClear = () => {
     if (window.confirm('Delete the local database and reinitialize? All locally stored content will be removed. This cannot be undone.')) {
       onClearLibrary();
@@ -625,10 +499,10 @@ export const Library = ({
 
   const handleSignOutGoogle = () => {
     const tokens = new Set();
-    if (uploadTokenRef.current) tokens.add(uploadTokenRef.current);
+    const implicit = peekDriveImplicitUploadToken();
+    if (implicit) tokens.add(implicit);
     for (const t of getAllStoredAccessTokens(credentials.clientId)) tokens.add(t);
-    uploadTokenRef.current = null;
-    lastScopeRef.current = '';
+    resetDriveImplicitUploadToken();
     clearAllStoredAccessTokens();
     invalidateDriveAccessTokenCache();
     onGoogleUserEmail?.(null);
@@ -688,7 +562,7 @@ export const Library = ({
     } catch (err) {
       console.error('Sync failed:', err);
       setSyncResult({ error: err.message });
-      uploadTokenRef.current = null;
+      resetDriveImplicitUploadToken();
       removeStoredAccessToken(credentials.clientId, OWNER_DRIVE_SCOPE);
     } finally {
       syncInFlightRef.current = false;
@@ -1176,9 +1050,7 @@ export const Library = ({
                   key: `desk-${d.id}`,
                   desk: d,
                   onSelect: onSelectDesk,
-                  onDelete: isEditor && onDeleteDesk ? (desk) => {
-                    if (window.confirm(`Remove desk "${desk.name}"?`)) onDeleteDesk(desk.id);
-                  } : undefined,
+                  onDelete: isEditor && onRequestDeleteDesk ? handleDeleteDeskRequest : undefined,
                   onRename: isEditor ? (desk, name) => renameItem(desk.id, 'desks', name) : undefined,
                   readOnly: !isEditor,
                 });
@@ -1550,12 +1422,18 @@ export const Library = ({
 
     pendingDelete &&
       React.createElement(DeleteContentModal, {
-        title: pendingDelete.kind === 'item' ? 'Remove item' : 'Remove channel',
+        title:
+          pendingDelete.kind === 'item'
+            ? 'Remove item'
+            : 'Remove channel',
         name:
           pendingDelete.kind === 'item'
             ? pendingDelete.item.name
             : pendingDelete.channel.name || pendingDelete.channel.handle || 'Channel',
-        hasDriveCopy: true,
+        hasDriveCopy:
+          pendingDelete.kind === 'item'
+            ? recordHasDriveCopy(pendingDelete.item)
+            : recordHasDriveCopy(pendingDelete.channel),
         canDeleteFromDrive: hasCredentials,
         onRemoveLocal: runPendingDeleteLocal,
         onRemoveFromDrive: runPendingDeleteWithDrive,

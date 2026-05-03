@@ -16,7 +16,7 @@ import { getDriveCredentials, hasGoogleApiKeyOrProxy } from './utils/driveCreden
 import { getDriveFolderId } from './utils/driveFolderStorage.js';
 import { DeleteContentModal } from './components/DeleteContentModal.js';
 import { getOwnerDriveAccessToken } from './utils/driveAccessToken.js';
-import { deleteDriveFilesForChannel } from './utils/deleteLibraryContentOnDrive.js';
+import { deleteDriveFilesForChannel, deleteDriveFilesForDesk, deleteDriveFilesForMergedItem } from './utils/deleteLibraryContentOnDrive.js';
 import { fetchUserConfig, resolveUserType } from './utils/userConfig.js';
 import { listAllUserEmails } from './utils/userConfig.js';
 import { clearAllStoredAccessTokens } from './utils/driveOAuthStorage.js';
@@ -71,6 +71,8 @@ const App = () => {
   /** Step 2 gate: Drive folder setup (MASTER/EDITOR only). True until folder ID is saved. */
   const [driveFolderReady, setDriveFolderReady] = useState(() => !!getDriveFolderId().trim());
   const [pendingChannelDelete, setPendingChannelDelete] = useState(null);
+  const [pendingDeskDelete, setPendingDeskDelete] = useState(null);
+  const [pendingItemDelete, setPendingItemDelete] = useState(null);
   const [isSystemSettingsOpen, setIsSystemSettingsOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState('');
@@ -161,6 +163,7 @@ const App = () => {
     if (!currentDesk) return;
     const updated = desks.find((d) => d.id === currentDesk.id);
     if (updated) setCurrentDesk(updated);
+    else setCurrentDesk(null);
   }, [desks]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When switching to desk mode, auto-select the most-recently-visited desk.
@@ -334,7 +337,57 @@ const App = () => {
     setPendingChannelDelete(channel);
   };
 
+  const handleRequestDeleteItem = (video) => {
+    if (!video || video.id == null) return;
+    if (!recordHasDriveCopy(video) || !hasDriveLibrarySetup) {
+      if (window.confirm(`Are you sure you want to delete "${video.name}"?`)) {
+        deleteItem(video.id, video.type);
+      }
+      return;
+    }
+    setPendingItemDelete(video);
+  };
+
+  const closeItemDeleteModal = () => setPendingItemDelete(null);
+
+  const runItemDeleteLocal = async () => {
+    if (!pendingItemDelete) return;
+    try {
+      await deleteItem(pendingItemDelete.id, pendingItemDelete.type);
+      closeItemDeleteModal();
+    } catch (e) {
+      console.error(e);
+      window.alert(e?.message || 'Could not remove item.');
+    }
+  };
+
+  const runItemDeleteWithDrive = async () => {
+    if (!pendingItemDelete) return;
+    try {
+      const token = await getOwnerDriveAccessToken();
+      await deleteDriveFilesForMergedItem(token, pendingItemDelete, getImagesForNote);
+      await deleteItem(pendingItemDelete.id, pendingItemDelete.type);
+      closeItemDeleteModal();
+    } catch (e) {
+      console.error(e);
+      window.alert(e?.message || 'Could not delete on Google Drive or remove locally.');
+    }
+  };
+
+  const handleRequestDeleteDesk = (desk) => {
+    if (!desk || desk.id == null) return;
+    const label = desk.name || 'Untitled Desk';
+    if (!recordHasDriveCopy(desk) || !hasDriveLibrarySetup) {
+      if (window.confirm(`Remove desk "${label}"?`)) {
+        deleteDesk(desk.id);
+      }
+      return;
+    }
+    setPendingDeskDelete(desk);
+  };
+
   const closeChannelDeleteModal = () => setPendingChannelDelete(null);
+  const closeDeskDeleteModal = () => setPendingDeskDelete(null);
 
   const runChannelDeleteLocal = async () => {
     if (!pendingChannelDelete) return;
@@ -356,6 +409,30 @@ const App = () => {
       await deleteChannel(pendingChannelDelete.id);
       closeChannelDeleteModal();
       handleBackToLibrary();
+    } catch (e) {
+      console.error(e);
+      window.alert(e?.message || 'Could not delete on Google Drive or remove locally.');
+    }
+  };
+
+  const runDeskDeleteLocal = async () => {
+    if (!pendingDeskDelete) return;
+    try {
+      await deleteDesk(pendingDeskDelete.id);
+      closeDeskDeleteModal();
+    } catch (e) {
+      console.error(e);
+      window.alert(e?.message || 'Could not remove desk.');
+    }
+  };
+
+  const runDeskDeleteWithDrive = async () => {
+    if (!pendingDeskDelete) return;
+    try {
+      const token = await getOwnerDriveAccessToken();
+      await deleteDriveFilesForDesk(token, pendingDeskDelete);
+      await deleteDesk(pendingDeskDelete.id);
+      closeDeskDeleteModal();
     } catch (e) {
       console.error(e);
       window.alert(e?.message || 'Could not delete on Google Drive or remove locally.');
@@ -488,7 +565,7 @@ const App = () => {
           onSelectChannel: handleSelectChannel,
           onSelectDesk: handleSelectDesk,
           onAddDesk: handleAddDesk,
-          onDeleteDesk: deleteDesk,
+          onRequestDeleteDesk: handleRequestDeleteDesk,
           onAddItem: addItem,
           onSetNoteCoverImage: setNoteCoverImage,
           onDeleteItem: deleteItem,
@@ -580,6 +657,9 @@ const App = () => {
               onOpenChannel: isEditor ? () => setIsChannelOpen(true) : undefined,
               onOpenFile: isEditor ? () => fileInputRef.current?.click() : undefined,
               onOpenUrl: isEditor ? () => setIsUrlOpen(true) : undefined,
+              onSetItemDriveId: isEditor ? setItemDriveId : undefined,
+              onRequestDeleteItem: isEditor ? handleRequestDeleteItem : undefined,
+              onRequestDeleteChannel: isEditor ? handleRequestDeleteChannel : undefined,
             })
           : React.createElement(
               'div',
@@ -645,6 +725,26 @@ const App = () => {
         onRemoveLocal: runChannelDeleteLocal,
         onRemoveFromDrive: runChannelDeleteWithDrive,
         onClose: closeChannelDeleteModal,
+      }),
+    pendingDeskDelete &&
+      React.createElement(DeleteContentModal, {
+        title: 'Remove desk',
+        name: pendingDeskDelete.name || 'Untitled Desk',
+        hasDriveCopy: recordHasDriveCopy(pendingDeskDelete),
+        canDeleteFromDrive: hasDriveLibrarySetup,
+        onRemoveLocal: runDeskDeleteLocal,
+        onRemoveFromDrive: runDeskDeleteWithDrive,
+        onClose: closeDeskDeleteModal,
+      }),
+    pendingItemDelete &&
+      React.createElement(DeleteContentModal, {
+        title: 'Remove item',
+        name: pendingItemDelete.name || 'Item',
+        hasDriveCopy: recordHasDriveCopy(pendingItemDelete),
+        canDeleteFromDrive: hasDriveLibrarySetup,
+        onRemoveLocal: runItemDeleteLocal,
+        onRemoveFromDrive: runItemDeleteWithDrive,
+        onClose: closeItemDeleteModal,
       })
   );
 };

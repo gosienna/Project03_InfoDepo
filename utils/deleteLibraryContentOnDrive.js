@@ -49,3 +49,11 @@ export async function deleteDriveFilesForMergedItem(accessToken, item, getImages
 export async function deleteDriveFilesForChannel(accessToken, channel) {
   await deleteDriveFile(accessToken, String(channel?.driveId || '').trim());
 }
+
+/**
+ * @param {string} accessToken
+ * @param {object} desk
+ */
+export async function deleteDriveFilesForDesk(accessToken, desk) {
+  await deleteDriveFile(accessToken, String(desk?.driveId || '').trim());
+}

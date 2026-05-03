@@ -4,6 +4,8 @@ import { DataTile } from './DataTile.js';
 import { DeskTile } from './DeskTile.js';
 import { AddContentDropdown } from './AddContentDropdown.js';
 import { normalizeTag } from '../utils/tagUtils.js';
+import { useDriveTileUpload, channelUploadKey } from '../hooks/useDriveTileUpload.js';
+import { libraryItemKey } from '../utils/libraryItemKey.js';
 import {
   itemEntryKey,
   channelEntryKey,
@@ -138,12 +140,26 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
   const editingRef = useRef(false);
   const current = desks.find((d) => d.id === currentDeskId);
 
+  const headerEditing = Boolean(
+    onRename && currentDeskId && editingId === currentDeskId && !open
+  );
+
   const startEdit = (e, d) => {
     e.preventDefault();
     e.stopPropagation();
     editingRef.current = true;
     setEditingId(d.id);
     setEditValue(d.name || '');
+  };
+
+  const startHeaderEdit = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!onRename || !currentDeskId) return;
+    editingRef.current = true;
+    setOpen(false);
+    setEditingId(currentDeskId);
+    setEditValue(current?.name || '');
   };
 
   const commitEdit = (id) => {
@@ -158,29 +174,110 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
     setEditingId(null);
   };
 
+  const titleStyle = {
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    fontSize: 20, fontWeight: 700, color: '#e5e7eb', letterSpacing: '-0.02em',
+    maxWidth: 'min(50vw, 420px)',
+  };
+
   return React.createElement(
     'div',
     { style: { position: 'relative' }, onClick: (e) => e.stopPropagation() },
-    React.createElement(
-      'button',
-      {
-        onClick: () => setOpen((v) => !v),
-        onBlur: () => setTimeout(() => { if (!editingRef.current) setOpen(false); }, 150),
-        style: {
-          background: 'none', border: 'none', borderRadius: 10,
-          padding: '4px 10px', fontSize: 20, fontWeight: 700, color: '#e5e7eb',
-          cursor: desks.length > 1 ? 'pointer' : 'default',
-          display: 'flex', alignItems: 'center', gap: 8,
-          letterSpacing: '-0.02em',
-        },
-      },
-      React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, current?.name || 'Desk'),
-      desks.length > 1 && React.createElement(
-        'svg',
-        { xmlns: 'http://www.w3.org/2000/svg', width: 14, height: 14, fill: 'none', viewBox: '0 0 24 24', stroke: '#6b7280', strokeWidth: 2.5, style: { flexShrink: 0 } },
-        React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M19 9l-7 7-7-7' })
-      )
-    ),
+    headerEditing
+      ? React.createElement(
+          'div',
+          {
+            style: {
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '4px 10px', borderRadius: 10,
+            },
+          },
+          React.createElement('input', {
+            autoFocus: true,
+            value: editValue,
+            onChange: (e) => setEditValue(e.target.value),
+            onKeyDown: (e) => {
+              if (e.key === 'Enter') { e.preventDefault(); commitEdit(currentDeskId); }
+              if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+            },
+            onBlur: () => commitEdit(currentDeskId),
+            style: {
+              minWidth: 160, maxWidth: 'min(50vw, 420px)',
+              background: '#111827', border: '1px solid #4f46e5',
+              borderRadius: 6, padding: '6px 10px', fontSize: 18, fontWeight: 700,
+              color: '#e5e7eb', outline: 'none',
+            },
+          }),
+          React.createElement(
+            'button',
+            {
+              type: 'button',
+              onMouseDown: (e) => { e.preventDefault(); commitEdit(currentDeskId); },
+              style: { background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#818cf8', flexShrink: 0 },
+              title: 'Save',
+            },
+            React.createElement(
+              'svg', { xmlns: 'http://www.w3.org/2000/svg', width: 16, height: 16, fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2.5 },
+              React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M5 13l4 4L19 7' })
+            )
+          ),
+          React.createElement(
+            'button',
+            {
+              type: 'button',
+              onMouseDown: (e) => { e.preventDefault(); cancelEdit(); },
+              style: { background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#6b7280', flexShrink: 0 },
+              title: 'Cancel',
+            },
+            React.createElement(
+              'svg', { xmlns: 'http://www.w3.org/2000/svg', width: 16, height: 16, fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2.5 },
+              React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M6 18L18 6M6 6l12 12' })
+            )
+          )
+        )
+      : React.createElement(
+          'div',
+          {
+            style: {
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '4px 10px', borderRadius: 10,
+            },
+          },
+          React.createElement(
+            'span',
+            {
+              onClick: () => { if (open) setOpen(false); },
+              onDoubleClick: startHeaderEdit,
+              title: onRename ? 'Double-click to rename' : undefined,
+              style: {
+                ...titleStyle,
+                cursor: onRename ? 'text' : 'default',
+                userSelect: onRename ? 'text' : 'none',
+              },
+            },
+            current?.name || 'Desk'
+          ),
+          desks.length > 1 && React.createElement(
+            'button',
+            {
+              type: 'button',
+              onClick: () => setOpen((v) => !v),
+              onBlur: () => setTimeout(() => { if (!editingRef.current) setOpen(false); }, 150),
+              style: {
+                background: 'none', border: 'none', borderRadius: 8,
+                padding: '4px 6px', cursor: 'pointer', flexShrink: 0,
+                display: 'flex', alignItems: 'center', color: '#6b7280',
+              },
+              'aria-expanded': open,
+              'aria-label': 'Switch desk',
+            },
+            React.createElement(
+              'svg',
+              { xmlns: 'http://www.w3.org/2000/svg', width: 14, height: 14, fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2.5 },
+              React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M19 9l-7 7-7-7' })
+            )
+          )
+        ),
     open && desks.length > 1 && React.createElement(
       'div',
       {
@@ -551,7 +648,15 @@ export const Desk = ({
   onOpenChannel,
   onOpenFile,
   onOpenUrl,
+  onSetItemDriveId,
+  onRequestDeleteItem,
+  onRequestDeleteChannel,
 }) => {
+  const { uploadStatuses, handleUpload, handleChannelUpload } = useDriveTileUpload({
+    onSetDriveId: onSetItemDriveId || (async () => {}),
+    scheduleShareAclReconcile: undefined,
+  });
+
   const viewportRef = useRef(null);
   const historyRef = useRef({ past: [], future: [] });
 
@@ -1497,6 +1602,9 @@ export const Desk = ({
                   item: entry,
                   onSelect: onSelectItem,
                   readOnly,
+                  onDelete: !readOnly && onRequestDeleteItem ? onRequestDeleteItem : undefined,
+                  onUpload: !readOnly && onSetItemDriveId ? handleUpload : undefined,
+                  uploadStatus: uploadStatuses[libraryItemKey(entry)] ?? null,
                   onSetTags: onSetTags ? (v, tags) => onSetTags(v, v.idbStore, tags) : undefined,
                   onSetSharedWith: onSetSharedWith ? (v, emails) => onSetSharedWith(v, v.idbStore, emails) : undefined,
                   canShare: typeof canShareRecord === 'function' ? canShareRecord(entry) : !readOnly,
@@ -1511,6 +1619,9 @@ export const Desk = ({
                   channel: entry,
                   onSelect: onSelectChannel,
                   readOnly,
+                  onDelete: !readOnly && onRequestDeleteChannel ? onRequestDeleteChannel : undefined,
+                  onUpload: !readOnly && onSetItemDriveId ? handleChannelUpload : undefined,
+                  uploadStatus: uploadStatuses[channelUploadKey(entry)] ?? null,
                   onSetTags: onSetTags ? (c, tags) => onSetTags(c, 'channels', tags) : undefined,
                   onSetSharedWith: onSetSharedWith ? (c, emails) => onSetSharedWith(c, 'channels', emails) : undefined,
                   canShare: typeof canShareRecord === 'function' ? canShareRecord(entry) : !readOnly,

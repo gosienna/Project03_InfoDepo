@@ -43,11 +43,23 @@ async function buildTextLayerDiv(page, viewportCss) {
   div.style.lineHeight = '1';
   div.style.zIndex = '5';
   const base = viewportCss.transform;
-  for (const item of textContent.items) {
+  const matMul = (m1, m2) => [
+    m1[0] * m2[0] + m1[2] * m2[1],
+    m1[1] * m2[0] + m1[3] * m2[1],
+    m1[0] * m2[2] + m1[2] * m2[3],
+    m1[1] * m2[2] + m1[3] * m2[3],
+    m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+    m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+  ];
+  const transformFn = (pdfjsLib.Util && typeof pdfjsLib.Util.transform === 'function')
+    ? pdfjsLib.Util.transform
+    : matMul;
+  const items = Array.isArray(textContent.items) ? textContent.items : [];
+  for (const item of items) {
     if (!('str' in item) || !item.str) continue;
     if (!Array.isArray(item.transform) || item.transform.length < 6) continue;
     const span = document.createElement('span');
-    const tx = pdfjsLib.Util.transform(base, item.transform);
+    const tx = transformFn(base, item.transform);
     const fontHeight = Math.hypot(tx[2], tx[3]) || 12;
     span.textContent = item.str;
     span.style.position = 'absolute';
@@ -1284,19 +1296,31 @@ export const PdfViewer = ({
     'div',
     { className: 'relative w-full h-full bg-gray-800 rounded-lg shadow-lg flex flex-col min-h-0' },
 
-    // Hidden top edge tab for display controls
+    // Top tab for display controls — visible pill that hangs from the top edge
     React.createElement('div', {
       ref: displayTabRef,
       style: {
         position: 'fixed',
         top: 70,
-        left: 0,
-        right: 0,
-        height: 18,
+        left: '50%',
+        transform: 'translateX(-50%)',
         zIndex: 9998,
-        cursor: 'default',
+        cursor: 'pointer',
+        background: displayPanelOpen ? 'rgba(75,85,99,0.97)' : 'rgba(55,65,81,0.88)',
+        borderRadius: '0 0 10px 10px',
+        padding: '3px 14px 6px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 5,
+        boxShadow: '0 3px 8px rgba(0,0,0,0.35)',
+        userSelect: 'none',
+        whiteSpace: 'nowrap',
+        WebkitTapHighlightColor: 'transparent',
       },
-    }),
+    },
+      React.createElement('span', { style: { fontSize: 13, color: '#d1d5db' } }, '⊞'),
+      React.createElement('span', { style: { fontSize: 11, color: '#9ca3af' } }, 'Display'),
+    ),
 
     // Horizontal display controls panel
     displayPanelOpen && React.createElement(
@@ -1433,14 +1457,38 @@ export const PdfViewer = ({
       className: 'flex-1 min-h-0 overflow-auto rounded-lg bg-gray-900 ' + (status === 'error' ? 'hidden' : ''),
     }),
 
-    // Tab strip — invisible hover zone on the left edge (native events)
+    // Tab strip — fixed visible handle on the left edge for annotation panel
     !readOnly && React.createElement('div', {
       ref: tabRef,
       style: {
-        position: 'absolute', left: 0, top: 0, bottom: 0, width: 16, zIndex: 30,
-        cursor: 'default',
+        position: 'fixed',
+        left: 0,
+        top: '50%',
+        transform: 'translateY(-50%)',
+        zIndex: 9997,
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        WebkitTapHighlightColor: 'transparent',
       },
-    }),
+    },
+      React.createElement('div', {
+        style: {
+          background: panelOpen ? 'rgba(75,85,99,0.97)' : 'rgba(55,65,81,0.88)',
+          borderRadius: '0 8px 8px 0',
+          padding: '16px 5px',
+          boxShadow: '3px 0 8px rgba(0,0,0,0.45)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          userSelect: 'none',
+        },
+      },
+        React.createElement('span', {
+          style: { fontSize: 15, color: '#d1d5db', lineHeight: 1 },
+        }, '✎'),
+      )
+    ),
 
     // Buttons panel — fixed, slides in from left edge on hover
     !readOnly && panelOpen && React.createElement(

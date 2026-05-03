@@ -764,7 +764,7 @@ export const DataTile = ({
 
   const handleUpload = (e) => {
     e.stopPropagation();
-    onUpload(video);
+    if (onUpload) onUpload(video);
   };
 
   const handlePickNoteCover = (e) => {
@@ -884,8 +884,9 @@ export const DataTile = ({
       React.createElement(
         'div',
         { className: 'absolute bottom-2 right-2 flex items-center gap-1.5' },
-        !readOnly && React.createElement(UploadButton, { status: uploadStatus, onClick: handleUpload }),
+        !readOnly && onUpload && React.createElement(UploadButton, { status: uploadStatus, onClick: handleUpload }),
         !readOnly &&
+          onDelete &&
           React.createElement(
             'button',
             {
