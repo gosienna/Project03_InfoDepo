@@ -346,10 +346,13 @@ export const PdfViewer = ({
     }
   }, []);
 
-  // PDF rendering effect
+  // PDF rendering effect — lazy canvas rendering via IntersectionObserver.
+  // Only MAX_RENDERED_PAGES canvases exist at a time; others show as sized placeholders.
+  // This prevents memory crashes on iPad when opening large PDFs.
   useEffect(() => {
     const runId = ++runIdRef.current;
     let cancelled = false;
+    let lazyObserver = null;
 
     setTextDraft(null);
     setStrokeDraft(null);
@@ -404,13 +407,34 @@ export const PdfViewer = ({
         const containerWidth = await waitForWidth();
         if (cancelled || runId !== runIdRef.current) { cleanupPdf(); return; }
 
+        const isTwoPageActive = twoPageMode !== 'off';
+        const baseWidth = mount.clientWidth || containerWidth;
+        const effectiveWidth = isTwoPageActive ? Math.ceil(baseWidth / 2) : baseWidth;
+
+        // --- Measure page 1 to size all placeholder wrappers ---
+        // Most PDFs have uniform page sizes; placeholders give the scroll container
+        // the correct total height so scroll-position restore works before pages render.
+        const page1 = await pdfDoc.getPage(1);
+        if (cancelled || runId !== runIdRef.current) { cleanupPdf(); return; }
+        const base1 = page1.getViewport({ scale: 1, rotation: rotationDeg });
+        const padding = 16;
+        const cssW1 = Math.max(100, effectiveWidth - padding * 2);
+        const userScale1 = cssW1 / base1.width;
+        const outputScale = window.devicePixelRatio || 1;
+        const vp1 = page1.getViewport({ scale: userScale1 * outputScale, rotation: rotationDeg });
+        const defaultCssW = vp1.width / outputScale;
+        const defaultCssH = vp1.height / outputScale;
+        page1.cleanup();
+
+        if (cancelled || runId !== runIdRef.current) { cleanupPdf(); return; }
+
+        // --- Build DOM: outer flex container + one placeholder wrapper per page ---
         const wrap = document.createElement('div');
         wrap.className = 'flex flex-col items-center gap-4 py-4 px-2 w-full min-h-full';
         mount.appendChild(wrap);
 
         const newWrappers = [];
         let currentRow = null;
-        const isTwoPageActive = twoPageMode !== 'off';
 
         const createRow = (withLeftSpacer = false) => {
           const row = document.createElement('div');
@@ -431,57 +455,122 @@ export const PdfViewer = ({
           return row;
         };
 
-        for (let i = 1; i <= numPages; i++) {
-          if (cancelled || runId !== runIdRef.current) break;
-
-          const page = await pdfDoc.getPage(i);
-          const w = mount.clientWidth || containerWidth;
-          const effectiveWidth = isTwoPageActive ? Math.ceil(w / 2) : w;
-          const { canvas, viewportCss } = await renderPageToCanvas(page, effectiveWidth, rotationDeg);
-
-          // position:relative wrapper so the SVG overlay (position:absolute) stays on top
+        for (let i = 0; i < numPages; i++) {
           const pageWrapper = document.createElement('div');
           pageWrapper.style.position = 'relative';
           pageWrapper.style.display = 'inline-block';
-          pageWrapper.appendChild(canvas);
-          try {
-            const textLayer = await buildTextLayerDiv(page, viewportCss);
-            pageWrapper.appendChild(textLayer);
-          } catch (tlErr) {
-            console.warn('PDF text layer failed:', tlErr);
-          }
+          pageWrapper.style.width = `${defaultCssW}px`;
+          pageWrapper.style.height = `${defaultCssH}px`;
+          pageWrapper.style.background = '#374151';
+          pageWrapper.style.borderRadius = '4px';
+          pageWrapper.dataset.pdfjsPage = String(i);
+
+          const pageNum = i + 1;
           if (isTwoPageActive) {
             if (twoPageMode === 'odd-left') {
-              if ((i - 1) % 2 === 0) {
-                currentRow = createRow(false);
-              }
+              if ((pageNum - 1) % 2 === 0) currentRow = createRow(false);
             } else if (twoPageMode === 'even-left') {
-              if (i === 1) {
-                currentRow = createRow(true);
-              } else if (i % 2 === 0) {
-                currentRow = createRow(false);
-              }
+              if (pageNum === 1) currentRow = createRow(true);
+              else if (pageNum % 2 === 0) currentRow = createRow(false);
             }
-            if (currentRow) {
-              currentRow.appendChild(pageWrapper);
-            }
+            if (currentRow) currentRow.appendChild(pageWrapper);
           } else {
             wrap.appendChild(pageWrapper);
           }
           newWrappers.push(pageWrapper);
-          // Publish wrappers incrementally so page tracking/restore can work
-          // before the full document finishes rendering.
-          setPageWrappers((prev) => [...prev, pageWrapper]);
-
-          if (i === 1) setStatus('ready');
-
-          await new Promise((r) => requestAnimationFrame(r));
         }
 
-        if (cancelled || runId !== runIdRef.current) { clearDom(); cleanupPdf(); return; }
-
+        // All wrappers in DOM with correct sizes — scroll restore can work immediately.
         setPageWrappers([...newWrappers]);
         setStatus('ready');
+
+        // --- Lazy rendering: render canvas only when page enters viewport ---
+        const renderedPages = new Set();   // page indices with a live canvas
+        const renderingPages = new Set();  // currently being rendered (async)
+        const visiblePages = new Set();    // currently intersecting viewport
+        const lastSeenAt = new Map();      // pageIndex → timestamp (for LRU eviction)
+        const MAX_RENDERED_PAGES = 8;
+        const RENDER_BUFFER = 2;           // pages above/below viewport to pre-render
+
+        const evictFarPages = () => {
+          if (renderedPages.size <= MAX_RENDERED_PAGES) return;
+          // Evict least-recently-seen non-visible pages first
+          const candidates = [...renderedPages]
+            .filter(pi => !visiblePages.has(pi))
+            .sort((a, b) => (lastSeenAt.get(a) || 0) - (lastSeenAt.get(b) || 0));
+          for (const pi of candidates.slice(0, renderedPages.size - MAX_RENDERED_PAGES)) {
+            const wrapper = newWrappers[pi];
+            const c = wrapper.querySelector('canvas');
+            if (c) wrapper.removeChild(c);
+            const t = wrapper.querySelector('.pdf-text-layer');
+            if (t) wrapper.removeChild(t);
+            renderedPages.delete(pi);
+          }
+        };
+
+        const renderPageAtIndex = async (pageIndex) => {
+          if (cancelled || runId !== runIdRef.current) return;
+          if (renderedPages.has(pageIndex) || renderingPages.has(pageIndex)) return;
+          renderingPages.add(pageIndex);
+          const wrapper = newWrappers[pageIndex];
+          try {
+            const page = await pdfDoc.getPage(pageIndex + 1);
+            if (cancelled || runId !== runIdRef.current) { renderingPages.delete(pageIndex); return; }
+            const { canvas, viewportCss } = await renderPageToCanvas(page, effectiveWidth, rotationDeg);
+            if (cancelled || runId !== runIdRef.current) { renderingPages.delete(pageIndex); return; }
+            // Update wrapper size to match actual canvas (handles pages that differ from page 1)
+            wrapper.style.width = canvas.style.width;
+            wrapper.style.height = canvas.style.height;
+            // Remove stale canvas/text layer; leave any SVG annotation portals untouched
+            const oldCanvas = wrapper.querySelector('canvas');
+            if (oldCanvas) wrapper.removeChild(oldCanvas);
+            const oldText = wrapper.querySelector('.pdf-text-layer');
+            if (oldText) wrapper.removeChild(oldText);
+            // Insert before existing children (SVG portals) so z-index layering is correct
+            wrapper.insertBefore(canvas, wrapper.firstChild);
+            try {
+              const textLayer = await buildTextLayerDiv(page, viewportCss);
+              wrapper.insertBefore(textLayer, canvas.nextSibling);
+            } catch (tlErr) {
+              console.warn('PDF text layer failed:', tlErr);
+            }
+            renderedPages.add(pageIndex);
+            evictFarPages();
+          } catch (err) {
+            if (!isExpectedPdfCancellation(err) && !cancelled) {
+              console.warn('Page render failed:', pageIndex + 1, err);
+            }
+          } finally {
+            renderingPages.delete(pageIndex);
+          }
+        };
+
+        // Determine scroll mode now that all wrappers are in DOM and sized
+        const isWindowScroll = !(mount.scrollHeight > mount.clientHeight + 2);
+        useWindowScrollRef.current = isWindowScroll;
+
+        lazyObserver = new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            const pi = Number(entry.target.dataset.pdfjsPage);
+            if (isNaN(pi)) continue;
+            if (entry.isIntersecting) {
+              visiblePages.add(pi);
+              lastSeenAt.set(pi, Date.now());
+              // Render this page and a buffer of pages around it
+              const from = Math.max(0, pi - RENDER_BUFFER);
+              const to = Math.min(numPages - 1, pi + RENDER_BUFFER);
+              for (let b = from; b <= to; b++) renderPageAtIndex(b);
+            } else {
+              visiblePages.delete(pi);
+            }
+          }
+        }, {
+          root: isWindowScroll ? null : mount,
+          rootMargin: '400px 0px 400px 0px',
+        });
+
+        for (const wrapper of newWrappers) lazyObserver.observe(wrapper);
+
       } catch (err) {
         if (isExpectedPdfCancellation(err) || cancelled || runId !== runIdRef.current) {
           cleanupPdf();
@@ -498,6 +587,7 @@ export const PdfViewer = ({
 
     return () => {
       cancelled = true;
+      if (lazyObserver) { lazyObserver.disconnect(); lazyObserver = null; }
       clearDom();
       if (pdfDocRef.current) { pdfDocRef.current.destroy().catch(() => {}); pdfDocRef.current = null; }
       if (loadingTaskRef.current) { loadingTaskRef.current.destroy(); loadingTaskRef.current = null; }
