@@ -126,6 +126,7 @@ export const Reader = ({
           onSavePdfAnnotations: putPdfAnnotationsForItem,
           storeName: video.idbStore,
           readOnly,
+          topOffset: 70,
         });
       case 'txt':
         return React.createElement(TxtViewer, {

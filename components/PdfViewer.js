@@ -106,6 +106,7 @@ export const PdfViewer = ({
   onSavePdfAnnotations,
   storeName,
   readOnly,
+  topOffset = 0,
 }) => {
   const containerRef = useRef(null);
   const loadingTaskRef = useRef(null);
@@ -158,6 +159,14 @@ export const PdfViewer = ({
   const [lineDraft, setLineDraft] = useState(null); // { pageIndex, startX, startY, curX, curY }
   const lineDraftRef = useRef(null);
   useEffect(() => { lineDraftRef.current = lineDraft; }, [lineDraft]);
+  // Touch support: track pointer-down client position for tap-to-remove detection,
+  // and a flag so an annotation tap-remove can prevent the SVG-level handler from
+  // also treating the pointer-up as a new draw/highlight gesture.
+  const pointerDownClientRef = useRef(null);
+  const consumedPointerUpRef = useRef(false);
+  // Stores the pointerId of the primary (first) touch so it can be released from
+  // pointer capture when a second finger lands and we hand off to native scroll.
+  const primaryPointerIdRef = useRef(null);
   const [textColor, setTextColor] = useState('black');
   const [textFontSize, setTextFontSize] = useState(14);
 
@@ -183,6 +192,25 @@ export const PdfViewer = ({
       lineDraftRef.current = null;
     }
   }, [tool]);
+
+  // Single-finger scroll prevention for touch screens.
+  // Attached once via a non-passive listener (required to call preventDefault).
+  // Uses toolRef so it always sees the current tool without re-subscribing.
+  // Two-finger touches are NOT blocked — the browser handles them as native scroll.
+  useEffect(() => {
+    const mount = containerRef.current;
+    if (!mount) return;
+    const blockSingleFingerScroll = (e) => {
+      if (toolRef.current === 'none') return;
+      if (e.touches.length === 1) e.preventDefault();
+    };
+    mount.addEventListener('touchstart', blockSingleFingerScroll, { passive: false });
+    mount.addEventListener('touchmove', blockSingleFingerScroll, { passive: false });
+    return () => {
+      mount.removeEventListener('touchstart', blockSingleFingerScroll);
+      mount.removeEventListener('touchmove', blockSingleFingerScroll);
+    };
+  }, []); // empty — reads toolRef so no re-subscription needed
 
   const [saving, setSaving] = useState(false);
   const [autoSaveMsg, setAutoSaveMsg] = useState('');
@@ -933,7 +961,20 @@ export const PdfViewer = ({
   function handlePointerDown(e, pageIndex) {
     if (toolRef.current === 'none' || readOnly) return;
     if (typeof e.button === 'number' && e.button !== 0) return;
+    if (e.isPrimary === false) {
+      // Second finger landed — cancel any in-progress drawing gesture so the browser
+      // can take over the two touches as a native scroll.
+      if (primaryPointerIdRef.current != null) {
+        try { e.currentTarget?.releasePointerCapture(primaryPointerIdRef.current); } catch (_) {}
+        primaryPointerIdRef.current = null;
+      }
+      handleMouseLeave(); // clears stroke / line / drag draft state
+      return;
+    }
+    primaryPointerIdRef.current = e.pointerId;
     e.preventDefault();
+    pointerDownClientRef.current = { x: e.clientX, y: e.clientY };
+    consumedPointerUpRef.current = false;
     const { x, y } = getSvgCoords(e, e.currentTarget);
     if (toolRef.current === 'text') {
       setTextDraft({ pageIndex, x, y, text: '' });
@@ -969,6 +1010,7 @@ export const PdfViewer = ({
   }
 
   function handlePointerMove(e, pageIndex) {
+    if (e.isPrimary === false) return;
     const { x, y } = getSvgCoords(e, e.currentTarget);
     if (toolRef.current === 'draw' && strokeDraftRef.current && strokeDraftRef.current.pageIndex === pageIndex) {
       const prev = strokeDraftRef.current;
@@ -993,6 +1035,9 @@ export const PdfViewer = ({
   }
 
   function handlePointerUp(e, pageIndex) {
+    if (e.isPrimary === false) return;
+    // An annotation element's onPointerUp already handled this event (tap-to-remove).
+    if (consumedPointerUpRef.current) { consumedPointerUpRef.current = false; return; }
     if (toolRef.current === 'draw') {
       const draft = strokeDraftRef.current;
       if (draft && draft.pageIndex === pageIndex && draft.points.length > 1) {
@@ -1058,6 +1103,25 @@ export const PdfViewer = ({
     setAnnotations((prev) => prev.filter((_, i) => i !== globalIndex));
   }
 
+  // Returns event handlers for annotation elements that support both mouse click
+  // (desktop) and touch tap (iOS — onClick is suppressed by e.preventDefault on
+  // pointerdown, so we use onPointerUp with a movement-distance check instead).
+  function annRemoveHandlers(globalIndex) {
+    if (readOnly) return {};
+    return {
+      onClick: (e) => { e.stopPropagation(); removeAnnotation(globalIndex); },
+      onPointerUp: (e) => {
+        if (e.pointerType === 'mouse') return; // onClick already handles mouse
+        const start = pointerDownClientRef.current;
+        if (!start) return;
+        if (Math.abs(e.clientX - start.x) < 10 && Math.abs(e.clientY - start.y) < 10) {
+          consumedPointerUpRef.current = true; // prevent SVG-level handler from also firing
+          removeAnnotation(globalIndex);
+        }
+      },
+    };
+  }
+
   function commitTextDraft() {
     if (!textDraft) return;
     const text = String(textDraft.text || '').trim();
@@ -1114,7 +1178,7 @@ export const PdfViewer = ({
             zIndex: 10,
             cursor: readOnly ? 'default' : (tool !== 'none' ? 'crosshair' : 'default'),
             pointerEvents: svgPointerThrough ? 'none' : 'auto',
-            touchAction: !readOnly && tool !== 'none' ? 'none' : 'auto',
+            touchAction: !readOnly && tool !== 'none' ? 'pan-y' : 'auto',
           },
           ...(readOnly
             ? {}
@@ -1144,7 +1208,7 @@ export const PdfViewer = ({
                   userSelect: 'none',
                   pointerEvents: readOnly ? 'none' : 'auto',
                 },
-                ...(readOnly ? {} : { onClick: (e) => { e.stopPropagation(); removeAnnotation(i); } }),
+                ...annRemoveHandlers(i),
               },
               lines.map((line, idx) => React.createElement('tspan', {
                 key: `${i}-${idx}`,
@@ -1163,7 +1227,7 @@ export const PdfViewer = ({
               stroke: 'rgba(220, 38, 38, 0.95)',
               strokeWidth: 2,
               style: { cursor: readOnly ? 'default' : 'pointer', pointerEvents: readOnly ? 'none' : 'auto' },
-              ...(readOnly ? {} : { onClick: (e) => { e.stopPropagation(); removeAnnotation(i); } }),
+              ...annRemoveHandlers(i),
             });
           }
           if (ann.type === 'draw') {
@@ -1178,7 +1242,7 @@ export const PdfViewer = ({
               strokeLinecap: 'round',
               strokeLinejoin: 'round',
               style: { cursor: readOnly ? 'default' : 'pointer', pointerEvents: readOnly ? 'none' : 'auto' },
-              ...(readOnly ? {} : { onClick: (e) => { e.stopPropagation(); removeAnnotation(i); } }),
+              ...annRemoveHandlers(i),
             });
           }
           return React.createElement('rect', {
@@ -1191,7 +1255,7 @@ export const PdfViewer = ({
             stroke: 'rgba(200, 160, 0, 0.7)',
             strokeWidth: 1,
             style: { cursor: readOnly ? 'default' : 'pointer', pointerEvents: readOnly ? 'none' : 'auto' },
-            ...(readOnly ? {} : { onClick: (e) => { e.stopPropagation(); removeAnnotation(i); } }),
+            ...annRemoveHandlers(i),
           });
         }),
         dragRect &&
@@ -1392,10 +1456,11 @@ export const PdfViewer = ({
   function panelBtn(label, onClick, bg, color, disabled = false) {
     return React.createElement('button', {
       style: {
-        padding: '5px 10px', borderRadius: 6, fontSize: 13, fontWeight: 500,
+        padding: '8px 12px', borderRadius: 6, fontSize: 13, fontWeight: 500,
         cursor: disabled ? 'not-allowed' : 'pointer', border: 'none',
         background: bg, color, textAlign: 'left', whiteSpace: 'nowrap',
-        opacity: disabled ? 0.6 : 1, width: '100%',
+        opacity: disabled ? 0.6 : 1, width: '100%', minHeight: 40,
+        WebkitTapHighlightColor: 'transparent',
       },
       disabled,
       onClick,
@@ -1411,7 +1476,7 @@ export const PdfViewer = ({
       ref: displayTabRef,
       style: {
         position: 'fixed',
-        top: 70,
+        top: topOffset,
         left: '50%',
         transform: 'translateX(-50%)',
         zIndex: 9998,
@@ -1439,7 +1504,7 @@ export const PdfViewer = ({
         ref: displayPanelRef,
         style: {
           position: 'fixed',
-          top: 88,
+          top: topOffset + 18,
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 9999,
