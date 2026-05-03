@@ -423,19 +423,24 @@ const InlineAddSearch = ({ items, channels, desks, currentDeskId, currentLayout,
       const key = itemEntryKey(item);
       if (inLayout.has(key)) continue;
       const label = (item.name || '').replace(/\.youtube$/i, '');
-      rows.push({ key, label, sub: item.idbStore, tags: item.tags || [] });
+      rows.push({ key, label, sub: item.idbStore, tags: item.tags || [], lastVisitedAt: item.lastVisitedAt });
     }
     for (const ch of channels) {
       const key = channelEntryKey(ch);
       if (inLayout.has(key)) continue;
-      rows.push({ key, label: ch.name || ch.handle || '', sub: 'channel', tags: ch.tags || [] });
+      rows.push({ key, label: ch.name || ch.handle || '', sub: 'channel', tags: ch.tags || [], lastVisitedAt: ch.lastVisitedAt });
     }
     for (const d of (desks || [])) {
       if (d.id === currentDeskId) continue;
       const key = deskEntryKey(d);
       if (inLayout.has(key)) continue;
-      rows.push({ key, label: d.name || 'Untitled Desk', sub: 'desk', tags: d.tags || [] });
+      rows.push({ key, label: d.name || 'Untitled Desk', sub: 'desk', tags: d.tags || [], lastVisitedAt: d.lastVisitedAt });
     }
+    rows.sort((a, b) => {
+      const ta = a.lastVisitedAt ? new Date(a.lastVisitedAt).getTime() : 0;
+      const tb = b.lastVisitedAt ? new Date(b.lastVisitedAt).getTime() : 0;
+      return tb - ta;
+    });
     return rows;
   }, [items, channels, desks, currentDeskId, currentLayout]);
 
@@ -453,8 +458,7 @@ const InlineAddSearch = ({ items, channels, desks, currentDeskId, currentLayout,
     return allRows
       .filter((r) => filter === 'all' || r.sub === filter)
       .filter((r) => !q || r.label.toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)))
-      .filter((r) => tagFilters.every((t) => r.tags.some((rt) => rt.toLowerCase() === t)))
-      .slice(0, 12);
+      .filter((r) => tagFilters.every((t) => r.tags.some((rt) => rt.toLowerCase() === t)));
   }, [allRows, filter, q, tagFilters]);
 
   const visibleTabs = FILTER_TABS.filter((t) => t.key === 'all' || activeSubs.has(t.key));
