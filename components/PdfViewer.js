@@ -193,24 +193,61 @@ export const PdfViewer = ({
     }
   }, [tool]);
 
-  // Single-finger scroll prevention for touch screens.
-  // Attached once via a non-passive listener (required to call preventDefault).
-  // Uses toolRef so it always sees the current tool without re-subscribing.
-  // Two-finger touches are NOT blocked — the browser handles them as native scroll.
+  // When a tool is active, set touch-action:none on the scroll container so iOS
+  // does not pre-commit to scrolling and events remain cancelable (e.cancelable===true).
+  // With touch-action:pan-y the browser ignores e.preventDefault() for touchmove.
   useEffect(() => {
     const mount = containerRef.current;
     if (!mount) return;
-    const blockSingleFingerScroll = (e) => {
+    mount.style.touchAction = tool !== 'none' ? 'none' : '';
+    return () => { if (mount) mount.style.touchAction = ''; };
+  }, [tool]);
+
+  // Touch scroll control — attached once, reads toolRef for current value.
+  // Single finger + tool active  → e.preventDefault() blocks scroll (cancelable now
+  //   because touch-action:none is set on the container by the effect above).
+  // Two fingers + tool active    → manual JS scroll (native scroll is disabled by
+  //   touch-action:none, so we drive mount.scrollTop directly).
+  // Interactive elements (buttons, textarea, select) are always let through.
+  useEffect(() => {
+    const mount = containerRef.current;
+    if (!mount) return;
+    const INTERACTIVE = new Set(['button', 'input', 'textarea', 'select', 'label', 'a']);
+    let lastTwoFingerY = null;
+
+    const onTouchStart = (e) => {
       if (toolRef.current === 'none') return;
-      if (e.touches.length === 1) e.preventDefault();
+      if (e.touches.length >= 2) {
+        lastTwoFingerY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        e.preventDefault();
+      } else if (!INTERACTIVE.has(e.target?.tagName?.toLowerCase())) {
+        e.preventDefault();
+      }
     };
-    mount.addEventListener('touchstart', blockSingleFingerScroll, { passive: false });
-    mount.addEventListener('touchmove', blockSingleFingerScroll, { passive: false });
+
+    const onTouchMove = (e) => {
+      if (toolRef.current === 'none') return;
+      if (e.touches.length >= 2) {
+        e.preventDefault();
+        const currentY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        if (lastTwoFingerY !== null) mount.scrollTop += lastTwoFingerY - currentY;
+        lastTwoFingerY = currentY;
+      } else if (!INTERACTIVE.has(e.target?.tagName?.toLowerCase())) {
+        e.preventDefault();
+      }
+    };
+
+    const onTouchEnd = (e) => { if (e.touches.length < 2) lastTwoFingerY = null; };
+
+    mount.addEventListener('touchstart', onTouchStart, { passive: false });
+    mount.addEventListener('touchmove', onTouchMove, { passive: false });
+    mount.addEventListener('touchend', onTouchEnd, { passive: true });
     return () => {
-      mount.removeEventListener('touchstart', blockSingleFingerScroll);
-      mount.removeEventListener('touchmove', blockSingleFingerScroll);
+      mount.removeEventListener('touchstart', onTouchStart);
+      mount.removeEventListener('touchmove', onTouchMove);
+      mount.removeEventListener('touchend', onTouchEnd);
     };
-  }, []); // empty — reads toolRef so no re-subscription needed
+  }, []); // empty — reads toolRef (ref, always current) so no re-subscription needed
 
   const [saving, setSaving] = useState(false);
   const [autoSaveMsg, setAutoSaveMsg] = useState('');
@@ -267,19 +304,30 @@ export const PdfViewer = ({
       if (panelPinnedRef.current) return;
       scheduleClose();
     };
-    const unpinPanel = () => {
+    // Stop touchstart from bubbling to the document outside-close listener so that
+    // touching a button inside the panel doesn't immediately close it.
+    // NOTE: touchend is intentionally NOT used to close the panel on touch devices.
+    // Previously touchend fired unpinPanel() which unmounted the panel before the
+    // button's click event could fire — making all tool buttons non-functional on iPad.
+    const stopBubble = (e) => e.stopPropagation();
+
+    // Close the panel when the user touches anywhere outside the tab or panel.
+    const closeOnOutsideTouch = (e) => {
+      const tab = tabRef.current;
+      if (tab?.contains(e.target) || panel.contains(e.target)) return;
       panelPinnedRef.current = false;
       setPanelOpen(false);
     };
+
     panel.addEventListener('mouseenter', open);
     panel.addEventListener('mouseleave', close);
-    panel.addEventListener('touchstart', open, { passive: true });
-    panel.addEventListener('touchend', unpinPanel, { passive: true });
+    panel.addEventListener('touchstart', stopBubble, { passive: true });
+    document.addEventListener('touchstart', closeOnOutsideTouch, { passive: true });
     return () => {
       panel.removeEventListener('mouseenter', open);
       panel.removeEventListener('mouseleave', close);
-      panel.removeEventListener('touchstart', open);
-      panel.removeEventListener('touchend', unpinPanel);
+      panel.removeEventListener('touchstart', stopBubble);
+      document.removeEventListener('touchstart', closeOnOutsideTouch);
     };
   }, [panelOpen]); // re-register when panel mounts/unmounts
   const autoSaveMsgTimerRef = useRef(null);
@@ -1178,7 +1226,7 @@ export const PdfViewer = ({
             zIndex: 10,
             cursor: readOnly ? 'default' : (tool !== 'none' ? 'crosshair' : 'default'),
             pointerEvents: svgPointerThrough ? 'none' : 'auto',
-            touchAction: !readOnly && tool !== 'none' ? 'pan-y' : 'auto',
+            touchAction: !readOnly && tool !== 'none' ? 'none' : 'auto',
           },
           ...(readOnly
             ? {}
