@@ -83,6 +83,7 @@ export default defineConfig(({ mode }) => {
           input: {
             main: path.resolve(__dirname, 'index.html'),
             reader: path.resolve(__dirname, 'reader.html'),
+            pdfReader: path.resolve(__dirname, 'pdf-reader.html'),
           },
         },
       },

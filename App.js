@@ -240,6 +240,13 @@ const App = () => {
       window.open(`/reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
       return;
     }
+    // PDFs open in a dedicated tab (pdf-reader.html) to avoid blob: URL access
+    // errors on iOS/iPadOS Safari when the viewer is embedded in the main app.
+    const isPdf = ext === 'pdf' || mime === 'application/pdf';
+    if (isPdf && video.id != null) {
+      window.open(`/pdf-reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+      return;
+    }
     setCurrentVideo(video);
     setView('reader');
   };

@@ -115,6 +115,10 @@ export const PdfViewer = ({
   const runIdRef = useRef(0);
   const didRestoreScrollRef = useRef(false);
   const lastSavedPositionKeyRef = useRef(null);
+  // Tracks the page to restore when twoPageMode/rotation triggers a re-render
+  // (distinct from initialReadingPosition which is for cross-session restore).
+  // Set directly in button onClick handlers before any state change fires.
+  const pendingRestorePageRef = useRef(null);
   const saveScrollDebounceRef = useRef(null);
   const savePageDebounceRef = useRef(null);
   const useWindowScrollRef = useRef(false);
@@ -251,6 +255,8 @@ export const PdfViewer = ({
     };
   }, [panelOpen]); // re-register when panel mounts/unmounts
   const autoSaveMsgTimerRef = useRef(null);
+  const [restoreMsg, setRestoreMsg] = useState('');
+  const restoreMsgTimerRef = useRef(null);
   const [rotationDeg, setRotationDeg] = useState(0);
   const [twoPageMode, setTwoPageMode] = useState('off'); // 'off' | 'even-left' | 'odd-left'
   const [displayPanelOpen, setDisplayPanelOpen] = useState(false);
@@ -510,19 +516,31 @@ export const PdfViewer = ({
     const mount = containerRef.current;
     if (!mount) return;
     useWindowScrollRef.current = !(mount.scrollHeight > mount.clientHeight + 2);
-    const savedPage = Number(initialReadingPosition?.pdfPage);
+    // pendingRestorePageRef is set when a display-mode change (twoPageMode/rotation)
+    // triggers a re-render — use it to stay on the same page, not initialReadingPosition.
+    // Read but do NOT clear yet; only clear when we actually perform the jump so the
+    // value survives across multiple effect firings while pageWrappers is still building.
+    const pendingPage = pendingRestorePageRef.current;
+    const savedPage = pendingPage ?? Number(initialReadingPosition?.pdfPage);
     if (Number.isInteger(savedPage) && savedPage > 0) {
       if (!pageWrappers.length || savedPage > pageWrappers.length) {
-        // Wait until page wrappers are available before attempting restore.
+        // Target page not rendered yet — keep pendingRestorePageRef for the next firing.
         return;
       }
       const wrapper = pageWrappers[savedPage - 1];
       if (wrapper) {
+        if (pendingPage) pendingRestorePageRef.current = null; // consume only on restore
         jumpToWrapper(wrapper, mount);
         requestAnimationFrame(() => {
           jumpToWrapper(wrapper, mount);
           didRestoreScrollRef.current = true;
         });
+        // Only show the session-restore toast, not for display-mode changes.
+        if (!pendingPage) {
+          if (restoreMsgTimerRef.current) clearTimeout(restoreMsgTimerRef.current);
+          setRestoreMsg(`Resuming from page ${savedPage}`);
+          restoreMsgTimerRef.current = setTimeout(() => setRestoreMsg(''), 2500);
+        }
         return;
       }
     }
@@ -632,8 +650,10 @@ export const PdfViewer = ({
     const onScroll = () => {
       lastUserScrollAtRef.current = Date.now();
       // If user actively scrolls before our restore flow finishes, treat that as
-      // explicit navigation and allow position saves.
-      if (!didRestoreScrollRef.current) {
+      // explicit navigation and allow position saves. But don't mark restore
+      // complete when a display-mode change is pending — clearDom() causes a
+      // synthetic scroll-to-0 that would otherwise race with the pending restore.
+      if (!didRestoreScrollRef.current && !pendingRestorePageRef.current) {
         didRestoreScrollRef.current = true;
       }
       const livePage = getCurrentPage();
@@ -1358,7 +1378,11 @@ export const PdfViewer = ({
             cursor: 'pointer',
             whiteSpace: 'nowrap',
           },
-          onClick: () => setRotationDeg((deg) => normalizeRotationDeg(deg - 90)),
+          onClick: () => {
+            pendingRestorePageRef.current = lastKnownPageRef.current || 1;
+            didRestoreScrollRef.current = false;
+            setRotationDeg((deg) => normalizeRotationDeg(deg - 90));
+          },
         },
         'Rotate -90°'
       ),
@@ -1376,7 +1400,11 @@ export const PdfViewer = ({
             cursor: 'pointer',
             whiteSpace: 'nowrap',
           },
-          onClick: () => setRotationDeg((deg) => normalizeRotationDeg(deg + 90)),
+          onClick: () => {
+            pendingRestorePageRef.current = lastKnownPageRef.current || 1;
+            didRestoreScrollRef.current = false;
+            setRotationDeg((deg) => normalizeRotationDeg(deg + 90));
+          },
         },
         'Rotate +90°'
       ),
@@ -1394,11 +1422,15 @@ export const PdfViewer = ({
             cursor: 'pointer',
             whiteSpace: 'nowrap',
           },
-          onClick: () => setTwoPageMode((prev) => {
-            if (prev === 'off') return 'even-left';
-            if (prev === 'even-left') return 'odd-left';
-            return 'off';
-          }),
+          onClick: () => {
+            pendingRestorePageRef.current = lastKnownPageRef.current || 1;
+            didRestoreScrollRef.current = false;
+            setTwoPageMode((prev) => {
+              if (prev === 'off') return 'even-left';
+              if (prev === 'even-left') return 'odd-left';
+              return 'off';
+            });
+          },
         },
         twoPageMode === 'off'
           ? 'Two-page mode: OFF'
@@ -1421,6 +1453,10 @@ export const PdfViewer = ({
             whiteSpace: 'nowrap',
           },
           onClick: () => {
+            if (rotationDeg !== 0 || twoPageMode !== 'off') {
+              pendingRestorePageRef.current = lastKnownPageRef.current || 1;
+              didRestoreScrollRef.current = false;
+            }
             setRotationDeg(0);
             setTwoPageMode('off');
           },
@@ -1456,6 +1492,29 @@ export const PdfViewer = ({
       ref: containerRef,
       className: 'flex-1 min-h-0 overflow-auto rounded-lg bg-gray-900 ' + (status === 'error' ? 'hidden' : ''),
     }),
+
+    // Page-restore toast
+    restoreMsg && React.createElement(
+      'div',
+      {
+        style: {
+          position: 'fixed',
+          bottom: 28,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 10000,
+          background: 'rgba(17,24,39,0.92)',
+          color: '#d1d5db',
+          fontSize: 13,
+          padding: '7px 16px',
+          borderRadius: 20,
+          boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
+          pointerEvents: 'none',
+          whiteSpace: 'nowrap',
+        },
+      },
+      restoreMsg,
+    ),
 
     // Tab strip — fixed visible handle on the left edge for annotation panel
     !readOnly && React.createElement('div', {

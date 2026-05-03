@@ -1,5 +1,18 @@
 import '../utils/mapGetOrInsertComputedPolyfill.js';
 import React, { useState, useEffect, useRef } from 'react';
+
+/**
+ * iOS Safari IDB blobs can become unreadable after the transaction closes.
+ * FileReader is a more reliable path for these blobs than blob.arrayBuffer().
+ */
+function readBlobAsArrayBuffer(blob) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error || new Error('FileReader failed'));
+    fr.readAsArrayBuffer(blob);
+  });
+}
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from '../utils/pdfjsWorkerEntry.js?worker&url';
 import JSZip from 'jszip';
@@ -166,7 +179,7 @@ export const DataTile = ({
     }
     (async () => {
       try {
-        const buffer = await video.data.arrayBuffer();
+        const buffer = await readBlobAsArrayBuffer(video.data);
         if (cancelled) return;
         loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
         const pdfDoc = await loadingTask.promise;
