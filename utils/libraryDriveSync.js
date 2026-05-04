@@ -40,6 +40,13 @@ export async function runOwnerSyncPipeline({
   setPdfAnnotationDriveSync,
   upsertDrivePdfAnnotation,
 }) {
+  try {
+    onProgress?.('Writing owner index…');
+    await writeOwnerIndex({ accessToken, folderId, ownerEmail, items, channels });
+  } catch (err) {
+    console.warn('[libraryDriveSync] writeOwnerIndex failed:', err);
+  }
+
   const backupResult = await backupAllToGDrive({
     accessToken,
     folderId,
@@ -71,13 +78,6 @@ export async function runOwnerSyncPipeline({
     upsertDrivePdfAnnotation,
     onProgress,
   });
-
-  try {
-    onProgress?.('Writing owner index…');
-    await writeOwnerIndex({ accessToken, folderId, ownerEmail, items, channels });
-  } catch (err) {
-    console.warn('[libraryDriveSync] writeOwnerIndex failed:', err);
-  }
 
   let peerResult = { added: 0, failed: 0 };
   if (config) {

@@ -9,6 +9,7 @@ import { cloneBlobForNetwork } from './cloneBlobForNetwork.js';
 
 export const CHANNEL_JSON_MARKER = 'infodepo-channel';
 export const DESK_JSON_MARKER = 'infodepo-desk';
+const OWNER_INDEX_FILENAME = '_infodepo_index.json';
 
 const SUPPORTED_MIME_TYPES = [
   'application/epub+zip',
@@ -111,7 +112,7 @@ export async function syncDriveToLocal({
     }));
 
   let contentFiles = allDriveFiles.filter(
-    (f) => SUPPORTED_MIME_TYPES.includes(f.mimeType)
+    (f) => SUPPORTED_MIME_TYPES.includes(f.mimeType) && f.name !== OWNER_INDEX_FILENAME
   );
   let imageFiles = allDriveFiles.filter(
     (f) => IMAGE_MIME_TYPES.includes(f.mimeType)
@@ -204,16 +205,29 @@ export async function syncDriveToLocal({
       continue;
     }
 
-    // For JSON files not in books/notes/videos, check the channels store before downloading.
-    // Channel files always show as "no local copy" from getBookByDriveId's perspective.
-    if (!existing && driveFile.mimeType === 'application/json' && getChannelByDriveId) {
-      const existingChannel = await getChannelByDriveId(driveFile.driveId);
-      if (existingChannel) {
-        const chNewer = !existingChannel.modifiedTime ||
-          new Date(driveFile.modifiedTime) > new Date(existingChannel.modifiedTime);
-        if (!chNewer) {
-          counts.skipped++;
-          continue;
+    // For JSON files not in books/notes/videos, check channels/desks before downloading.
+    // Those files appear as "no local copy" from getBookByDriveId's perspective.
+    if (!existing && driveFile.mimeType === 'application/json') {
+      if (getChannelByDriveId) {
+        const existingChannel = await getChannelByDriveId(driveFile.driveId);
+        if (existingChannel) {
+          const chNewer = !existingChannel.modifiedTime ||
+            new Date(driveFile.modifiedTime) > new Date(existingChannel.modifiedTime);
+          if (!chNewer) {
+            counts.skipped++;
+            continue;
+          }
+        }
+      }
+      if (getDeskByDriveId) {
+        const existingDesk = await getDeskByDriveId(driveFile.driveId);
+        if (existingDesk) {
+          const deskNewer = !existingDesk.modifiedTime ||
+            new Date(driveFile.modifiedTime) > new Date(existingDesk.modifiedTime);
+          if (!deskNewer) {
+            counts.skipped++;
+            continue;
+          }
         }
       }
     }

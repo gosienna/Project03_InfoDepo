@@ -97,8 +97,18 @@ export async function syncSharedFromPeers({
     for (const entry of sharedWithMe) {
       const driveId = String(entry.driveId || '').trim();
       if (!driveId) continue;
-
-      progress(`Downloading ${entry.name} from ${peer.email}…`);
+      const normalizedSharedWith = Array.isArray(entry.sharedWith)
+        ? entry.sharedWith.map((e) => String(e || '').trim().toLowerCase()).filter(Boolean)
+        : [];
+      const sameEmailSet = (a = [], b = []) => {
+        const sa = [...new Set((a || []).map((e) => String(e || '').trim().toLowerCase()).filter(Boolean))].sort();
+        const sb = [...new Set((b || []).map((e) => String(e || '').trim().toLowerCase()).filter(Boolean))].sort();
+        if (sa.length !== sb.length) return false;
+        for (let i = 0; i < sa.length; i++) {
+          if (sa[i] !== sb[i]) return false;
+        }
+        return true;
+      };
 
       try {
         const metaRes = await fetch(
@@ -123,8 +133,12 @@ export async function syncSharedFromPeers({
           const driveIsNewer = existing
             ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
             : true;
-          if (existing && !driveIsNewer) { counts.skipped++; continue; }
+          const sharedWithChanged = existing
+            ? !sameEmailSet(existing.sharedWith, normalizedSharedWith)
+            : true;
+          if (existing && !driveIsNewer && !sharedWithChanged) { counts.skipped++; continue; }
 
+          progress(`Downloading ${entry.name} from ${peer.email}…`);
           const blobRes = await fetch(
             `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media`,
             { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -136,6 +150,7 @@ export async function syncSharedFromPeers({
             if (parsed._type === CHANNEL_JSON_MARKER && parsed.channelId) {
               const { _type, ...channelData } = parsed;
               channelData.ownerEmail = peer.email;
+              channelData.sharedWith = normalizedSharedWith;
               const action = await upsertDriveChannel(driveFile, channelData, { silent: true });
               if (action === 'added') counts.added++;
               else if (action === 'updated') counts.updated++;
@@ -151,8 +166,12 @@ export async function syncSharedFromPeers({
         const driveIsNewer = existing
           ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
           : true;
-        if (existing && !driveIsNewer) { counts.skipped++; continue; }
+        const sharedWithChanged = existing
+          ? !sameEmailSet(existing.sharedWith, normalizedSharedWith)
+          : true;
+        if (existing && !driveIsNewer && !sharedWithChanged) { counts.skipped++; continue; }
 
+        progress(`Downloading ${entry.name} from ${peer.email}…`);
         const blobRes = await fetch(
           `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -174,6 +193,7 @@ export async function syncSharedFromPeers({
         }
 
         effectiveFile.ownerEmail = peer.email;
+        effectiveFile.sharedWith = normalizedSharedWith;
         const action = await upsertDriveBook(effectiveFile, blob, undefined, { silent: true });
         if (action === 'added') counts.added++;
         else if (action === 'updated') counts.updated++;

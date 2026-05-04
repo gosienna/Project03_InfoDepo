@@ -330,6 +330,10 @@ const App = () => {
     hasGoogleApiKeyOrProxy(driveCreds) &&
     String(driveFolderId || '').trim()
   );
+  const canManualSync = (
+    ((userType === 'master' || userType === 'editor') && hasDriveLibrarySetup) ||
+    userType === 'viewer'
+  );
 
   const recordHasDriveCopy = (rec) => !!(rec?.driveId && String(rec.driveId).trim());
 
@@ -525,7 +529,7 @@ const App = () => {
       showModeToggle: view === 'library',
       userType,
       onSystemSettings: isEditorOrMaster ? () => setIsSystemSettingsOpen(true) : undefined,
-      onSync: isEditorOrMaster && hasDriveLibrarySetup ? () => syncFnRef.current?.() : undefined,
+      onSync: canManualSync ? () => syncFnRef.current?.() : undefined,
       isSyncing,
       syncProgress,
     }),

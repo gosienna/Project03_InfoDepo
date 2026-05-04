@@ -351,7 +351,8 @@ export const Library = ({
         window.alert(`Some Google Drive permission updates failed (${aclResult.failed}). The recipient may not see this item yet.`);
       }
       // Ensure receivers can discover latest sharedWith changes without waiting for full Sync.
-      if (String(driveFolderId || '').trim() && hasGoogleApiKeyOrProxy(credentials)) {
+      // writeOwnerIndex only needs the OAuth token, not an API key.
+      if (String(driveFolderId || '').trim()) {
         try {
           const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
           const mergedItems = await getMergedLibraryItems();
@@ -585,10 +586,57 @@ export const Library = ({
     }
   };
 
-  const runSync = () => runOwnerSync();
+  const runViewerPeerSync = async () => {
+    if (userType !== 'viewer' || syncInFlightRef.current) return;
+    if (!googleUserEmail || !userConfig) return;
+    syncInFlightRef.current = true;
+    setIsSyncing(true);
+    setSyncResult(null);
+    setSyncProgress('Checking shared content from configured users...');
+    try {
+      const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
+      const peerResult = await syncSharedFromPeers({
+        accessToken: token,
+        myEmail: googleUserEmail,
+        config: userConfig,
+        getBookByDriveId,
+        upsertDriveBook: (driveFile, blob, assets) =>
+          upsertDriveBook(driveFile, blob, assets, { silent: true }),
+        getChannelByDriveId,
+        upsertDriveChannel: (driveFile, channelData) =>
+          upsertDriveChannel(driveFile, channelData, { silent: true }),
+        getLocalRecordsByOwnerEmail,
+        deleteItemByDriveId,
+        deleteChannelByDriveId,
+        onProgress: setSyncProgress,
+      });
+      loadAll();
+      setSyncResult({
+        sharedFor: googleUserEmail,
+        backed: 0,
+        backupFailed: 0,
+        added: peerResult.added,
+        updated: peerResult.updated,
+        skipped: peerResult.skipped,
+        removed: peerResult.removed || 0,
+        failed: peerResult.failed,
+        peerAdded: peerResult.added,
+        peerRemoved: peerResult.removed || 0,
+        peerFailed: peerResult.failed,
+      });
+    } catch (err) {
+      setSyncResult({ error: err?.message || 'Viewer shared-content sync failed.' });
+    } finally {
+      syncInFlightRef.current = false;
+      setIsSyncing(false);
+      setSyncProgress('');
+    }
+  };
+
+  const runSync = () => (userType === 'viewer' ? runViewerPeerSync() : runOwnerSync());
 
   runOwnerSyncRef.current = runOwnerSync;
-  onRegisterSync?.(runOwnerSync);
+  onRegisterSync?.(runSync);
 
   useEffect(() => {
     if (!hasCredentials || !String(driveFolderId || '').trim()) return;

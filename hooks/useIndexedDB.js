@@ -556,7 +556,14 @@ export const useIndexedDB = () => {
         if (!note) { resolve('skipped'); return; }
         const assets = Array.isArray(note.assets) ? [...note.assets] : [];
         const idx = assets.findIndex(a => a.driveId === driveFile.driveId || a.name === driveFile.name);
-        const updated = { name: driveFile.name, data: blob, type: driveFile.mimeType, driveId: driveFile.driveId };
+        const driveModifiedTime = driveFile?.modifiedTime ? new Date(driveFile.modifiedTime) : undefined;
+        const updated = {
+          name: driveFile.name,
+          data: blob,
+          type: driveFile.mimeType,
+          driveId: driveFile.driveId,
+          ...(driveModifiedTime ? { modifiedTime: driveModifiedTime, localModifiedAt: driveModifiedTime } : {}),
+        };
         const action = idx >= 0 ? 'updated' : 'added';
         if (idx >= 0) assets[idx] = updated; else assets.push(updated);
         const putReq = os.put({ ...note, assets });
@@ -870,6 +877,9 @@ export const useIndexedDB = () => {
 
       if (existing) {
         const mt = driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date();
+        const nextSharedWith = Array.isArray(driveFile.sharedWith)
+          ? driveFile.sharedWith.map((e) => String(e || '').trim().toLowerCase()).filter(Boolean)
+          : null;
         const updated = {
           ...existing,
           driveId: driveFile.driveId,
@@ -877,7 +887,7 @@ export const useIndexedDB = () => {
           localModifiedAt: mt,
           data: blob, size: blob.size,
           tags: Array.isArray(existing.tags) ? existing.tags : [],
-          sharedWith: Array.isArray(existing.sharedWith) ? existing.sharedWith : [],
+          sharedWith: nextSharedWith ?? (Array.isArray(existing.sharedWith) ? existing.sharedWith : []),
           ...(driveFile.ownerEmail ? { ownerEmail: driveFile.ownerEmail } : {}),
           ...(driveFile.driveFolderId ? { driveFolderId: driveFile.driveFolderId } : {}),
           ...(Array.isArray(assets) ? { assets } : {}),
@@ -887,6 +897,9 @@ export const useIndexedDB = () => {
         putRequest.onerror   = (e) => reject(e.target.error);
       } else {
         const mtNew = driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date();
+        const nextSharedWith = Array.isArray(driveFile.sharedWith)
+          ? driveFile.sharedWith.map((e) => String(e || '').trim().toLowerCase()).filter(Boolean)
+          : [];
         const record = {
           name: driveFile.name, type: driveFile.mimeType,
           data: blob, size: blob.size,
@@ -894,7 +907,7 @@ export const useIndexedDB = () => {
           modifiedTime: mtNew,
           localModifiedAt: mtNew,
           tags: [],
-          sharedWith: [],
+          sharedWith: nextSharedWith,
           ownerEmail: driveFile.ownerEmail || '',
           ...(driveFile.driveFolderId ? { driveFolderId: driveFile.driveFolderId } : {}),
           ...(Array.isArray(assets) ? { assets } : {}),
@@ -1007,7 +1020,18 @@ export const useIndexedDB = () => {
       if (existing) {
         const driveIsNewer = !existing.modifiedTime ||
           new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime);
-        if (!driveIsNewer) { resolve('skipped'); return; }
+        const nextSharedWith = Array.isArray(channelData.sharedWith)
+          ? [...new Set(channelData.sharedWith.map((e) => String(e || '').trim().toLowerCase()).filter(Boolean))].sort()
+          : null;
+        const currentSharedWith = Array.isArray(existing.sharedWith)
+          ? [...new Set(existing.sharedWith.map((e) => String(e || '').trim().toLowerCase()).filter(Boolean))].sort()
+          : [];
+        const sharedWithChanged = nextSharedWith
+          ? (nextSharedWith.length !== currentSharedWith.length ||
+            nextSharedWith.some((email, idx) => email !== currentSharedWith[idx]))
+          : false;
+        const ownerEmailChanged = !!(driveFile.ownerEmail && driveFile.ownerEmail !== existing.ownerEmail);
+        if (!driveIsNewer && !sharedWithChanged && !ownerEmailChanged) { resolve('skipped'); return; }
         const mtCh = new Date(driveFile.modifiedTime);
         const putReq = os.put({
           ...existing,
@@ -1016,19 +1040,25 @@ export const useIndexedDB = () => {
             ? normalizeTagsList(channelData.tags)
             : (Array.isArray(existing.tags) ? existing.tags : []),
           driveId: driveFile.driveId,
-          modifiedTime: mtCh,
-          localModifiedAt: mtCh,
+          modifiedTime: driveIsNewer ? mtCh : existing.modifiedTime,
+          localModifiedAt: driveIsNewer ? mtCh : new Date(),
+          ...(driveFile.ownerEmail ? { ownerEmail: driveFile.ownerEmail } : {}),
+          sharedWith: nextSharedWith ?? (Array.isArray(existing.sharedWith) ? existing.sharedWith : []),
         });
         putReq.onsuccess = () => { if (!silent) loadChannels('upsertDriveChannel/updated'); resolve('updated'); };
         putReq.onerror = (e) => reject(e.target.error);
       } else {
         const mtAdd = new Date(driveFile.modifiedTime);
+        const nextSharedWith = Array.isArray(channelData.sharedWith)
+          ? channelData.sharedWith.map((e) => String(e || '').trim().toLowerCase()).filter(Boolean)
+          : [];
         const addReq = os.add({
           ...channelData,
           tags: normalizeTagsList(channelData.tags),
           driveId: driveFile.driveId,
           modifiedTime: mtAdd,
           localModifiedAt: mtAdd,
+          sharedWith: nextSharedWith,
         });
         addReq.onsuccess = () => { if (!silent) loadChannels('upsertDriveChannel/added'); resolve('added'); };
         addReq.onerror = (e) => reject(e.target.error);
