@@ -441,7 +441,7 @@ export const Library = ({
       setSyncResult(null);
       try {
         const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
-        await syncSharedFromPeers({
+        const peerResult = await syncSharedFromPeers({
           accessToken: token,
           myEmail: googleUserEmail,
           config: userConfig,
