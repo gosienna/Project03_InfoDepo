@@ -266,15 +266,29 @@ export const Library = ({
         items: [{ driveId: String(overrideRecord.driveId || '').trim(), sharedWith: previousSharedWith }],
       };
     }
-    // Index file discovery needs folderId and API-key/proxy path; ACL grant on item files does not.
-    if (!targetedOnly && String(driveFolderId || '').trim() && hasGoogleApiKeyOrProxy(credentials)) {
+    if (String(driveFolderId || '').trim()) {
       try {
         console.log('[InfoDepo] ACL step: lookup owner index file');
         indexFid = await getIndexFileId(token, driveFolderId);
-        console.log('[InfoDepo] ACL step: fetch previous owner index', { hasIndexFile: !!indexFid });
-        prevIndex = indexFid ? await fetchOwnerIndex({ accessToken: token, folderId: driveFolderId }) : null;
+        if (!targetedOnly) {
+          console.log('[InfoDepo] ACL step: fetch previous owner index', { hasIndexFile: !!indexFid });
+          prevIndex = indexFid ? await fetchOwnerIndex({ accessToken: token, folderId: driveFolderId }) : null;
+        }
       } catch (e) {
         console.warn('[InfoDepo] index lookup skipped during ACL reconcile:', e);
+      }
+    }
+    // In targeted mode, grant index access to any newly added user without revoking previous
+    // users — targeted reconcile has no global view, so index revocation is deferred to full reconcile.
+    if (targetedOnly && indexFid) {
+      const indexEmails = [
+        ...new Set([
+          ...(Array.isArray(overrideEmails) ? overrideEmails : []),
+          ...(Array.isArray(previousSharedWith) ? previousSharedWith : []),
+        ]),
+      ];
+      if (indexEmails.length > 0) {
+        itemsForAcl = [...itemsForAcl, { driveId: indexFid, sharedWith: indexEmails }];
       }
     }
     console.log('[InfoDepo] ACL step: apply Drive permissions');
