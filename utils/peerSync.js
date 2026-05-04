@@ -102,10 +102,11 @@ export async function syncSharedFromPeers({
 
       try {
         const metaRes = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?fields=id,name,mimeType,size,modifiedTime`,
+          `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?fields=id,name,mimeType,size,modifiedTime&supportsAllDrives=true`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
         );
         if (!metaRes.ok) {
+          console.warn(`[peerSync] file not accessible (HTTP ${metaRes.status}) — driveId: ${driveId}, owner: ${peer.email}, name: ${entry.name}. The owner may need to re-grant Drive sharing permissions.`);
           counts.failed++;
           continue;
         }
@@ -126,7 +127,7 @@ export async function syncSharedFromPeers({
           if (existing && !driveIsNewer) { counts.skipped++; continue; }
 
           const blobRes = await fetch(
-            `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media`,
+            `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media&supportsAllDrives=true`,
             { headers: { Authorization: `Bearer ${accessToken}` } }
           );
           if (!blobRes.ok) { counts.failed++; continue; }
@@ -154,7 +155,7 @@ export async function syncSharedFromPeers({
         if (existing && !driveIsNewer) { counts.skipped++; continue; }
 
         const blobRes = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media`,
+          `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media&supportsAllDrives=true`,
           { headers: { Authorization: `Bearer ${accessToken}` } }
         );
         if (!blobRes.ok) { counts.failed++; continue; }

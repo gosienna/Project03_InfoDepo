@@ -15,7 +15,7 @@ import { runOwnerSyncPipeline } from '../utils/libraryDriveSync.js';
 import { libraryItemKey } from '../utils/libraryItemKey.js';
 import { fetchGoogleUserEmail } from '../utils/googleUser.js';
 import { normalizeTag } from '../utils/tagUtils.js';
-import { OWNER_DRIVE_SCOPE } from '../utils/driveScopes.js';
+import { OWNER_DRIVE_SCOPE, CONFIG_MANAGE_SCOPE } from '../utils/driveScopes.js';
 import { DeleteContentModal } from './DeleteContentModal.js';
 import { applySharedWithToDriveFiles } from '../utils/driveSharePermissions.js';
 import { getOwnerDriveAccessToken, invalidateDriveAccessTokenCache } from '../utils/driveAccessToken.js';
@@ -277,9 +277,15 @@ export const Library = ({
         console.warn('[InfoDepo] index lookup skipped during ACL reconcile:', e);
       }
     }
+    // Permission grants require drive scope (not just drive.file) so that files synced
+    // from Drive (not app-created) can also be shared. drive.file only covers files the
+    // app itself uploaded, which causes silent 404 failures when granting permissions on
+    // manually-added or externally-synced files.
+    console.log('[InfoDepo] ACL step: acquire token for permission grants');
+    const aclToken = await getDriveTokenForScope(CONFIG_MANAGE_SCOPE);
     console.log('[InfoDepo] ACL step: apply Drive permissions');
     const aclPromise = applySharedWithToDriveFiles({
-      accessToken: token,
+      accessToken: aclToken,
       items: itemsForAcl,
       channels: channelsForAcl,
       indexFileId: indexFid,
