@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getDriveCredentials } from '../utils/driveCredentials.js';
 import { getDriveFolderId } from '../utils/driveFolderStorage.js';
 import { removeStoredAccessToken } from '../utils/driveOAuthStorage.js';
@@ -13,6 +13,19 @@ import { cloneBlobForNetwork } from '../utils/cloneBlobForNetwork.js';
 
 export const channelUploadKey = (ch) => `channel-${ch?.id}`;
 
+// Module-level counter so the beforeunload guard survives component unmounts.
+// The fetch + setItemDriveId continue running after a view change; this ensures
+// the browser still prompts the user if they try to close the tab mid-upload.
+let activeUploads = 0;
+
+function onBeforeUnload(e) {
+  if (activeUploads > 0) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+}
+window.addEventListener('beforeunload', onBeforeUnload);
+
 /**
  * Google Drive multipart upload for library items and channel JSON, with per-tile status.
  * Used by Library and Desk so canvas tiles match grid upload behavior.
@@ -21,31 +34,28 @@ export function useDriveTileUpload({ onSetDriveId, scheduleShareAclReconcile }) 
   const [uploadStatuses, setUploadStatuses] = useState({});
   const credentials = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
+  const mountedRef = useRef(true);
 
-  // Block tab close while any upload is in progress.
   useEffect(() => {
-    const hasUploading = Object.values(uploadStatuses).some((s) => s === 'uploading');
-    if (!hasUploading) return;
-    const handler = (e) => {
-      e.preventDefault();
-      e.returnValue = '';
-    };
-    window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
-  }, [uploadStatuses]);
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     resetDriveImplicitUploadToken();
   }, [credentials.clientId]);
 
   const setStatus = useCallback((key, status) => {
-    setUploadStatuses((prev) => ({ ...prev, [key]: status }));
+    if (mountedRef.current) {
+      setUploadStatuses((prev) => ({ ...prev, [key]: status }));
+    }
   }, []);
 
   const handleUpload = useCallback(
     async (video) => {
       const uKey = libraryItemKey(video);
       setStatus(uKey, 'uploading');
+      activeUploads++;
       try {
         const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
         const isYoutube = video.type === 'application/x-youtube';
@@ -87,6 +97,8 @@ export function useDriveTileUpload({ onSetDriveId, scheduleShareAclReconcile }) 
         resetDriveImplicitUploadToken();
         removeStoredAccessToken(credentials.clientId, OWNER_DRIVE_SCOPE);
         setStatus(uKey, 'error');
+      } finally {
+        activeUploads--;
       }
     },
     [credentials.clientId, driveFolderId, onSetDriveId, scheduleShareAclReconcile, setStatus],
@@ -100,6 +112,7 @@ export function useDriveTileUpload({ onSetDriveId, scheduleShareAclReconcile }) 
         return;
       }
       setStatus(uKey, 'uploading');
+      activeUploads++;
       try {
         const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
         const { id: _id, driveId: _d, ...rest } = ch;
@@ -136,6 +149,8 @@ export function useDriveTileUpload({ onSetDriveId, scheduleShareAclReconcile }) 
         resetDriveImplicitUploadToken();
         removeStoredAccessToken(credentials.clientId, OWNER_DRIVE_SCOPE);
         setStatus(uKey, 'error');
+      } finally {
+        activeUploads--;
       }
     },
     [credentials.clientId, driveFolderId, onSetDriveId, scheduleShareAclReconcile, setStatus],
