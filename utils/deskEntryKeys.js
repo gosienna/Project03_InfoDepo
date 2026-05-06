@@ -15,12 +15,19 @@ const trimDrive = (d) => String(d || '').trim();
 
 export const itemEntryKey = (item) => {
   const d = trimDrive(item?.driveId);
-  return d ? `drive:${d}` : null;
+  if (d) return `drive:${d}`;
+  const store = item?.idbStore || 'books';
+  const id = item?.id;
+  if (id == null) return `local:${store}:0`;
+  return `local:${store}:${id}`;
 };
 
 export const channelEntryKey = (ch) => {
   const d = trimDrive(ch?.driveId);
-  return d ? `drive:${d}` : null;
+  if (d) return `drive:${d}`;
+  const id = ch?.id;
+  if (id == null) return 'local:channel:0';
+  return `local:channel:${id}`;
 };
 
 export const deskEntryKey = (d) => {
@@ -68,23 +75,26 @@ export function resolveLayoutEntry(key, items, channels, desks) {
     return d ? { ...d, _entryType: 'desk' } : PENDING;
   }
 
-  // Legacy local: keys — resolve only so migration can promote them once driveId arrives.
-  // Until then they are treated as pending (no stable cross-device identity).
+  // local: keys — item found without driveId gets _pendingUpload so the desk
+  // auto-triggers the upload. Not found means this is a different device.
   const local = parseLocalKey(key);
   if (local?.kind === 'channel') {
     const ch = (channels || []).find((c) => c.id === local.id);
-    return ch && ch.driveId ? { ...ch, _entryType: 'channel' } : PENDING;
+    if (!ch) return PENDING;
+    return ch.driveId ? { ...ch, _entryType: 'channel' } : { ...ch, _entryType: 'channel', _pendingUpload: true };
   }
   if (local?.kind === 'item') {
     const item = (items || []).find((i) => i.idbStore === local.idbStore && i.id === local.id);
-    return item && item.driveId ? { ...item, _entryType: 'item' } : PENDING;
+    if (!item) return PENDING;
+    return item.driveId ? { ...item, _entryType: 'item' } : { ...item, _entryType: 'item', _pendingUpload: true };
   }
 
   if (key.startsWith('channel:')) {
     const id = Number(key.slice(8));
     if (!Number.isFinite(id)) return PENDING;
     const ch = (channels || []).find((c) => c.id === id);
-    return ch && ch.driveId ? { ...ch, _entryType: 'channel' } : PENDING;
+    if (!ch) return PENDING;
+    return ch.driveId ? { ...ch, _entryType: 'channel' } : { ...ch, _entryType: 'channel', _pendingUpload: true };
   }
   if (key.startsWith('desk:')) {
     const id = Number(key.slice(5));
@@ -101,7 +111,8 @@ export function resolveLayoutEntry(key, items, channels, desks) {
   if (!Number.isFinite(id)) return PENDING;
   if (store !== 'books' && store !== 'notes' && store !== 'videos') return PENDING;
   const item = (items || []).find((i) => i.idbStore === store && i.id === id);
-  return item && item.driveId ? { ...item, _entryType: 'item' } : PENDING;
+  if (!item) return PENDING;
+  return item.driveId ? { ...item, _entryType: 'item' } : { ...item, _entryType: 'item', _pendingUpload: true };
 }
 
 export function canonicalKeyForEntry(entry) {

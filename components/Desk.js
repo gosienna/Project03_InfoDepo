@@ -459,14 +459,12 @@ const InlineAddSearch = ({ items, channels, desks, currentDeskId, currentLayout,
     const rows = [];
     for (const item of items) {
       const key = itemEntryKey(item);
-      if (!key) continue;
       if (inLayout.has(key)) continue;
       const label = (item.name || '').replace(/\.youtube$/i, '');
       rows.push({ key, label, sub: item.idbStore, tags: item.tags || [], lastVisitedAt: item.lastVisitedAt });
     }
     for (const ch of channels) {
       const key = channelEntryKey(ch);
-      if (!key) continue;
       if (inLayout.has(key)) continue;
       rows.push({ key, label: ch.name || ch.handle || '', sub: 'channel', tags: ch.tags || [], lastVisitedAt: ch.lastVisitedAt });
     }
@@ -700,6 +698,21 @@ export const Desk = ({
     onSetDriveId: onSetItemDriveId || (async () => {}),
     scheduleShareAclReconcile: undefined,
   });
+
+  // Auto-upload items that are on the desk but not yet on Drive.
+  // A ref prevents re-firing for items already queued; on error the user can retry manually.
+  const autoUploadTriggeredRef = useRef(new Set());
+  useEffect(() => {
+    if (!onSetItemDriveId) return;
+    for (const { entry } of layoutEntries) {
+      if (!entry._pendingUpload) continue;
+      const uKey = entry._entryType === 'channel' ? channelUploadKey(entry) : libraryItemKey(entry);
+      if (autoUploadTriggeredRef.current.has(uKey)) continue;
+      autoUploadTriggeredRef.current.add(uKey);
+      if (entry._entryType === 'channel') handleChannelUpload(entry);
+      else handleUpload(entry);
+    }
+  }, [layoutEntries, onSetItemDriveId, handleUpload, handleChannelUpload]);
 
   const viewportRef = useRef(null);
   const historyRef = useRef({ past: [], future: [] });
@@ -1178,7 +1191,6 @@ export const Desk = ({
 
   // --- Add item to desk ---
   const addItemToDesk = useCallback((key) => {
-    if (!key) return;
     const el = viewportRef.current;
     const w = el ? el.clientWidth : 800;
     const h = el ? el.clientHeight : 600;
@@ -1641,27 +1653,72 @@ export const Desk = ({
                 outline: connectMode && connectStartKey === key ? '2px solid #818cf8' : 'none',
               },
             },
-            entry._entryType === 'pending'
-              ? React.createElement(
-                  'div',
-                  {
-                    style: {
-                      width: CARD_W,
-                      height: CARD_H,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 8,
-                      background: '#1f2937',
-                      borderRadius: readOnly ? 8 : '0 0 8px 8px',
-                      border: '1px dashed #374151',
-                      color: '#6b7280',
+            (entry._entryType === 'pending' || entry._pendingUpload)
+              ? (() => {
+                  const uKey = entry._pendingUpload
+                    ? (entry._entryType === 'channel' ? channelUploadKey(entry) : libraryItemKey(entry))
+                    : null;
+                  const status = uKey ? (uploadStatuses[uKey] ?? 'uploading') : null;
+                  const isError = status === 'error';
+                  return React.createElement(
+                    'div',
+                    {
+                      style: {
+                        width: CARD_W,
+                        height: CARD_H,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                        background: '#1f2937',
+                        borderRadius: readOnly ? 8 : '0 0 8px 8px',
+                        border: `1px dashed ${isError ? '#7f1d1d' : '#374151'}`,
+                        color: '#6b7280',
+                      },
                     },
-                  },
-                  React.createElement('span', { style: { fontSize: 22 } }, '⏳'),
-                  React.createElement('span', { style: { fontSize: 12, textAlign: 'center', padding: '0 16px' } }, 'Pending Drive ID'),
-                )
+                    React.createElement('span', { style: { fontSize: 22 } }, isError ? '⚠️' : '⏳'),
+                    React.createElement(
+                      'span',
+                      { style: { fontSize: 12, textAlign: 'center', padding: '0 16px', color: '#9ca3af' } },
+                      entry.name
+                        ? (entry.name.replace(/\.youtube$/i, '').slice(0, 32) + (entry.name.length > 32 ? '…' : ''))
+                        : null,
+                    ),
+                    React.createElement(
+                      'span',
+                      { style: { fontSize: 11, color: isError ? '#f87171' : '#6b7280' } },
+                      isError ? 'Upload failed' : 'Uploading to Drive…',
+                    ),
+                    isError && entry._pendingUpload && React.createElement(
+                      'button',
+                      {
+                        onClick: (e) => {
+                          e.stopPropagation();
+                          autoUploadTriggeredRef.current.delete(uKey);
+                          if (entry._entryType === 'channel') handleChannelUpload(entry);
+                          else handleUpload(entry);
+                        },
+                        style: {
+                          marginTop: 4,
+                          fontSize: 11,
+                          padding: '3px 10px',
+                          borderRadius: 4,
+                          border: '1px solid #374151',
+                          background: '#111827',
+                          color: '#d1d5db',
+                          cursor: 'pointer',
+                        },
+                      },
+                      'Retry',
+                    ),
+                    !entry._pendingUpload && React.createElement(
+                      'span',
+                      { style: { fontSize: 11, color: '#4b5563' } },
+                      'Not available on this device',
+                    ),
+                  );
+                })()
               : entry._entryType === 'item'
               ? React.createElement(DataTile, {
                   tileType: 'item',
