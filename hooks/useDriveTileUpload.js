@@ -22,6 +22,18 @@ export function useDriveTileUpload({ onSetDriveId, scheduleShareAclReconcile }) 
   const credentials = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
 
+  // Block tab close while any upload is in progress.
+  useEffect(() => {
+    const hasUploading = Object.values(uploadStatuses).some((s) => s === 'uploading');
+    if (!hasUploading) return;
+    const handler = (e) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [uploadStatuses]);
+
   useEffect(() => {
     resetDriveImplicitUploadToken();
   }, [credentials.clientId]);

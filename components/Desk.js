@@ -1685,7 +1685,24 @@ export const Desk = ({
                         color: '#6b7280',
                       },
                     },
-                    React.createElement('span', { style: { fontSize: 22 } }, isError ? '⚠️' : '⏳'),
+                    isError
+                      ? React.createElement('span', { style: { fontSize: 22 } }, '⚠️')
+                      : React.createElement(
+                          'svg',
+                          {
+                            className: 'animate-spin',
+                            style: { width: 28, height: 28, flexShrink: 0 },
+                            viewBox: '0 0 24 24',
+                            fill: 'none',
+                          },
+                          React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#374151', strokeWidth: 3 }),
+                          React.createElement('path', {
+                            d: 'M12 2a10 10 0 0 1 10 10',
+                            stroke: '#818cf8',
+                            strokeWidth: 3,
+                            strokeLinecap: 'round',
+                          }),
+                        ),
                     React.createElement(
                       'span',
                       { style: { fontSize: 12, textAlign: 'center', padding: '0 16px', color: '#9ca3af' } },
