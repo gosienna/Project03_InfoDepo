@@ -699,20 +699,7 @@ export const Desk = ({
     scheduleShareAclReconcile: undefined,
   });
 
-  // Auto-upload items that are on the desk but not yet on Drive.
-  // A ref prevents re-firing for items already queued; on error the user can retry manually.
   const autoUploadTriggeredRef = useRef(new Set());
-  useEffect(() => {
-    if (!onSetItemDriveId) return;
-    for (const { entry } of layoutEntries) {
-      if (!entry._pendingUpload) continue;
-      const uKey = entry._entryType === 'channel' ? channelUploadKey(entry) : libraryItemKey(entry);
-      if (autoUploadTriggeredRef.current.has(uKey)) continue;
-      autoUploadTriggeredRef.current.add(uKey);
-      if (entry._entryType === 'channel') handleChannelUpload(entry);
-      else handleUpload(entry);
-    }
-  }, [layoutEntries, onSetItemDriveId, handleUpload, handleChannelUpload]);
 
   const viewportRef = useRef(null);
   const historyRef = useRef({ past: [], future: [] });
@@ -1338,6 +1325,20 @@ export const Desk = ({
       return { key, pos, entry };
     });
   }, [renderTick, items, channels, desks]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-upload items that are on the desk but not yet on Drive.
+  // A ref prevents re-firing for items already queued; on error the user can retry manually.
+  useEffect(() => {
+    if (!onSetItemDriveId) return;
+    for (const { entry } of layoutEntries) {
+      if (!entry._pendingUpload) continue;
+      const uKey = entry._entryType === 'channel' ? channelUploadKey(entry) : libraryItemKey(entry);
+      if (autoUploadTriggeredRef.current.has(uKey)) continue;
+      autoUploadTriggeredRef.current.add(uKey);
+      if (entry._entryType === 'channel') handleChannelUpload(entry);
+      else handleUpload(entry);
+    }
+  }, [layoutEntries, onSetItemDriveId, handleUpload, handleChannelUpload]);
 
   const availableTags = useMemo(() => {
     const set = new Set();
