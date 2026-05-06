@@ -51,7 +51,7 @@
 - Desk tiles appear alongside item/channel tiles; clicking a desk tile switches to Desk mode.
 - Uses `AddContentDropdown` (receives `onOpenNewNote`, `onOpenYoutube`, `onOpenChannel`, `onOpenFile` callbacks from App). "New Desk" option prompts for name and creates the desk.
 - Viewer peer sync also prunes revoked peer-owned content from local IndexedDB.
-- **System Settings modal** still rendered here (uses Library-local state for Drive folder, display policy, sign-out, clear). `isSystemSettingsOpen`/`setIsSystemSettingsOpen` are lifted to App and passed as props; the trigger button lives in `Header`.
+- **System Settings modal** still rendered here (uses Library-local state for Drive folder, display policy, sign-out, clear). `isSystemSettingsOpen`/`setIsSystemSettingsOpen` are lifted to App and passed as props; the trigger button lives in `Header`. The modal is rendered via `ReactDOM.createPortal` into `document.body` so it appears above all views (library, desk, explorer) even when the Library container has `display: none`. z-index is `z-[110]` (above the header's `z-[100]`). The modal box is capped at `max-h-[90vh]` with the body section scrollable (`overflow-y-auto`).
 - **System Settings → Storage**: shows a progress bar of used vs. limit, and an input to adjust the GB cap (saved via `saveSyncSettings`).
 - **Search bar**: clicking the input opens a dropdown that contains type filter tabs (Books / Notes / Videos / Channels / Desks) at the top and text/tag suggestions below. Active filters appear as removable pills below the input when the dropdown is closed. The `×` button clears both query and all active filters.
 
@@ -68,7 +68,7 @@
 - Zoom: wheel event toward cursor.
 - Items are placed as `DataTile` (items/channels) or `DeskTile` (nested desks) with a drag handle bar. Clicking an item opens it; clicking a nested desk switches to that desk.
 - Layout stored in a ref during drag, committed to IndexedDB on drag-end to avoid excessive writes.
-- **Top-center title**: `DeskSelector` is rendered at `top: 16, left: 50%` as the desk title. Shows the current desk name in large bold text. When multiple desks exist a chevron appears and clicking opens a dropdown to switch desks. The dropdown also exposes a pencil icon per row for inline rename (Enter/Escape/blur to commit/cancel).
+- **Top-center title**: `DeskSelector` is rendered at `top: 16, left: 50%` as the desk title. Shows the current desk name in large bold text. When multiple desks exist a chevron appears and clicking opens a dropdown to switch desks. The dropdown has a search input at the top (auto-focused, filters by name, clears on close; Escape closes the dropdown) followed by a scrollable desk list. Each row has a pencil icon for inline rename (Enter/Escape/blur to commit/cancel). Blur is handled via `containerRef` so focus moving to the search input does not accidentally close the dropdown.
 - **Top-right toolbar** (editor/master only) contains two controls in a row:
   - **`InlineAddSearch`** (local component) — search input with floating dropdown. Type filter tabs (All / Books / Notes / Videos / Images / Channels / Desks) appear in the dropdown header. Text search matches both item names and tags. Matching tags appear as clickable suggestion pills; active tag filters shown as removable indigo pills. Results show up to 2 tag chips per row. Click a result to place it at the viewport center.
   - **`AddContentDropdown`** — creates new content; newly added items are auto-placed on the current desk by `addToDeskIfActive` in App.

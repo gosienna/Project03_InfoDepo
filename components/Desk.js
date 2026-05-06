@@ -459,12 +459,14 @@ const InlineAddSearch = ({ items, channels, desks, currentDeskId, currentLayout,
     const rows = [];
     for (const item of items) {
       const key = itemEntryKey(item);
+      if (!key) continue;
       if (inLayout.has(key)) continue;
       const label = (item.name || '').replace(/\.youtube$/i, '');
       rows.push({ key, label, sub: item.idbStore, tags: item.tags || [], lastVisitedAt: item.lastVisitedAt });
     }
     for (const ch of channels) {
       const key = channelEntryKey(ch);
+      if (!key) continue;
       if (inLayout.has(key)) continue;
       rows.push({ key, label: ch.name || ch.handle || '', sub: 'channel', tags: ch.tags || [], lastVisitedAt: ch.lastVisitedAt });
     }
@@ -1176,6 +1178,7 @@ export const Desk = ({
 
   // --- Add item to desk ---
   const addItemToDesk = useCallback((key) => {
+    if (!key) return;
     const el = viewportRef.current;
     const w = el ? el.clientWidth : 800;
     const h = el ? el.clientHeight : 600;
@@ -1320,8 +1323,8 @@ export const Desk = ({
     const layout = layoutRef.current;
     return Object.entries(layout).map(([key, pos]) => {
       const entry = resolveLayoutEntry(key, items, channels, desks);
-      return entry ? { key, pos, entry } : null;
-    }).filter(Boolean);
+      return { key, pos, entry };
+    });
   }, [renderTick, items, channels, desks]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const availableTags = useMemo(() => {
@@ -1638,7 +1641,28 @@ export const Desk = ({
                 outline: connectMode && connectStartKey === key ? '2px solid #818cf8' : 'none',
               },
             },
-            entry._entryType === 'item'
+            entry._entryType === 'pending'
+              ? React.createElement(
+                  'div',
+                  {
+                    style: {
+                      width: CARD_W,
+                      height: CARD_H,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                      background: '#1f2937',
+                      borderRadius: readOnly ? 8 : '0 0 8px 8px',
+                      border: '1px dashed #374151',
+                      color: '#6b7280',
+                    },
+                  },
+                  React.createElement('span', { style: { fontSize: 22 } }, '⏳'),
+                  React.createElement('span', { style: { fontSize: 12, textAlign: 'center', padding: '0 16px' } }, 'Pending Drive ID'),
+                )
+              : entry._entryType === 'item'
               ? React.createElement(DataTile, {
                   tileType: 'item',
                   item: entry,
