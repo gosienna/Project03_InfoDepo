@@ -754,7 +754,14 @@ export const Desk = ({
       onUpdateLayout(desk.id, layout);
       if (onUpdateConnections) onUpdateConnections(desk.id, connections);
     } else {
-      layoutRef.current = layout;
+      // Don't advance layoutRef to a desk.layout that has drive: keys which can't
+      // yet be resolved — this happens in the brief window between loadDesks() and
+      // loadItems() completing after setItemDriveId. Keep the current layoutRef so
+      // the tile stays visible (pending-upload state) until items confirm the driveId.
+      const hasUnresolvableDriveKey = Object.keys(layout).some(
+        (k) => k.startsWith('drive:') && resolveLayoutEntry(k, items, channels, desks)._entryType === 'pending'
+      );
+      if (!hasUnresolvableDriveKey) layoutRef.current = layout;
       connectionsRef.current = connections;
     }
     textItemsRef.current = Array.isArray(desk?.textItems) ? desk.textItems : [];
