@@ -1,5 +1,6 @@
 
 import React, { useRef, useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { DataTile } from './DataTile.js';
 import { DeskTile } from './DeskTile.js';
 import { BookIcon } from './icons/BookIcon.js';
@@ -1227,16 +1228,16 @@ export const Library = ({
             )
           : null,
 
-    // System settings modal
-    isSystemSettingsOpen && React.createElement(
+    // System settings modal — portal so it renders above any view (library/desk/explorer)
+    isSystemSettingsOpen && createPortal(React.createElement(
       'div',
       {
-        className: 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4',
+        className: 'fixed inset-0 bg-black/70 flex items-center justify-center z-[110] p-4',
         onClick: (e) => { if (e.target === e.currentTarget) setIsSystemSettingsOpen(false); },
       },
       React.createElement(
         'div',
-        { className: 'bg-gray-800 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-700 overflow-hidden' },
+        { className: 'bg-gray-800 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-700 overflow-hidden flex flex-col max-h-[90vh]' },
 
         // Header
         React.createElement(
@@ -1260,7 +1261,7 @@ export const Library = ({
         // Body
         React.createElement(
           'div',
-          { className: 'p-6 space-y-5' },
+          { className: 'p-6 space-y-5 overflow-y-auto' },
 
           // Section 1: Google API (build-time env)
           React.createElement(
@@ -1480,7 +1481,7 @@ export const Library = ({
           )
         )
       )
-    ),
+    ), document.body),
 
     pendingDelete &&
       React.createElement(DeleteContentModal, {

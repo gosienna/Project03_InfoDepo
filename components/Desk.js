@@ -137,8 +137,16 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const editingRef = useRef(false);
+  const containerRef = useRef(null);
   const current = desks.find((d) => d.id === currentDeskId);
+
+  useEffect(() => { if (!open) setSearchQuery(''); }, [open]);
+
+  const filteredDesks = searchQuery.trim()
+    ? desks.filter((d) => (d.name || 'Untitled Desk').toLowerCase().includes(searchQuery.trim().toLowerCase()))
+    : desks;
 
   const headerEditing = Boolean(
     onRename && currentDeskId && editingId === currentDeskId && !open
@@ -182,7 +190,7 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
 
   return React.createElement(
     'div',
-    { style: { position: 'relative' }, onClick: (e) => e.stopPropagation() },
+    { ref: containerRef, style: { position: 'relative' }, onClick: (e) => e.stopPropagation() },
     headerEditing
       ? React.createElement(
           'div',
@@ -262,7 +270,7 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
             {
               type: 'button',
               onClick: () => setOpen((v) => !v),
-              onBlur: () => setTimeout(() => { if (!editingRef.current) setOpen(false); }, 150),
+              onBlur: () => setTimeout(() => { if (!editingRef.current && !containerRef.current?.contains(document.activeElement)) setOpen(false); }, 150),
               style: {
                 background: 'none', border: 'none', borderRadius: 8,
                 padding: '4px 6px', cursor: 'pointer', flexShrink: 0,
@@ -285,10 +293,39 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
           position: 'absolute', top: 'calc(100% + 4px)', left: '50%', transform: 'translateX(-50%)',
           background: '#1f2937', border: '1px solid #374151', borderRadius: 10,
           boxShadow: '0 8px 24px rgba(0,0,0,0.4)', zIndex: 50,
-          minWidth: 220, maxHeight: 300, overflowY: 'auto',
+          minWidth: 220,
         },
       },
-      desks.map((d) =>
+      React.createElement(
+        'div',
+        { style: { padding: '8px', borderBottom: '1px solid #111827', position: 'relative' } },
+        React.createElement('input', {
+          autoFocus: true,
+          type: 'text',
+          value: searchQuery,
+          onChange: (e) => setSearchQuery(e.target.value),
+          onKeyDown: (e) => { if (e.key === 'Escape') { e.preventDefault(); setOpen(false); } },
+          onBlur: () => setTimeout(() => { if (!containerRef.current?.contains(document.activeElement)) setOpen(false); }, 150),
+          placeholder: 'Search desks…',
+          style: {
+            width: '100%', boxSizing: 'border-box',
+            background: '#111827', border: '1px solid #374151',
+            borderRadius: 6, padding: '5px 28px 5px 10px', fontSize: 12, color: '#e5e7eb',
+            outline: 'none',
+          },
+        }),
+        React.createElement(
+          'svg',
+          { xmlns: 'http://www.w3.org/2000/svg', width: 12, height: 12, fill: 'none', viewBox: '0 0 24 24', stroke: '#6b7280', strokeWidth: 2, style: { position: 'absolute', right: 18, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' } },
+          React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' })
+        )
+      ),
+      React.createElement(
+        'div',
+        { style: { maxHeight: 260, overflowY: 'auto' } },
+        filteredDesks.length === 0
+          ? React.createElement('p', { style: { color: '#6b7280', fontSize: 12, textAlign: 'center', padding: '12px 16px' } }, 'No desks found.')
+          : filteredDesks.map((d) =>
         React.createElement(
           'div',
           {
@@ -383,6 +420,7 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
                 )
               )
         )
+      )
       )
     )
   );
