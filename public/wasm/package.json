@@ -1,0 +1,15 @@
+{
+  "name": "trafilatura-wasm",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "trafilatura_wasm_bg.wasm",
+    "trafilatura_wasm.js",
+    "trafilatura_wasm.d.ts"
+  ],
+  "main": "trafilatura_wasm.js",
+  "types": "trafilatura_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
