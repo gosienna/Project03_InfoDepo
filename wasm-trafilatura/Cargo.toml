@@ -14,3 +14,6 @@ trafilatura = { version = "0.3", features = ["markdown"] }
 # Minimise binary size for faster browser download
 opt-level = "z"
 lto = true
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
