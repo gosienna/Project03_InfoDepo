@@ -29,12 +29,10 @@ App.js
 ├── NewChannelModal.js      # owned by App; shared by Library and Desk
 ├── Library.js              # grid, sync, upload, item-level sharedWith, peer sync for viewer, system settings modal
 │   ├── AddContentDropdown.js  # reusable dropdown: new note / YouTube / channel / file / desk
-│   ├── DataTile.js         # item/channel cards with tags + sharedWith editor
-│   ├── DeskTile.js         # library-grid tile for desk records
+│   ├── DataTile.js         # item / channel / desk cards — tileType: 'item'|'channel'|'desk'
 │   └── DeleteContentModal.js
-├── Desk.js                 # infinite canvas with pan/zoom, drag, dot-grid background
-│   ├── AddContentDropdown.js  # same component reused here
-│   └── DeskTile.js
+├── Desk.js                 # infinite canvas with pan/zoom, drag, dot-grid background, auto-share on add
+│   └── AddContentDropdown.js  # same component reused here
 ├── YoutubeChannelViewer.js
 ├── Reader.js              ← PDF / TXT / MD / YouTube (inline)
 │   ├── PdfViewer.js
@@ -88,6 +86,8 @@ Users create named desks that hold a `layout` map of item positions (`{ [key]: {
 - **InlineAddSearch** — type filter tabs (All / Books / Notes / Videos / Images / Channels / Desks) at the top of the dropdown narrow results by store type. Text search matches item names and tag values. Typing a partial tag name surfaces matching tags as clickable suggestion pills; active tag filters stack as removable indigo pills. Click a result to place it at the viewport center.
 - **AddContentDropdown** — creates new content (note, YouTube, channel, file); newly created items are automatically placed on the current desk via `addToDeskIfActive` in `App.js`.
 
+**Auto-share on add**: when any item, channel, or nested desk is added to the canvas and the current desk has `sharedWith` recipients set, those recipients are automatically merged into the newly added record's `sharedWith`. For records resolvable via `resolveLayoutEntry` this happens in `addItemToDesk`; for newly created nested desks (not yet in state) it is handled separately in `handleCreateDesk`.
+
 ### Viewer sync
 
 `syncSharedFromPeers`:
@@ -118,8 +118,8 @@ The limit is persisted in `localStorage` (`infodepo_sync_settings`) and is adjus
 | `utils/peerSync.js` | peer discovery + viewer download/prune |
 | `utils/driveSharePermissions.js` | apply/revoke Drive reader permissions |
 | `utils/userConfig.js` | parse config users map and role/folder helpers |
-| `components/Desk.js` | infinite-canvas component (pan/zoom, drag, add/remove items) |
-| `components/DeskTile.js` | library grid tile for desk records |
+| `components/Desk.js` | infinite-canvas component (pan/zoom, drag, add/remove items, auto-share on add) |
+| `components/DataTile.js` | unified tile for items, channels, and desks (`tileType` prop) |
 
 ## Current config.json shape
 

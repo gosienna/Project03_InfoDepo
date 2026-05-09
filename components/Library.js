@@ -2,7 +2,6 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { DataTile } from './DataTile.js';
-import { DeskTile } from './DeskTile.js';
 import { BookIcon } from './icons/BookIcon.js';
 import { getDriveCredentials, hasGoogleApiKeyOrProxy } from '../utils/driveCredentials.js';
 import { getDriveFolderId, setDriveFolderId, parseDriveFolderIdInput } from '../utils/driveFolderStorage.js';
@@ -65,6 +64,10 @@ export const Library = ({
   upsertDrivePdfAnnotation,
   setRecordTags,
   setItemSharedWith,
+  mergeItemSharedWithByDriveId,
+  mergeChannelSharedWithByDriveId,
+  mergeDeskSharedWithByDriveId,
+  deleteDeskByDriveId,
   renameItem,
   getMergedLibraryItems,
   getTotalStorageUsed,
@@ -236,9 +239,24 @@ export const Library = ({
     const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
     let itemsForAcl = [];
     let channelsForAcl = [];
+    let desksForAcl = [];
     if (targetedOnly && overrideRecord) {
       if (overrideStore === 'channels') {
         channelsForAcl = [{ ...overrideRecord, sharedWith: overrideEmails || [] }];
+      } else if (overrideStore === 'desks') {
+        desksForAcl = [{ ...overrideRecord, sharedWith: overrideEmails || [] }];
+        // Also include all items/channels inside the desk with their current sharedWith so
+        // their Drive permissions are granted in the same pass.
+        const layoutDriveIds = Object.keys(overrideRecord.layout || {})
+          .filter((k) => k.startsWith('drive:'))
+          .map((k) => k.slice(6).trim())
+          .filter(Boolean);
+        for (const driveId of layoutDriveIds) {
+          const item = items.find((i) => String(i.driveId || '').trim() === driveId);
+          if (item) { itemsForAcl.push(item); continue; }
+          const ch = (channels || []).find((c) => String(c.driveId || '').trim() === driveId);
+          if (ch) channelsForAcl.push(ch);
+        }
       } else {
         itemsForAcl = [{ ...overrideRecord, sharedWith: overrideEmails || [] }];
       }
@@ -246,7 +264,7 @@ export const Library = ({
       console.log('[InfoDepo] ACL step: load merged library items');
       const mergedItems = await getMergedLibraryItems();
       itemsForAcl =
-        overrideRecord && overrideStore !== 'channels'
+        overrideRecord && overrideStore !== 'channels' && overrideStore !== 'desks'
           ? mergedItems.map((it) =>
               it.id === overrideRecord.id && it.idbStore === overrideStore
                 ? { ...it, sharedWith: overrideEmails || [] }
@@ -259,6 +277,12 @@ export const Library = ({
               ch.id === overrideRecord.id ? { ...ch, sharedWith: overrideEmails || [] } : ch
             )
           : (channels || []);
+      desksForAcl =
+        overrideRecord && overrideStore === 'desks'
+          ? (desks || []).map((dk) =>
+              dk.id === overrideRecord.id ? { ...dk, sharedWith: overrideEmails || [] } : dk
+            )
+          : (desks || []);
     }
     let indexFid = null;
     let prevIndex = null;
@@ -297,6 +321,7 @@ export const Library = ({
       accessToken: token,
       items: itemsForAcl,
       channels: channelsForAcl,
+      desks: desksForAcl,
       indexFileId: indexFid,
       previousIndex: prevIndex,
       onProgress: () => {},
@@ -310,6 +335,34 @@ export const Library = ({
   const handleSetSharedWith = async (record, storeName, emails) => {
     const previousSharedWith = Array.isArray(record?.sharedWith) ? [...record.sharedWith] : [];
     await setItemSharedWith(record.id, storeName, emails);
+
+    // When sharing a desk, propagate newly added emails to all items/channels in the layout.
+    // Removal from the desk does NOT revoke item-level access (items may be independently shared).
+    if (storeName === 'desks') {
+      const newEmailSet = new Set((emails || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean));
+      const prevEmailSet = new Set(previousSharedWith.map((e) => String(e).trim().toLowerCase()).filter(Boolean));
+      const addedEmails = [...newEmailSet].filter((e) => !prevEmailSet.has(e));
+      if (addedEmails.length > 0) {
+        const layoutDriveIds = Object.keys(record.layout || {})
+          .filter((k) => k.startsWith('drive:'))
+          .map((k) => k.slice(6).trim())
+          .filter(Boolean);
+        for (const driveId of layoutDriveIds) {
+          const item = items.find((i) => String(i.driveId || '').trim() === driveId);
+          if (item) {
+            const merged = [...new Set([...(item.sharedWith || []), ...addedEmails])];
+            await setItemSharedWith(item.id, item.idbStore, merged);
+            continue;
+          }
+          const ch = (channels || []).find((c) => String(c.driveId || '').trim() === driveId);
+          if (ch) {
+            const merged = [...new Set([...(ch.sharedWith || []), ...addedEmails])];
+            await setItemSharedWith(ch.id, 'channels', merged);
+          }
+        }
+      }
+    }
+
     const recordDriveId = String(record?.driveId || '').trim();
     if (!recordDriveId) {
       console.warn('[InfoDepo] Share updated locally, but Drive authorization skipped because this record has no driveId yet. Upload it to Google Drive first.', {
@@ -363,6 +416,7 @@ export const Library = ({
             ownerEmail: normalizedUserEmail,
             items: mergedItems,
             channels: channels || [],
+            desks: desks || [],
           });
           console.log('[InfoDepo] Owner index updated after sharedWith change.');
         } catch (idxErr) {
@@ -467,9 +521,13 @@ export const Library = ({
           getChannelByDriveId,
           upsertDriveChannel: (driveFile, channelData) =>
             upsertDriveChannel(driveFile, channelData, { silent: true }),
+          getDeskByDriveId,
+          upsertDriveDesk: (driveFile, deskData) =>
+            upsertDriveDesk(driveFile, deskData, { silent: true }),
           getLocalRecordsByOwnerEmail,
           deleteItemByDriveId,
           deleteChannelByDriveId,
+          deleteDeskByDriveId,
           onProgress: setSyncProgress,
         });
         if (cancelled) return;
@@ -571,6 +629,10 @@ export const Library = ({
         getPdfAnnotationSidecar,
         setPdfAnnotationDriveSync,
         upsertDrivePdfAnnotation,
+        mergeItemSharedWithByDriveId,
+        mergeChannelSharedWithByDriveId,
+        mergeDeskSharedWithByDriveId,
+        deleteDeskByDriveId,
       });
       console.log('[InfoDepo] ownerSync result:', combined);
       loadAll();
@@ -606,9 +668,13 @@ export const Library = ({
         getChannelByDriveId,
         upsertDriveChannel: (driveFile, channelData) =>
           upsertDriveChannel(driveFile, channelData, { silent: true }),
+        getDeskByDriveId,
+        upsertDriveDesk: (driveFile, deskData) =>
+          upsertDriveDesk(driveFile, deskData, { silent: true }),
         getLocalRecordsByOwnerEmail,
         deleteItemByDriveId,
         deleteChannelByDriveId,
+        deleteDeskByDriveId,
         onProgress: setSyncProgress,
       });
       loadAll();
@@ -673,7 +739,11 @@ export const Library = ({
 
 
   const filteredItems = useMemo(() => items.filter(item => {
-    if (activeFilters.size > 0 && !activeFilters.has(item.idbStore)) return false;
+    if (item.name === '_infodepo_index.json') return false;
+    if (activeFilters.size > 0) {
+      const effectiveKey = item.type === 'application/x-url' ? 'url' : item.idbStore;
+      if (!activeFilters.has(effectiveKey)) return false;
+    }
     if (query && !matchesNameOrTags(item.name, item.tags)) return false;
     return true;
   }), [items, activeFilters, query]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -934,6 +1004,7 @@ export const Library = ({
               { key: 'books',    label: 'Books',    activeClass: 'bg-indigo-600 border-indigo-500 text-white' },
               { key: 'notes',    label: 'Notes',    activeClass: 'bg-emerald-600 border-emerald-500 text-white' },
               { key: 'videos',   label: 'Videos',   activeClass: 'bg-red-600 border-red-500 text-white' },
+              { key: 'url',      label: 'URLs',     activeClass: 'bg-cyan-700 border-cyan-600 text-white' },
               { key: 'channels', label: 'Channels', activeClass: 'bg-red-900 border-red-800 text-white' },
               { key: 'desks',    label: 'Desks',    activeClass: 'bg-violet-700 border-violet-600 text-white' },
             ].map(({ key, label, activeClass }) =>
@@ -1004,11 +1075,12 @@ export const Library = ({
         'div',
         { className: 'flex items-center gap-1.5 flex-wrap mt-1.5' },
         [...activeFilters].map((key) => {
-          const labels = { books: 'Books', notes: 'Notes', videos: 'Videos', channels: 'Channels', desks: 'Desks' };
+          const labels = { books: 'Books', notes: 'Notes', videos: 'Videos', url: 'URLs', channels: 'Channels', desks: 'Desks' };
           const colors = {
             books: 'bg-indigo-900/50 text-indigo-300 border-indigo-700/50',
             notes: 'bg-emerald-900/50 text-emerald-300 border-emerald-700/50',
             videos: 'bg-red-900/50 text-red-300 border-red-700/50',
+            url: 'bg-cyan-900/50 text-cyan-300 border-cyan-700/50',
             channels: 'bg-red-900/60 text-red-200 border-red-800/50',
             desks: 'bg-violet-900/50 text-violet-300 border-violet-700/50',
           };
@@ -1076,7 +1148,7 @@ export const Library = ({
                   onDelete: handleDeleteItemRequest,
                   onUpload: handleUpload,
                   onSetNoteCoverImage: onSetNoteCoverImage
-                    ? (v, file) => onSetNoteCoverImage(v.id, file)
+                    ? (v, file) => onSetNoteCoverImage(v.id, file, v.idbStore)
                     : undefined,
                   uploadStatus: uploadStatuses[libraryItemKey(video)] ?? null,
                   readOnly: !isEditor,
@@ -1109,13 +1181,20 @@ export const Library = ({
               }
               if (row.kind === 'desk') {
                 const d = row.data;
-                return React.createElement(DeskTile, {
+                return React.createElement(DataTile, {
                   key: `desk-${d.id}`,
+                  tileType: 'desk',
                   desk: d,
                   onSelect: onSelectDesk,
                   onDelete: isEditor && onRequestDeleteDesk ? handleDeleteDeskRequest : undefined,
                   onRename: isEditor ? (desk, name) => renameItem(desk.id, 'desks', name) : undefined,
                   readOnly: !isEditor,
+                  canShare: isEditor && canEditShareForRecord(d),
+                  shareableEmails: shareableUserEmails,
+                  onSetSharedWith: isEditor ? (desk, emails) => handleSetSharedWith(desk, 'desks', emails) : undefined,
+                  onSetCoverImage: isEditor && onSetNoteCoverImage
+                    ? (desk, file) => onSetNoteCoverImage(desk.id, file, 'desks')
+                    : undefined,
                 });
               }
               return null;

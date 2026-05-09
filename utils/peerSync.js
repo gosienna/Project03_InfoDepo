@@ -17,9 +17,12 @@ export async function syncSharedFromPeers({
   upsertDriveBook,
   getChannelByDriveId,
   upsertDriveChannel,
+  getDeskByDriveId,
+  upsertDriveDesk,
   getLocalRecordsByOwnerEmail,
   deleteItemByDriveId,
   deleteChannelByDriveId,
+  deleteDeskByDriveId,
   onProgress,
 }) {
   const progress = onProgress || (() => {});
@@ -30,8 +33,27 @@ export async function syncSharedFromPeers({
   const peers = listPeerUsers(me, config);
   if (!peers.length) return counts;
 
+  const truncate = (str, max = 28) => {
+    const s = String(str || '');
+    return s.length <= max ? s : s.slice(0, max - 1) + '…';
+  };
+  const shortEmail = (email) => {
+    const at = String(email || '').indexOf('@');
+    return at > 0 ? String(email).slice(0, at) : String(email || '');
+  };
+
+  const sameEmailSet = (a = [], b = []) => {
+    const norm = (arr) =>
+      [...new Set((arr || []).map((e) => String(e || '').trim().toLowerCase()).filter(Boolean))].sort();
+    const sa = norm(a);
+    const sb = norm(b);
+    if (sa.length !== sb.length) return false;
+    for (let i = 0; i < sa.length; i++) if (sa[i] !== sb[i]) return false;
+    return true;
+  };
+
   for (const peer of peers) {
-    progress(`Checking shared content from ${peer.email}…`);
+    progress(`Fetching index from ${shortEmail(peer.email)}…`);
     console.log('[InfoDepo][peerSync] checking owner index', {
       peerEmail: peer.email,
       peerRole: peer.role,
@@ -65,15 +87,36 @@ export async function syncSharedFromPeers({
     const sharedDriveIds = new Set(
       sharedWithMe.map((entry) => String(entry.driveId || '').trim()).filter(Boolean)
     );
+    const total = sharedWithMe.length;
     console.log('[InfoDepo][peerSync] owner index loaded', {
       peerEmail: peer.email,
       totalItemsInIndex: index.items.length,
-      sharedWithMeCount: sharedWithMe.length,
+      sharedWithMeCount: total,
       me,
     });
+
     if (getLocalRecordsByOwnerEmail && deleteItemByDriveId && deleteChannelByDriveId) {
       try {
         const localOwned = await getLocalRecordsByOwnerEmail(peer.email);
+        let toRemove = 0;
+        for (const localItem of localOwned.items || []) {
+          const localDriveId = String(localItem?.driveId || '').trim();
+          if (!localDriveId || sharedDriveIds.has(localDriveId)) continue;
+          toRemove++;
+        }
+        for (const localChannel of localOwned.channels || []) {
+          const localDriveId = String(localChannel?.driveId || '').trim();
+          if (!localDriveId || sharedDriveIds.has(localDriveId)) continue;
+          toRemove++;
+        }
+        for (const localDesk of localOwned.desks || []) {
+          const localDriveId = String(localDesk?.driveId || '').trim();
+          if (!localDriveId || sharedDriveIds.has(localDriveId)) continue;
+          toRemove++;
+        }
+        if (toRemove > 0) {
+          progress(`Removing ${toRemove} item${toRemove !== 1 ? 's' : ''} no longer shared by ${shortEmail(peer.email)}…`);
+        }
         for (const localItem of localOwned.items || []) {
           const localDriveId = String(localItem?.driveId || '').trim();
           if (!localDriveId || sharedDriveIds.has(localDriveId)) continue;
@@ -86,6 +129,14 @@ export async function syncSharedFromPeers({
           const removed = await deleteChannelByDriveId(localDriveId);
           if (removed) counts.removed++;
         }
+        for (const localDesk of localOwned.desks || []) {
+          const localDriveId = String(localDesk?.driveId || '').trim();
+          if (!localDriveId || sharedDriveIds.has(localDriveId)) continue;
+          if (deleteDeskByDriveId) {
+            const removed = await deleteDeskByDriveId(localDriveId);
+            if (removed) counts.removed++;
+          }
+        }
       } catch (pruneErr) {
         console.warn('[InfoDepo][peerSync] prune removed-share records failed', {
           peerEmail: peer.email,
@@ -94,21 +145,14 @@ export async function syncSharedFromPeers({
       }
     }
 
+    let itemIdx = 0;
     for (const entry of sharedWithMe) {
+      itemIdx++;
       const driveId = String(entry.driveId || '').trim();
       if (!driveId) continue;
       const normalizedSharedWith = Array.isArray(entry.sharedWith)
         ? entry.sharedWith.map((e) => String(e || '').trim().toLowerCase()).filter(Boolean)
         : [];
-      const sameEmailSet = (a = [], b = []) => {
-        const sa = [...new Set((a || []).map((e) => String(e || '').trim().toLowerCase()).filter(Boolean))].sort();
-        const sb = [...new Set((b || []).map((e) => String(e || '').trim().toLowerCase()).filter(Boolean))].sort();
-        if (sa.length !== sb.length) return false;
-        for (let i = 0; i < sa.length; i++) {
-          if (sa[i] !== sb[i]) return false;
-        }
-        return true;
-      };
 
       try {
         const metaRes = await fetch(
@@ -138,7 +182,7 @@ export async function syncSharedFromPeers({
             : true;
           if (existing && !driveIsNewer && !sharedWithChanged) { counts.skipped++; continue; }
 
-          progress(`Downloading ${entry.name} from ${peer.email}…`);
+          progress(`(${itemIdx}/${total}) Channel: ${truncate(entry.name)}`);
           const blobRes = await fetch(
             `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media`,
             { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -162,6 +206,39 @@ export async function syncSharedFromPeers({
           continue;
         }
 
+        if (entry.type === 'infodepo-desk' && upsertDriveDesk) {
+          const existing = getDeskByDriveId ? await getDeskByDriveId(driveId) : undefined;
+          const driveIsNewer = existing
+            ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
+            : true;
+          const sharedWithChanged = existing
+            ? !sameEmailSet(existing.sharedWith, normalizedSharedWith)
+            : true;
+          if (existing && !driveIsNewer && !sharedWithChanged) { counts.skipped++; continue; }
+
+          progress(`(${itemIdx}/${total}) Desk: ${truncate(entry.name)}`);
+          const blobRes = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+          if (!blobRes.ok) { counts.failed++; continue; }
+          try {
+            const parsed = JSON.parse(await blobRes.text());
+            if (parsed._type === 'infodepo-desk') {
+              const { _type, ...deskData } = parsed;
+              deskData.ownerEmail = peer.email;
+              deskData.sharedWith = normalizedSharedWith;
+              const action = await upsertDriveDesk(driveFile, deskData, { silent: true });
+              if (action === 'added') counts.added++;
+              else if (action === 'updated') counts.updated++;
+              else counts.skipped++;
+              continue;
+            }
+          } catch { /* fall through */ }
+          counts.skipped++;
+          continue;
+        }
+
         const existing = await getBookByDriveId(driveId);
         const driveIsNewer = existing
           ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
@@ -171,7 +248,7 @@ export async function syncSharedFromPeers({
           : true;
         if (existing && !driveIsNewer && !sharedWithChanged) { counts.skipped++; continue; }
 
-        progress(`Downloading ${entry.name} from ${peer.email}…`);
+        progress(`(${itemIdx}/${total}) Downloading: ${truncate(entry.name)}`);
         const blobRes = await fetch(
           `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media`,
           { headers: { Authorization: `Bearer ${accessToken}` } }

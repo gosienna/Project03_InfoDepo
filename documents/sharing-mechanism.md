@@ -54,6 +54,18 @@ Receivers discover shared content via peer folder indexes:
 
 This flow is implemented by `syncSharedFromPeers(...)`.
 
+## Desk auto-share
+
+When an item, channel, or nested desk is added to a desk canvas that already has `sharedWith` recipients, those recipients are automatically propagated to the newly added record:
+
+1. `addItemToDesk(key)` in `Desk.js` checks `desk.sharedWith` after committing the layout.
+2. It resolves the record via `resolveLayoutEntry(key, items, channels, desks)`.
+3. The desk's recipients are merged (deduped) into the record's existing `sharedWith`.
+4. `onSetSharedWith(record, storeName, merged)` is called only when new emails are actually added.
+5. For newly created nested desks (not yet in the `desks` state array), `handleCreateDesk` calls `onSetSharedWith({ id }, 'desks', deskRecipients)` directly after creation.
+
+This propagation uses the same `onSetSharedWith` path as manual sharing, so Drive ACL reconciliation follows the same rules.
+
 ## Files involved
 
 - `components/DataTile.js` - per-item/channel "Shared with" editor

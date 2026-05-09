@@ -79,6 +79,7 @@ async function deletePermission(accessToken, fileId, permissionId) {
  * @param {string} opts.accessToken
  * @param {Array} opts.items - library items with { driveId, sharedWith }
  * @param {Array} opts.channels - channels with { driveId, sharedWith }
+ * @param {Array} [opts.desks] - desks with { driveId, sharedWith }
  * @param {string} [opts.indexFileId] - Drive file ID of _infodepo_index.json
  * @param {object} [opts.previousIndex] - previous index JSON (for revoke universe)
  * @param {function} [opts.onProgress]
@@ -88,6 +89,7 @@ export async function applySharedWithToDriveFiles({
   accessToken,
   items,
   channels,
+  desks,
   indexFileId,
   previousIndex,
   onProgress,
@@ -123,6 +125,12 @@ export async function applySharedWithToDriveFiles({
     const did = String(ch.driveId || '').trim();
     if (did && Array.isArray(ch.sharedWith) && ch.sharedWith.length > 0) {
       addDesired(did, ch.sharedWith);
+    }
+  }
+  for (const dk of desks || []) {
+    const did = String(dk.driveId || '').trim();
+    if (did && Array.isArray(dk.sharedWith) && dk.sharedWith.length > 0) {
+      addDesired(did, dk.sharedWith);
     }
   }
 

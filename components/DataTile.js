@@ -92,10 +92,12 @@ export const DataTile = ({
   tileType,
   item,
   channel,
+  desk,
   onSelect,
   onDelete,
   onUpload,
   onSetNoteCoverImage,
+  onSetCoverImage,
   uploadStatus,
   onSetTags,
   onSetSharedWith,
@@ -106,16 +108,16 @@ export const DataTile = ({
   availableTags,
 }) => {
   const isChannel = tileType === 'channel';
+  const isDesk = tileType === 'desk';
   const video = item;
   const ch = channel;
-  const record = isChannel ? ch : video;
+  const record = isChannel ? ch : isDesk ? desk : video;
   const recordId = record?.id;
 
   const fileExtension = !isChannel && video?.name ? getFileExtension(video.name) : '';
   const isYoutube = !isChannel && video?.type === 'application/x-youtube';
   const isUrl = !isChannel && video?.type === 'application/x-url';
   const isBookTile = !isChannel && video?.idbStore === 'books' && !isUrl;
-  const isMarkdownNote = !isChannel && video?.idbStore === 'notes';
   const isPdfBook =
     isBookTile &&
     (video?.type === 'application/pdf' || (typeof video?.name === 'string' && /\.pdf$/i.test(video.name)));
@@ -302,19 +304,13 @@ export const DataTile = ({
   }, [isEditingName]);
 
   useEffect(() => {
-    if (!isMarkdownNote || !video?.coverImage?.data) {
-      setNoteCoverUrl(null);
-      return () => {};
-    }
-    const blob = video.coverImage.data;
-    if (!(blob instanceof Blob)) {
-      setNoteCoverUrl(null);
-      return () => {};
-    }
+    if (isChannel) { setNoteCoverUrl(null); return () => {}; }
+    const blob = isDesk ? desk?.coverImage?.data : video?.coverImage?.data;
+    if (!blob || !(blob instanceof Blob)) { setNoteCoverUrl(null); return () => {}; }
     const objectUrl = URL.createObjectURL(blob);
     setNoteCoverUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
-  }, [isMarkdownNote, video?.id, video?.coverImage?.data]);
+  }, [isChannel, isDesk, desk?.id, desk?.coverImage?.data, video?.id, video?.coverImage?.data]);
 
   const tagSubject = () => record;
 
@@ -369,7 +365,7 @@ export const DataTile = ({
     await onSetSharedWith(record, sharedWith.filter((x) => x !== email));
   };
 
-  const renameTarget = isChannel ? ch : video;
+  const renameTarget = isDesk ? desk : isChannel ? ch : video;
 
   const beginRename = (e) => {
     e.stopPropagation();
@@ -548,29 +544,25 @@ export const DataTile = ({
           )
         )
       ),
-      React.createElement(
-        'span',
-        { className: `inline-flex items-center min-w-0 ${addShareControlsHidden}` },
-        React.createElement(
-          'select',
-          {
-            id: `share-pick-${idPrefix}`,
-            key: `share-select-${idPrefix}-${sharedWith.join(',')}`,
-            value: '',
-            onChange: (e) => {
-              addSharedUserFromSelect(e).catch((err) => {
-                window.alert(err?.message || 'Could not update shared recipients.');
-              });
-            },
-            onClick: (e) => e.stopPropagation(),
-            title: 'Choose a user to share this item with',
-            className:
-              'min-w-[8rem] max-w-[16rem] bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200 cursor-pointer shrink-0',
-            'aria-label': 'Share with user',
+      shareSuggestions.length > 0 && React.createElement(
+        'select',
+        {
+          id: `share-pick-${idPrefix}`,
+          key: `share-select-${idPrefix}-${sharedWith.join(',')}`,
+          value: '',
+          onChange: (e) => {
+            addSharedUserFromSelect(e).catch((err) => {
+              window.alert(err?.message || 'Could not update shared recipients.');
+            });
           },
-          React.createElement('option', { value: '' }, shareSuggestions.length ? 'Share with…' : 'No users left'),
-          shareSuggestions.map((email) => React.createElement('option', { key: email, value: email }, email))
-        )
+          onClick: (e) => e.stopPropagation(),
+          title: 'Choose a user to share this item with',
+          className:
+            'min-w-[8rem] max-w-[16rem] bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200 cursor-pointer shrink-0',
+          'aria-label': 'Share with user',
+        },
+        React.createElement('option', { value: '' }, 'Share with…'),
+        shareSuggestions.map((email) => React.createElement('option', { key: email, value: email }, email))
       )
     );
 
@@ -769,6 +761,147 @@ export const DataTile = ({
     );
   }
 
+  if (isDesk) {
+    const handleDeskDelete = (e) => {
+      e.stopPropagation();
+      if (onDelete) onDelete(desk);
+    };
+
+    const handleDeskPickCover = (e) => {
+      e.stopPropagation();
+      noteCoverInputRef.current?.click();
+    };
+
+    const handleDeskCoverFileChange = async (e) => {
+      e.stopPropagation();
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file || !onSetCoverImage) return;
+      try { await onSetCoverImage(desk, file); }
+      catch (err) { window.alert(err?.message || 'Could not save cover image.'); }
+    };
+
+    const deskItemCount = Object.keys(desk?.layout || {}).length;
+
+    return React.createElement(
+      'div',
+      { className: DATA_TILE_SHELL, onClick: () => onSelect(desk) },
+      React.createElement(
+        'div',
+        { className: 'relative p-4 bg-gray-700 h-40 flex items-center justify-center overflow-hidden' },
+        noteCoverUrl
+          ? React.createElement('img', { src: noteCoverUrl, alt: desk.name, className: 'absolute inset-0 w-full h-full object-cover' })
+          : React.createElement(
+              React.Fragment, null,
+              React.createElement(
+                'svg',
+                { className: 'absolute inset-0 w-full h-full opacity-10', xmlns: 'http://www.w3.org/2000/svg' },
+                React.createElement('defs', null,
+                  React.createElement('pattern', { id: `grid-${desk.id}`, x: 0, y: 0, width: 20, height: 20, patternUnits: 'userSpaceOnUse' },
+                    React.createElement('circle', { cx: 0, cy: 0, r: 1, fill: '#818cf8' })
+                  )
+                ),
+                React.createElement('rect', { width: '100%', height: '100%', fill: `url(#grid-${desk.id})` })
+              ),
+              React.createElement(
+                'svg',
+                { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-indigo-400/70 group-hover:text-indigo-400 transition-colors duration-300', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 1.5, d: 'M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z' })
+              )
+            ),
+        React.createElement(
+          'span',
+          { className: 'absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded' },
+          'Desk'
+        ),
+        !readOnly && onDelete && React.createElement(
+          'button',
+          {
+            type: 'button',
+            onClick: handleDeskDelete,
+            className: 'absolute bottom-2 right-2 p-2 rounded-full bg-red-600/50 text-white opacity-0 group-hover:opacity-100 hover:bg-red-600 transition-all duration-300',
+            title: 'Remove desk',
+          },
+          React.createElement(TrashIcon, { className: 'h-4 w-4' })
+        )
+      ),
+      React.createElement(
+        'div',
+        { className: 'p-4' },
+        React.createElement(
+          'div',
+          { className: 'flex items-start gap-2', onClick: (e) => e.stopPropagation() },
+          isEditingName
+            ? React.createElement('input', {
+                ref: nameInputRef,
+                type: 'text',
+                value: nameInput,
+                onChange: (e) => setNameInput(e.target.value),
+                onClick: (e) => e.stopPropagation(),
+                onKeyDown: (e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); commitRename(e); }
+                  if (e.key === 'Escape') { e.preventDefault(); cancelRename(e); }
+                },
+                className: 'flex-1 min-w-0 bg-gray-900 border border-indigo-600/60 rounded px-2 py-1 text-sm text-gray-100',
+                placeholder: 'Desk name',
+                disabled: isSavingName,
+              })
+            : React.createElement('h3', { className: 'font-bold text-md text-gray-100 truncate flex-1 min-w-0', title: desk.name }, desk.name || 'Untitled Desk'),
+          !readOnly && onRename && React.createElement(
+            'div',
+            { className: 'shrink-0 flex items-center gap-1' },
+            isEditingName
+              ? React.createElement(
+                  React.Fragment, null,
+                  React.createElement('button', {
+                    type: 'button', onClick: commitRename,
+                    disabled: isSavingName || !String(nameInput || '').trim(),
+                    className: 'text-xs px-2 py-1 rounded bg-indigo-600/80 text-white hover:bg-indigo-600 disabled:opacity-50',
+                  }, isSavingName ? 'Saving…' : 'Save'),
+                  React.createElement('button', {
+                    type: 'button', onClick: cancelRename, disabled: isSavingName,
+                    className: 'text-xs px-2 py-1 rounded bg-gray-700 text-gray-200 hover:bg-gray-600',
+                  }, 'Cancel')
+                )
+              : React.createElement('button', {
+                  type: 'button', onClick: beginRename,
+                  className: 'text-xs px-2 py-1 rounded bg-gray-700/80 text-gray-200 hover:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity',
+                  title: 'Rename desk',
+                }, 'Rename')
+          )
+        ),
+        React.createElement(
+          'p',
+          { className: 'text-sm text-gray-400 mt-0.5' },
+          deskItemCount, ' ', deskItemCount === 1 ? 'item' : 'items'
+        ),
+        !readOnly && onSetCoverImage && React.createElement(
+          'div',
+          { className: 'mt-1', onClick: (e) => e.stopPropagation() },
+          React.createElement('input', {
+            ref: noteCoverInputRef,
+            type: 'file',
+            accept: 'image/*',
+            className: 'hidden',
+            onClick: (e) => e.stopPropagation(),
+            onChange: handleDeskCoverFileChange,
+          }),
+          React.createElement(
+            'button',
+            {
+              type: 'button',
+              onClick: handleDeskPickCover,
+              className: 'px-2 py-0.5 rounded bg-gray-700 text-xs text-gray-300 hover:bg-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-all',
+              title: noteCoverUrl ? 'Change cover image' : 'Set cover image',
+            },
+            noteCoverUrl ? 'Cover' : 'Set Cover'
+          )
+        ),
+        shareRow
+      )
+    );
+  }
+
   const handleDelete = (e) => {
     e.stopPropagation();
     if (!onDelete) return;
@@ -797,7 +930,14 @@ export const DataTile = ({
     }
   };
 
-  const thumbnailContent = isUrl
+  const thumbnailContent = noteCoverUrl
+    ? React.createElement('img', {
+        src: noteCoverUrl,
+        alt: `${video?.name || 'Item'} cover`,
+        className: 'w-full h-full object-cover',
+        loading: 'lazy',
+      })
+    : isUrl
     ? React.createElement(
         'div',
         { className: 'flex items-center justify-center w-full h-full' },
@@ -832,13 +972,6 @@ export const DataTile = ({
           className: 'w-full h-full object-cover',
           loading: 'lazy',
         })
-    : isMarkdownNote && noteCoverUrl
-      ? React.createElement('img', {
-          src: noteCoverUrl,
-          alt: `${video?.name || 'Note'} cover`,
-          className: 'w-full h-full object-cover',
-          loading: 'lazy',
-        })
       : React.createElement(BookIcon, {
           className: 'h-20 w-20 text-gray-500 group-hover:text-indigo-400 transition-colors duration-300',
         });
@@ -866,37 +999,7 @@ export const DataTile = ({
       ),
       React.createElement(
         'div',
-        { className: 'absolute bottom-2 left-2 flex items-center gap-1.5' },
-        !readOnly &&
-          isMarkdownNote &&
-          onSetNoteCoverImage &&
-          React.createElement(
-            React.Fragment,
-            null,
-            React.createElement('input', {
-              ref: noteCoverInputRef,
-              type: 'file',
-              accept: 'image/*',
-              className: 'hidden',
-              onClick: (e) => e.stopPropagation(),
-              onChange: handleNoteCoverFileChange,
-            }),
-            React.createElement(
-              'button',
-              {
-                type: 'button',
-                onClick: handlePickNoteCover,
-                className:
-                  'px-2 py-1 rounded bg-gray-900/70 text-xs text-gray-200 opacity-0 group-hover:opacity-100 hover:bg-gray-900 transition-all duration-300',
-                title: noteCoverUrl ? 'Change note cover image' : 'Add note cover image',
-              },
-              noteCoverUrl ? 'Cover' : 'Add Cover'
-            )
-          )
-      ),
-      React.createElement(
-        'div',
-        { className: 'absolute bottom-2 right-2 flex items-center gap-1.5' },
+        { className: 'absolute bottom-2 right-2 z-10 flex items-center gap-1.5' },
         !readOnly && onUpload && React.createElement(UploadButton, { status: uploadStatus, onClick: handleUpload }),
         !readOnly &&
           onDelete &&
@@ -1003,6 +1106,28 @@ export const DataTile = ({
               : ''
           )
         : React.createElement('p', { className: 'text-sm text-gray-400' }, formatBytes(video.size)),
+      !readOnly && onSetNoteCoverImage && React.createElement(
+        'div',
+        { className: 'mt-1', onClick: (e) => e.stopPropagation() },
+        React.createElement('input', {
+          ref: noteCoverInputRef,
+          type: 'file',
+          accept: 'image/*',
+          className: 'hidden',
+          onClick: (e) => e.stopPropagation(),
+          onChange: handleNoteCoverFileChange,
+        }),
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            onClick: handlePickNoteCover,
+            className: 'px-2 py-0.5 rounded bg-gray-700 text-xs text-gray-300 hover:bg-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-all',
+            title: noteCoverUrl ? 'Change cover image' : 'Set cover image',
+          },
+          noteCoverUrl ? 'Cover' : 'Set Cover'
+        )
+      ),
       tagRow,
       shareRow,
       (() => {

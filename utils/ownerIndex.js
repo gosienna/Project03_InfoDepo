@@ -10,7 +10,7 @@ const INDEX_FILENAME = '_infodepo_index.json';
  * Write (create or update) the owner's _infodepo_index.json in the linked folder.
  * Lists every item/channel that has a driveId, along with its sharedWith list.
  */
-export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items, channels }) {
+export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items, channels, desks }) {
   const entries = [];
   for (const item of items || []) {
     const did = String(item.driveId || '').trim();
@@ -32,6 +32,17 @@ export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items
       type: 'infodepo-channel',
       modifiedTime: ch.modifiedTime instanceof Date ? ch.modifiedTime.toISOString() : String(ch.modifiedTime || ''),
       sharedWith: Array.isArray(ch.sharedWith) ? ch.sharedWith : [],
+    });
+  }
+  for (const dk of desks || []) {
+    const did = String(dk.driveId || '').trim();
+    if (!did) continue;
+    entries.push({
+      driveId: did,
+      name: dk.name,
+      type: 'infodepo-desk',
+      modifiedTime: dk.modifiedTime instanceof Date ? dk.modifiedTime.toISOString() : String(dk.modifiedTime || ''),
+      sharedWith: Array.isArray(dk.sharedWith) ? dk.sharedWith : [],
     });
   }
 

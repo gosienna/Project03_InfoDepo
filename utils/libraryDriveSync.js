@@ -3,7 +3,7 @@
  */
 
 import { syncDriveToLocal, backupAllToGDrive } from './driveSync.js';
-import { writeOwnerIndex } from './ownerIndex.js';
+import { writeOwnerIndex, fetchOwnerIndex } from './ownerIndex.js';
 import { syncSharedFromPeers } from './peerSync.js';
 
 /**
@@ -39,10 +39,91 @@ export async function runOwnerSyncPipeline({
   getPdfAnnotationSidecar,
   setPdfAnnotationDriveSync,
   upsertDrivePdfAnnotation,
+  mergeItemSharedWithByDriveId,
+  mergeChannelSharedWithByDriveId,
+  mergeDeskSharedWithByDriveId,
+  deleteDeskByDriveId,
 }) {
+  // Step 1: fetch the current Drive index and merge any sharedWith differences into
+  // local IDB. This reconciles divergence when two browser sessions edit sharing
+  // independently. Drive index is authoritative; items not yet in the index are skipped.
+  let syncItems = items;
+  let syncChannels = channels;
+  let syncDesks = desks;
+  try {
+    onProgress?.('Merging sharedWith from Drive index…');
+    const driveIndex = await fetchOwnerIndex({ accessToken, folderId, expectedOwnerEmail: ownerEmail });
+    if (driveIndex && Array.isArray(driveIndex.items)) {
+      const normalizeList = (arr) =>
+        (Array.isArray(arr) ? arr : []).map((e) => String(e || '').trim().toLowerCase()).filter(Boolean).sort();
+
+      const itemByDriveId = new Map(
+        (items || []).filter((i) => i.driveId).map((i) => [String(i.driveId).trim(), i])
+      );
+      const channelByDriveId = new Map(
+        (channels || []).filter((c) => c.driveId).map((c) => [String(c.driveId).trim(), c])
+      );
+      const deskByDriveId = new Map(
+        (desks || []).filter((d) => d.driveId).map((d) => [String(d.driveId).trim(), d])
+      );
+
+      const patchedItems = new Map();
+      const patchedChannels = new Map();
+      const patchedDesks = new Map();
+
+      for (const entry of driveIndex.items) {
+        const driveId = String(entry.driveId || '').trim();
+        if (!driveId || !Array.isArray(entry.sharedWith)) continue;
+        const driveSharedWith = normalizeList(entry.sharedWith);
+
+        if (entry.type === 'infodepo-channel') {
+          const local = channelByDriveId.get(driveId);
+          if (!local) continue;
+          if (normalizeList(local.sharedWith).join(',') === driveSharedWith.join(',')) continue;
+          if (mergeChannelSharedWithByDriveId) await mergeChannelSharedWithByDriveId(driveId, entry.sharedWith);
+          patchedChannels.set(driveId, driveSharedWith);
+        } else if (entry.type === 'infodepo-desk') {
+          const local = deskByDriveId.get(driveId);
+          if (!local) continue;
+          if (normalizeList(local.sharedWith).join(',') === driveSharedWith.join(',')) continue;
+          if (mergeDeskSharedWithByDriveId) await mergeDeskSharedWithByDriveId(driveId, entry.sharedWith);
+          patchedDesks.set(driveId, driveSharedWith);
+        } else {
+          const local = itemByDriveId.get(driveId);
+          if (!local) continue;
+          if (normalizeList(local.sharedWith).join(',') === driveSharedWith.join(',')) continue;
+          if (mergeItemSharedWithByDriveId) await mergeItemSharedWithByDriveId(driveId, entry.sharedWith);
+          patchedItems.set(driveId, driveSharedWith);
+        }
+      }
+
+      if (patchedItems.size > 0) {
+        syncItems = (items || []).map((item) => {
+          const did = String(item.driveId || '').trim();
+          return patchedItems.has(did) ? { ...item, sharedWith: patchedItems.get(did) } : item;
+        });
+      }
+      if (patchedChannels.size > 0) {
+        syncChannels = (channels || []).map((ch) => {
+          const did = String(ch.driveId || '').trim();
+          return patchedChannels.has(did) ? { ...ch, sharedWith: patchedChannels.get(did) } : ch;
+        });
+      }
+      if (patchedDesks.size > 0) {
+        syncDesks = (desks || []).map((dk) => {
+          const did = String(dk.driveId || '').trim();
+          return patchedDesks.has(did) ? { ...dk, sharedWith: patchedDesks.get(did) } : dk;
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[libraryDriveSync] mergeOwnerIndex failed:', err);
+  }
+
+  // Step 2: write the owner index with the merged sharedWith state.
   try {
     onProgress?.('Writing owner index…');
-    await writeOwnerIndex({ accessToken, folderId, ownerEmail, items, channels });
+    await writeOwnerIndex({ accessToken, folderId, ownerEmail, items: syncItems, channels: syncChannels, desks: syncDesks });
   } catch (err) {
     console.warn('[libraryDriveSync] writeOwnerIndex failed:', err);
   }
@@ -50,8 +131,8 @@ export async function runOwnerSyncPipeline({
   const backupResult = await backupAllToGDrive({
     accessToken,
     folderId,
-    items,
-    channels,
+    items: syncItems,
+    channels: syncChannels,
     desks,
     onSetDriveId,
     onSetNoteFolderData,
@@ -90,9 +171,12 @@ export async function runOwnerSyncPipeline({
         upsertDriveBook,
         getChannelByDriveId,
         upsertDriveChannel,
+        getDeskByDriveId,
+        upsertDriveDesk,
         getLocalRecordsByOwnerEmail,
         deleteItemByDriveId,
         deleteChannelByDriveId,
+        deleteDeskByDriveId,
         onProgress,
       });
     } catch (err) {

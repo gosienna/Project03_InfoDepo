@@ -42,6 +42,10 @@ const App = () => {
     getDeskByDriveId, upsertDriveDesk,
     setRecordTags,
     setItemSharedWith,
+    mergeItemSharedWithByDriveId,
+    mergeChannelSharedWithByDriveId,
+    mergeDeskSharedWithByDriveId,
+    deleteDeskByDriveId,
     renameItem,
     setItemReadingPosition,
     getPdfAnnotationSidecar,
@@ -294,6 +298,10 @@ const App = () => {
     setCurrentDesk(newDesk);
     setMode('desk');
     setView('library');
+  };
+
+  const handleCreateDeskForLayout = async (name) => {
+    return await addDesk(name);
   };
 
   const inferStore = (name, type) => {
@@ -606,6 +614,10 @@ const App = () => {
           upsertDrivePdfAnnotation,
           setRecordTags,
           setItemSharedWith,
+          mergeItemSharedWithByDriveId,
+          mergeChannelSharedWithByDriveId,
+          mergeDeskSharedWithByDriveId,
+          deleteDeskByDriveId,
           renameItem,
           getMergedLibraryItems,
           getTotalStorageUsed,
@@ -660,7 +672,7 @@ const App = () => {
               shareableEmails: shareableUserEmails,
               onRenameItem: (rec, storeName, name) => renameItem(rec.id, storeName, name),
               onRenameChannel: (rec, storeName, name) => renameItem(rec.id, storeName, name),
-              onSetNoteCoverImage: (v, file) => setNoteCoverImage(v.id, file),
+              onSetNoteCoverImage: (v, file) => setNoteCoverImage(v.id, file, v.idbStore),
               readOnly: false,
               role: userType,
               onOpenNewNote: isEditor ? () => setIsNewNoteOpen(true) : undefined,
@@ -671,6 +683,7 @@ const App = () => {
               onSetItemDriveId: isEditor ? setItemDriveId : undefined,
               onRequestDeleteItem: isEditor ? handleRequestDeleteItem : undefined,
               onRequestDeleteChannel: isEditor ? handleRequestDeleteChannel : undefined,
+              onCreateDesk: isEditor ? handleCreateDeskForLayout : undefined,
             })
           : React.createElement(
               'div',

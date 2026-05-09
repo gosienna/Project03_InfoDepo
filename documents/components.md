@@ -53,11 +53,15 @@
 - Viewer peer sync also prunes revoked peer-owned content from local IndexedDB.
 - **System Settings modal** still rendered here (uses Library-local state for Drive folder, display policy, sign-out, clear). `isSystemSettingsOpen`/`setIsSystemSettingsOpen` are lifted to App and passed as props; the trigger button lives in `Header`. The modal is rendered via `ReactDOM.createPortal` into `document.body` so it appears above all views (library, desk, explorer) even when the Library container has `display: none`. z-index is `z-[110]` (above the header's `z-[100]`). The modal box is capped at `max-h-[90vh]` with the body section scrollable (`overflow-y-auto`).
 - **System Settings → Storage**: shows a progress bar of used vs. limit, and an input to adjust the GB cap (saved via `saveSyncSettings`).
-- **Search bar**: clicking the input opens a dropdown that contains type filter tabs (Books / Notes / Videos / Channels / Desks) at the top and text/tag suggestions below. Active filters appear as removable pills below the input when the dropdown is closed. The `×` button clears both query and all active filters.
+- **Search bar**: clicking the input opens a dropdown that contains type filter tabs (Books / Notes / Videos / **URLs** / Channels / Desks) at the top and text/tag suggestions below. Active filters appear as removable pills below the input when the dropdown is closed. The `×` button clears both query and all active filters. The **URLs** filter (`key: 'url'`) matches items with `type === 'application/x-url'`; selecting "Videos" excludes URL items so the two filters are independent.
 
 ### `DataTile.js`
 
-- Used for `tileType: 'item'` and `tileType: 'channel'`.
+- Unified tile component for `tileType: 'item'`, `tileType: 'channel'`, and `tileType: 'desk'`. `DeskTile.js` was merged into this component and removed.
+- **Item tiles**: thumbnail (PDF first page, EPUB cover, YouTube screenshot, or `BookIcon`); file size; tag editor; "Shared with" row; "Set Cover" button.
+- **Channel tiles**: YouTube screenshot hero; channel avatar overlay; video count; tag editor; "Shared with" row.
+- **Desk tiles**: dot-grid hero (or custom cover image); item count; inline rename; "Shared with" row; "Set Cover" button.
+- **Cover images**: all non-channel tile types support a custom cover image. The "Set Cover" / "Cover" button is hidden by default and appears on hover (`opacity-0 group-hover:opacity-100`). After a cover is saved, the custom image takes priority over any auto-generated thumbnail.
 - Includes tag editor and "Shared with" row when `canShare` is true.
 - Share recipient options come from `config.json` users map excluding current user.
 
@@ -66,26 +70,20 @@
 - Full-screen infinite canvas with dot-grid background.
 - Pan: middle-mouse drag or Space+left-drag (pointer capture for reliability).
 - Zoom: wheel event toward cursor.
-- Items are placed as `DataTile` (items/channels) or `DeskTile` (nested desks) with a drag handle bar. Clicking an item opens it; clicking a nested desk switches to that desk.
+- All canvas tiles (items, channels, and nested desks) are rendered as `DataTile` with the matching `tileType` prop. Each tile has a drag handle bar; clicking opens the item/channel or switches to the nested desk.
 - Layout stored in a ref during drag, committed to IndexedDB on drag-end to avoid excessive writes.
+- **Auto-share on add**: when `addItemToDesk(key)` is called and the current desk has `sharedWith` recipients, the newly added record is automatically merged with those recipients via `onSetSharedWith`. For newly created nested desks (which are not yet in the `desks` state array), `handleCreateDesk` calls `onSetSharedWith` directly with the known `id` after creation.
 - **Top-center title**: `DeskSelector` is rendered at `top: 16, left: 50%` as the desk title. Shows the current desk name in large bold text. When multiple desks exist a chevron appears and clicking opens a dropdown to switch desks. The dropdown has a search input at the top (auto-focused, filters by name, clears on close; Escape closes the dropdown) followed by a scrollable desk list. Each row has a pencil icon for inline rename (Enter/Escape/blur to commit/cancel). Blur is handled via `containerRef` so focus moving to the search input does not accidentally close the dropdown.
 - **Top-right toolbar** (editor/master only) contains two controls in a row:
   - **`InlineAddSearch`** (local component) — search input with floating dropdown. Type filter tabs (All / Books / Notes / Videos / Images / Channels / Desks) appear in the dropdown header. Text search matches both item names and tags. Matching tags appear as clickable suggestion pills; active tag filters shown as removable indigo pills. Results show up to 2 tag chips per row. Click a result to place it at the viewport center.
   - **`AddContentDropdown`** — creates new content; newly added items are auto-placed on the current desk by `addToDeskIfActive` in App.
-- Props: `{ desk, items, channels, desks, onSelectItem, onSelectChannel, onSelectDesk, onUpdateLayout, onRenameDesk, readOnly, onOpenNewNote, onOpenYoutube, onOpenChannel, onOpenFile }`
+- Props: `{ desk, items, channels, desks, onSelectItem, onSelectChannel, onSelectDesk, onUpdateLayout, onRenameDesk, onSetSharedWith, readOnly, role, onOpenNewNote, onOpenYoutube, onOpenChannel, onOpenFile, onCreateDesk }`
 
 ### `AddContentDropdown.js`
 
 - Reusable dropdown button used in both `Library` and `Desk`.
 - Props: `{ onNewNote, onAddYoutube, onAddChannel, onAddFile, onAddDesk? }`.
 - Manages its own open/closed state; each item closes the menu then calls the corresponding prop.
-
-### `DeskTile.js`
-
-- Library grid tile for a desk record (same visual shell as `DataTile`).
-- Shows SVG dot-grid hero, desk icon, item count, "Desk" badge, and inline rename.
-- Delete button visible on hover (non-readOnly only).
-- Props: `{ desk, onSelect, onDelete, onRename, readOnly }`
 
 ### `Reader.js`
 

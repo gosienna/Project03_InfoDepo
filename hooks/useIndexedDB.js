@@ -425,15 +425,16 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
-  const setNoteCoverImage = useCallback((noteId, file) => {
+  const setNoteCoverImage = useCallback((noteId, file, storeName) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     if (!file) return Promise.reject(new Error('No image selected'));
     if (!String(file.type || '').toLowerCase().startsWith('image/')) {
       return Promise.reject(new Error('Please choose an image file.'));
     }
+    const store = storeName || NOTES_STORE;
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(NOTES_STORE, 'readwrite');
-      const os = tx.objectStore(NOTES_STORE);
+      const tx = db.transaction(store, 'readwrite');
+      const os = tx.objectStore(store);
       const req = os.get(noteId);
       req.onsuccess = () => {
         const note = req.result;
@@ -452,14 +453,15 @@ export const useIndexedDB = () => {
           localModifiedAt: new Date(),
         });
         putReq.onsuccess = () => {
-          loadItems('setNoteCoverImage');
+          if (store === DESKS_STORE) loadDesks('setNoteCoverImage');
+          else loadItems('setNoteCoverImage');
           resolve();
         };
         putReq.onerror = (e) => reject(e.target.error);
       };
       req.onerror = (e) => reject(e.target.error);
     });
-  }, [db, loadItems]);
+  }, [db, loadItems, loadDesks]);
 
   // Read assets from note.assets; fall back to legacy images store for old records.
   const getImagesForNote = useCallback((noteId) => {
@@ -789,13 +791,13 @@ export const useIndexedDB = () => {
   }, [db, loadChannels]);
 
   const getLocalRecordsByOwnerEmail = useCallback((ownerEmail) => {
-    if (!db) return Promise.resolve({ items: [], channels: [] });
+    if (!db) return Promise.resolve({ items: [], channels: [], desks: [] });
     const normalizedOwnerEmail = String(ownerEmail || '').trim().toLowerCase();
-    if (!normalizedOwnerEmail) return Promise.resolve({ items: [], channels: [] });
+    if (!normalizedOwnerEmail) return Promise.resolve({ items: [], channels: [], desks: [] });
     return new Promise((resolve, reject) => {
       let tx;
       try {
-        tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, CHANNELS_STORE], 'readonly');
+        tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, CHANNELS_STORE, DESKS_STORE], 'readonly');
       } catch (err) {
         reject(err);
         return;
@@ -804,7 +806,8 @@ export const useIndexedDB = () => {
       let notes = [];
       let videos = [];
       let channelsRows = [];
-      let remaining = 4;
+      let desksRows = [];
+      let remaining = 5;
       const finish = () => {
         remaining--;
         if (remaining > 0) return;
@@ -813,6 +816,7 @@ export const useIndexedDB = () => {
         resolve({
           items: [...books, ...notes, ...videos].filter(byOwner),
           channels: channelsRows.filter(byOwner),
+          desks: desksRows.filter(byOwner),
         });
       };
       const bReq = tx.objectStore(BOOKS_STORE).getAll();
@@ -827,6 +831,9 @@ export const useIndexedDB = () => {
       const cReq = tx.objectStore(CHANNELS_STORE).getAll();
       cReq.onsuccess = (e) => { channelsRows = e.target.result || []; finish(); };
       cReq.onerror = () => finish();
+      const dReq = tx.objectStore(DESKS_STORE).getAll();
+      dReq.onsuccess = (e) => { desksRows = e.target.result || []; finish(); };
+      dReq.onerror = () => finish();
     });
   }, [db]);
 
@@ -862,6 +869,7 @@ export const useIndexedDB = () => {
   const upsertDriveBook = useCallback(async (driveFile, blob, assets, { silent = false } = {}) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     if (!blob) return Promise.resolve('skipped'); // no-blob stubs no longer supported
+    if (driveFile.name === '_infodepo_index.json') return Promise.resolve('skipped');
     let existing = await getBookByDriveId(driveFile.driveId);
     if (!existing) existing = await getBookByName(driveFile.name);
 
@@ -1234,6 +1242,7 @@ export const useIndexedDB = () => {
         const putReq = os.put({ ...existing, sharedWith, localModifiedAt: new Date() });
         putReq.onsuccess = () => {
           if (storeName === CHANNELS_STORE) loadChannels('setItemSharedWith');
+          else if (storeName === DESKS_STORE) loadDesks('setItemSharedWith');
           else if (storeName !== IMAGES_STORE) loadItems('setItemSharedWith');
           resolve();
         };
@@ -1242,6 +1251,83 @@ export const useIndexedDB = () => {
       getReq.onerror = () => reject(getReq.error);
     });
   }, [db, loadItems, loadChannels]);
+
+  // Updates sharedWith on an item/channel by driveId without touching localModifiedAt,
+  // so the record is not marked dirty for backup. Used to pull Drive-authoritative
+  // sharedWith state into local IDB when two browser sessions diverge.
+  const mergeItemSharedWithByDriveId = useCallback(async (driveId, emails) => {
+    if (!db) return false;
+    const existing = await getBookByDriveId(driveId);
+    if (!existing) return false;
+    const sharedWith = (emails || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean);
+    const storeName = storeForType(existing.type);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, 'readwrite');
+      const os = tx.objectStore(storeName);
+      const getReq = os.get(existing.id);
+      getReq.onsuccess = () => {
+        const rec = getReq.result;
+        if (!rec) { resolve(false); return; }
+        const putReq = os.put({ ...rec, sharedWith });
+        putReq.onsuccess = () => resolve(true);
+        putReq.onerror = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  }, [db, getBookByDriveId]);
+
+  const mergeChannelSharedWithByDriveId = useCallback(async (driveId, emails) => {
+    if (!db) return false;
+    const existing = await getChannelByDriveId(driveId);
+    if (!existing) return false;
+    const sharedWith = (emails || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(CHANNELS_STORE, 'readwrite');
+      const os = tx.objectStore(CHANNELS_STORE);
+      const getReq = os.get(existing.id);
+      getReq.onsuccess = () => {
+        const rec = getReq.result;
+        if (!rec) { resolve(false); return; }
+        const putReq = os.put({ ...rec, sharedWith });
+        putReq.onsuccess = () => resolve(true);
+        putReq.onerror = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  }, [db, getChannelByDriveId]);
+
+  const mergeDeskSharedWithByDriveId = useCallback(async (driveId, emails) => {
+    if (!db) return false;
+    const existing = await getDeskByDriveId(driveId);
+    if (!existing) return false;
+    const sharedWith = (emails || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(DESKS_STORE, 'readwrite');
+      const os = tx.objectStore(DESKS_STORE);
+      const getReq = os.get(existing.id);
+      getReq.onsuccess = () => {
+        const rec = getReq.result;
+        if (!rec) { resolve(false); return; }
+        const putReq = os.put({ ...rec, sharedWith });
+        putReq.onsuccess = () => resolve(true);
+        putReq.onerror = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  }, [db, getDeskByDriveId]);
+
+  const deleteDeskByDriveId = useCallback(async (driveId) => {
+    const normalizedDriveId = String(driveId || '').trim();
+    if (!db || !normalizedDriveId) return false;
+    const existing = await getDeskByDriveId(normalizedDriveId);
+    if (!existing) return false;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(DESKS_STORE, 'readwrite');
+      const req = tx.objectStore(DESKS_STORE).delete(existing.id);
+      req.onsuccess = () => { loadDesks('deleteDeskByDriveId'); resolve(true); };
+      req.onerror = (e) => reject(e.target.error);
+    });
+  }, [db, getDeskByDriveId, loadDesks]);
 
   const renameItem = useCallback((id, storeName, nextName) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
@@ -1598,6 +1684,10 @@ export const useIndexedDB = () => {
     getDeskByDriveId, upsertDriveDesk,
     setRecordTags,
     setItemSharedWith,
+    mergeItemSharedWithByDriveId,
+    mergeChannelSharedWithByDriveId,
+    mergeDeskSharedWithByDriveId,
+    deleteDeskByDriveId,
     renameItem,
     setItemReadingPosition,
     getPdfAnnotationSidecar,

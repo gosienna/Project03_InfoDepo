@@ -13,9 +13,10 @@
       "dependencies": [
         "npm:@playwright/test@^1.58.2",
         "npm:@vitejs/plugin-react@5",
-        "npm:epubjs@~0.3.88",
+        "npm:foliate-js@^1.0.1",
+        "npm:jszip@^3.10.1",
         "npm:pdf-lib@^1.17.1",
-        "npm:pdfjs-dist@^4.10.38",
+        "npm:pdfjs-dist@4.10.38",
         "npm:react-dom@18.3.1",
         "npm:react@18.3.1",
         "npm:vite@^6.2.0"

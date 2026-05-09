@@ -8,7 +8,7 @@ Current IndexedDB database: `InfoDepo`, schema version `8`.
 |------|---------|
 | `books` | EPUB/PDF/TXT content |
 | `notes` | Markdown notes (with optional inline `assets`) |
-| `videos` | YouTube link records (`application/x-youtube`) |
+| `videos` | YouTube link records (`application/x-youtube`) and web URL bookmarks (`application/x-url`) |
 | `images` | legacy note images (new notes prefer `note.assets`) |
 | `channels` | YouTube channel records |
 | `desks` | Infinite-canvas layout records |
@@ -63,7 +63,16 @@ Additional fields:
 }
 ```
 
-Layout key format: `"books:N"` | `"notes:N"` | `"videos:N"` | `"channel:N"` | `"desk:N"` where `N` is the IndexedDB record id.
+Layout key format (canonical, from `utils/deskEntryKeys.js`):
+
+| Prefix | Meaning |
+|--------|---------|
+| `drive:{driveId}` | Any item/channel/desk that has a Drive file ID — the primary stable key |
+| `local:{store}:{id}` | Item or channel without a Drive ID yet (pending upload) |
+| `channel:{id}` | Legacy channel key (still resolved for backward compatibility) |
+| `desk:{id}` | Nested desk without a Drive backup (local IndexedDB id only) |
+
+The helper `resolveLayoutEntry(key, items, channels, desks)` converts any key variant to the matching library record. `migrateDeskDataKeys` rewrites stale/legacy keys to canonical `drive:` keys when a record gains a Drive ID.
 
 ## Key indexes
 

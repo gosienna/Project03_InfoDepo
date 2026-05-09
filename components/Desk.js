@@ -1,7 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { DataTile } from './DataTile.js';
-import { DeskTile } from './DeskTile.js';
 import { AddContentDropdown } from './AddContentDropdown.js';
 import { normalizeTag } from '../utils/tagUtils.js';
 import { useDriveTileUpload, channelUploadKey } from '../hooks/useDriveTileUpload.js';
@@ -693,6 +692,7 @@ export const Desk = ({
   onSetItemDriveId,
   onRequestDeleteItem,
   onRequestDeleteChannel,
+  onCreateDesk,
 }) => {
   const { uploadStatuses, handleUpload, handleChannelUpload } = useDriveTileUpload({
     onSetDriveId: onSetItemDriveId || (async () => {}),
@@ -1193,7 +1193,37 @@ export const Desk = ({
     const offset = Object.keys(layoutRef.current).length * 20;
     const newLayout = { ...layoutRef.current, [key]: { x: snapToGrid(centerX - CARD_W / 2 + offset % 200), y: snapToGrid(centerY - 150 + offset % 100) } };
     commitLayout(newLayout);
-  }, [commitLayout]);
+
+    // Propagate desk's sharedWith to the newly added record
+    const deskRecipients = Array.isArray(desk?.sharedWith) ? desk.sharedWith : [];
+    if (deskRecipients.length > 0 && onSetSharedWith) {
+      const entry = resolveLayoutEntry(key, items, channels, desks);
+      if (entry?._entryType && entry._entryType !== 'pending') {
+        const storeName =
+          entry._entryType === 'channel' ? 'channels'
+          : entry._entryType === 'desk' ? 'desks'
+          : (entry.idbStore || 'books');
+        const current = Array.isArray(entry.sharedWith) ? entry.sharedWith : [];
+        const merged = [...new Set([...current, ...deskRecipients])];
+        if (merged.length > current.length) {
+          onSetSharedWith(entry, storeName, merged).catch((e) => console.warn('[InfoDepo] auto-share on desk add failed:', e));
+        }
+      }
+    }
+  }, [commitLayout, desk, items, channels, desks, onSetSharedWith]);
+
+  const handleCreateDesk = useCallback(async () => {
+    if (!onCreateDesk) return;
+    const id = await onCreateDesk('New Desk');
+    if (id == null) return;
+    addItemToDesk(deskEntryKey({ id }));
+    // The new desk isn't in state yet when addItemToDesk runs resolveLayoutEntry,
+    // so propagate desk recipients directly using the known id.
+    const deskRecipients = Array.isArray(desk?.sharedWith) ? desk.sharedWith : [];
+    if (deskRecipients.length > 0 && onSetSharedWith) {
+      onSetSharedWith({ id }, 'desks', deskRecipients).catch((e) => console.warn('[InfoDepo] auto-share new nested desk failed:', e));
+    }
+  }, [onCreateDesk, addItemToDesk, desk, onSetSharedWith]);
 
   // --- Remove item from desk ---
   const removeFromDesk = useCallback((key) => {
@@ -1777,7 +1807,7 @@ export const Desk = ({
                   onRename: onRenameChannel ? (c, name) => onRenameChannel(c, 'channels', name) : undefined,
                   availableTags,
                 })
-              : React.createElement(DeskTile, { desk: entry, onSelect: onSelectDesk, readOnly: true })
+              : React.createElement(DataTile, { tileType: 'desk', desk: entry, onSelect: onSelectDesk, readOnly: true })
           )
         )
       ),
@@ -2071,12 +2101,13 @@ export const Desk = ({
         ),
         'Text'
       ),
-      role !== 'viewer' && (onOpenNewNote || onOpenFile) && React.createElement(AddContentDropdown, {
+      role !== 'viewer' && (onOpenNewNote || onOpenFile || onCreateDesk) && React.createElement(AddContentDropdown, {
         onNewNote: onOpenNewNote,
         onAddYoutube: onOpenYoutube,
         onAddChannel: onOpenChannel,
         onAddFile: onOpenFile,
         onAddUrl: onOpenUrl,
+        onAddDesk: onCreateDesk ? handleCreateDesk : undefined,
       })
     ),
     // Slash menu ("/" at mouse location)
