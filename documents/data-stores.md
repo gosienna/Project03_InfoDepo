@@ -6,7 +6,7 @@ Current IndexedDB database: `InfoDepo`, schema version `8`.
 
 | Store | Purpose |
 |------|---------|
-| `books` | EPUB/PDF/TXT content |
+| `books` | EPUB/PDF/TXT content and **standalone images** (`type.startsWith('image/')`) |
 | `notes` | Markdown notes (with optional inline `assets`) |
 | `videos` | YouTube link records (`application/x-youtube`) and web URL bookmarks (`application/x-url`) |
 | `images` | legacy note images (new notes prefer `note.assets`) |
@@ -24,18 +24,24 @@ For `books`/`notes`/`videos`/`images` (and channel-compatible subset):
 {
   id,
   name,
-  data,             // Blob | null (null when evicted by LRU quota enforcement)
+  data,               // Blob | null — null in two cases:
+                      //   1. Lazily synced from Drive (not yet downloaded; driveId is set)
+                      //   2. Evicted by LRU quota enforcement (driveId may or may not be set)
   type,
-  size,             // bytes; set to 0 after eviction
+  size,               // bytes; Drive file size when lazily synced; 0 after LRU eviction
   driveId,
   modifiedTime,
   localModifiedAt,
-  lastVisitedAt,    // Date | null — updated each time the item is opened in Reader
+  lastVisitedAt,      // Date | null — updated each time the item is opened in Reader
   tags,
-  sharedWith,       // string[]
-  ownerEmail        // string
+  sharedWith,         // string[]
+  ownerEmail,         // string
+  coverImage,         // { name, type, data: Blob } | undefined — custom cover blob
+  coverImageDriveId,  // string | undefined — Drive file ID of cover sidecar; null = needs re-upload
 }
 ```
+
+**Standalone images** (`type.startsWith('image/')`) are stored in the `books` store with no special schema. They render their `data` blob as a tile thumbnail and show a teal "Image" badge. The Library filter key `'images'` matches them independently of the `'books'` filter.
 
 `lastVisitedAt` is set to the current time when an item is first imported (`addItem`) and updated each time the user opens it. Items that have never been opened have `lastVisitedAt: null`, which sorts them as oldest for LRU eviction purposes.
 
@@ -138,6 +144,8 @@ saveSyncSettings({ maxStorageGB })
 5. Null out `data` and set `size = 0` one record at a time until total drops below the limit.
 6. Call `loadAll()` to refresh the UI.
 
-Evicted items remain visible in the library grid (metadata preserved) but cannot be opened — their blob data has been cleared. Re-syncing from Drive restores the content.
+Evicted items remain visible in the library grid (metadata preserved) but cannot be opened — their blob data has been cleared. Re-syncing from Drive (or clicking the tile to trigger lazy download) restores the content.
+
+**Distinguishing lazy vs. evicted**: both states have `data: null`. A lazily-synced item has `size > 0` (Drive file size was stored at sync time); an evicted item has `size = 0`. `DataTile` shows a cloud icon for any item with `data === null && driveId`, regardless of which cause.
 
 **User-facing controls:** System Settings → **Storage** section shows a progress bar and allows adjusting the GB limit.

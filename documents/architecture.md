@@ -12,8 +12,9 @@ User
       │    ├── Desk (infinite canvas for item layout)
       │    ├── Reader (PDF/TXT/MD/YouTube — inline)
       │    └── Explorer (web page → markdown note)
-      ├── EPUB reader tab — reader.html   ← new tab, opened for EPUB/MOBI/AZW
-      └── IndexedDB (InfoDepo, v9)        ← shared by both tabs
+      ├── EPUB reader tab — reader.html      ← new tab, EPUB/MOBI/AZW; lazy blob download
+      ├── PDF reader tab  — pdf-reader.html  ← new tab, PDF; lazy blob download
+      └── IndexedDB (InfoDepo, v9)           ← shared by all tabs
 ```
 
 ## Current component map
@@ -88,6 +89,8 @@ Users create named desks that hold a `layout` map of item positions (`{ [key]: {
 
 **Auto-share on add**: when any item, channel, or nested desk is added to the canvas and the current desk has `sharedWith` recipients set, those recipients are automatically merged into the newly added record's `sharedWith`. For records resolvable via `resolveLayoutEntry` this happens in `addItemToDesk`; for newly created nested desks (not yet in state) it is handled separately in `handleCreateDesk`.
 
+**Cover image picker**: Desk receives `libraryImages` (standalone image items from `App.js`). Hovering any item tile reveals a "From Library" button that opens `CoverImagePickerModal` via local `coverPickerTarget` state.
+
 ### Viewer sync
 
 `syncSharedFromPeers`:
@@ -95,7 +98,8 @@ Users create named desks that hold a `layout` map of item positions (`{ [key]: {
 2. fetch each peer `_infodepo_index.json`
 3. keep entries shared with current user
 4. prune locally cached peer-owned rows not in current shared set
-5. upsert remaining downloadable items/channels
+5. upsert remaining items/channels — binary books as metadata-only (`lazyBooks: true`), JSON eagerly
+6. for each item with `coverImageDriveId` in the index entry, download and store the cover sidecar (always eager)
 
 ## Storage quota
 
@@ -103,23 +107,28 @@ A 500 GB default quota is enforced client-side via LRU eviction. When total `siz
 
 The limit is persisted in `localStorage` (`infodepo_sync_settings`) and is adjustable in System Settings → **Storage**. See [data-stores.md](data-stores.md) for full eviction details.
 
+## IndexedDB connection lifecycle
+
+`useIndexedDB` opens one `IDBDatabase` connection per app session. An `onversionchange` handler closes the connection and sets `db` to null when another tab (or a code upgrade) opens a higher schema version. This prevents `InvalidStateError` from mid-transaction force-closes. All IDB callbacks wrap `db.transaction()` in a `try/catch` so a closing connection during a long async operation (e.g. peer sync) degrades gracefully instead of throwing.
+
 ## Key files
 
 | File | Purpose |
 |------|---------|
 | `App.js` | startup gates, role resolution, main routing, visit tracking, eviction trigger, add-content modal state, `addToDeskIfActive` |
-| `hooks/useIndexedDB.js` | IndexedDB CRUD, sync helpers, storage quota (`touchItemVisit`, `getTotalStorageUsed`, `evictLeastRecentlyVisited`, `checkAndEvict`) |
+| `hooks/useIndexedDB.js` | IndexedDB CRUD, sync helpers, storage quota (`touchItemVisit`, `getTotalStorageUsed`, `evictLeastRecentlyVisited`, `checkAndEvict`); `setCoverImageDriveSync`, `upsertDriveCoverImage` |
 | `components/Library.js` | sync UI, tile actions, share ACL/update orchestration, storage settings UI, system settings modal |
 | `components/AddContentDropdown.js` | reusable "+ Add Content" dropdown used in Library and Desk |
 | `utils/syncSettings.js` | storage limit persistence (`maxStorageGB`, default 500) |
 | `utils/driveSync.js` | backup + folder pull engine |
 | `utils/libraryDriveSync.js` | owner sync orchestration |
-| `utils/ownerIndex.js` | read/write `_infodepo_index.json` |
-| `utils/peerSync.js` | peer discovery + viewer download/prune |
-| `utils/driveSharePermissions.js` | apply/revoke Drive reader permissions |
+| `utils/ownerIndex.js` | read/write `_infodepo_index.json`; includes `coverImageDriveId` in entries |
+| `utils/peerSync.js` | peer discovery + viewer download/prune; downloads cover sidecars |
+| `utils/driveSharePermissions.js` | apply/revoke Drive reader permissions; grants access to `coverImageDriveId` files |
 | `utils/userConfig.js` | parse config users map and role/folder helpers |
 | `components/Desk.js` | infinite-canvas component (pan/zoom, drag, add/remove items, auto-share on add) |
-| `components/DataTile.js` | unified tile for items, channels, and desks (`tileType` prop) |
+| `components/DataTile.js` | unified tile for items, channels, and desks (`tileType` prop); standalone image thumbnails; "From Library" cover picker button |
+| `components/CoverImagePickerModal.js` | portal modal for selecting a cover from the image library |
 
 ## Current config.json shape
 

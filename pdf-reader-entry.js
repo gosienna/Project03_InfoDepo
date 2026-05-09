@@ -5,6 +5,9 @@ import React, { useEffect, useState, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
 import { PdfViewer } from './components/PdfViewer.js';
 import { INFO_DEPO_DB_NAME, INFO_DEPO_DB_VERSION } from './utils/infodepoDb.js';
+import { getDriveCredentials } from './utils/driveCredentials.js';
+import { getStoredAccessToken } from './utils/driveOAuthStorage.js';
+import { OWNER_DRIVE_SCOPE } from './utils/driveScopes.js';
 
 const PDF_ANNOTATIONS_STORE = 'pdfAnnotations';
 const pdfAnnotationSidecarKey = (itemId, idbStore) => `${idbStore}:${itemId}`;
@@ -84,6 +87,87 @@ async function materializeBlob(blob) {
   return new Blob([ab], { type: blob.type || 'application/pdf' });
 }
 
+/** Fetch a Drive file and report byte-level progress. Returns a Blob. */
+async function fetchWithProgress(url, headers, fallbackSize, onProgress, cancelledFn) {
+  const r = await fetch(url, { headers });
+  if (!r.ok) throw new Error(`Download failed: ${r.status} ${r.statusText}`);
+  const contentLength = parseInt(r.headers.get('content-length') || '0') || fallbackSize || 0;
+  const reader = r.body.getReader();
+  const chunks = [];
+  let loaded = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (cancelledFn()) { reader.cancel(); return null; }
+    chunks.push(value);
+    loaded += value.length;
+    onProgress(loaded, contentLength);
+  }
+  const mimeType = r.headers.get('content-type') || 'application/pdf';
+  return new Blob(chunks, { type: mimeType });
+}
+
+const fmtBytes = (b) => {
+  if (b >= 1073741824) return `${(b / 1073741824).toFixed(1)} GB`;
+  if (b >= 1048576) return `${(b / 1048576).toFixed(1)} MB`;
+  if (b >= 1024) return `${Math.round(b / 1024)} KB`;
+  return `${b} B`;
+};
+
+function DownloadProgress({ name, loaded, total }) {
+  const pct = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+  const known = total > 0;
+
+  return React.createElement(
+    'div',
+    { className: 'flex flex-col items-center justify-center h-full gap-6 px-10 bg-gray-900' },
+    React.createElement(
+      'p',
+      { className: 'text-gray-200 text-sm font-medium text-center max-w-xs leading-snug', style: { wordBreak: 'break-word' } },
+      name || 'Loading…'
+    ),
+    React.createElement(
+      'div',
+      { className: 'w-72 flex flex-col gap-2' },
+      React.createElement(
+        'div',
+        { className: 'flex justify-between text-xs' },
+        React.createElement('span', { className: 'text-gray-400' },
+          known ? `${fmtBytes(loaded)} / ${fmtBytes(total)}` : (loaded > 0 ? fmtBytes(loaded) : '')
+        ),
+        React.createElement('span', { className: 'text-indigo-400 font-semibold tabular-nums' },
+          known ? `${pct}%` : ''
+        ),
+      ),
+      React.createElement(
+        'div',
+        { className: 'h-1.5 rounded-full bg-gray-700 overflow-hidden' },
+        React.createElement('div', {
+          className: known ? 'h-full rounded-full bg-indigo-500' : 'h-full rounded-full bg-indigo-500 animate-pulse',
+          style: { width: known ? `${pct}%` : '40%', transition: 'width 120ms ease-out' },
+        }),
+      ),
+    ),
+    React.createElement('p', { className: 'text-gray-500 text-xs tracking-wide' }, 'Downloading from Google Drive…'),
+  );
+}
+
+async function saveBlobToIdb(db, id, storeName, blob) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    const os = tx.objectStore(storeName);
+    const getReq = os.get(id);
+    getReq.onsuccess = () => {
+      const record = getReq.result;
+      if (!record) { resolve(); return; }
+      const putReq = os.put({ ...record, data: blob, size: blob.size });
+      putReq.onsuccess = () => resolve();
+      putReq.onerror = (e) => reject(e.target.error);
+    };
+    getReq.onerror = (e) => reject(e.target.error);
+  });
+}
+
 function saveReadingPosition(db, id, storeName, position) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readwrite');
@@ -105,6 +189,10 @@ function PdfReaderApp() {
   const [annotations, setAnnotations] = useState(null); // null = loading
   const [db, setDb] = useState(null);
   const [error, setError] = useState(null);
+  const [downloading, setDownloading] = useState(false);
+  const [bookName, setBookName] = useState('');
+  const [dlLoaded, setDlLoaded] = useState(0);
+  const [dlTotal, setDlTotal] = useState(0);
 
   const params = new URLSearchParams(window.location.search);
   const rawId = params.get('id');
@@ -130,9 +218,39 @@ function PdfReaderApp() {
 
         document.title = (foundItem.name || 'PDF Reader') + ' — InfoDepo';
 
+        let resolvedData = foundItem.data;
+
+        if (!resolvedData && foundItem.driveId) {
+          const { clientId } = getDriveCredentials();
+          const token = clientId ? getStoredAccessToken(clientId, OWNER_DRIVE_SCOPE) : null;
+          if (!token) {
+            setError('PDF not yet downloaded. Return to the library tab and click the book to fetch it.');
+            return;
+          }
+          setBookName(foundItem.name || '');
+          setDownloading(true);
+          let blob;
+          try {
+            blob = await fetchWithProgress(
+              `https://www.googleapis.com/drive/v3/files/${foundItem.driveId}?alt=media`,
+              { Authorization: `Bearer ${token}` },
+              foundItem.size || 0,
+              (loaded, total) => {
+                setDlLoaded(loaded);
+                setDlTotal(total);
+              },
+              () => cancelled,
+            );
+          } finally {}
+          if (cancelled || !blob) return;
+          await saveBlobToIdb(database, itemId, storeName, blob);
+          resolvedData = blob;
+          if (!cancelled) setDownloading(false);
+        }
+
         // Materialize IDB blob into memory immediately — iOS Safari IDB blobs reference
         // temporary backing files that become unreadable after the transaction closes.
-        const materializedData = await materializeBlob(foundItem.data);
+        const materializedData = await materializeBlob(resolvedData);
         if (cancelled) return;
 
         let anns = [];
@@ -151,7 +269,10 @@ function PdfReaderApp() {
           setAnnotations(anns);
         }
       } catch (err) {
-        if (!cancelled) setError(err?.message || String(err));
+        if (!cancelled) {
+          setError(err?.message || String(err));
+          setDownloading(false);
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -174,6 +295,10 @@ function PdfReaderApp() {
       React.createElement('p', { className: 'text-red-400 text-sm max-w-sm' }, error),
       React.createElement('a', { href: '/', className: 'text-indigo-400 text-sm underline' }, '← Back to library'),
     );
+  }
+
+  if (downloading) {
+    return React.createElement(DownloadProgress, { name: bookName, loaded: dlLoaded, total: dlTotal });
   }
 
   if (!item || annotations === null) {

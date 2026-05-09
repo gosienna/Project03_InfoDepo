@@ -17,10 +17,10 @@ AZW (KFX format / DRM) cannot be opened — foliate-js throws `UnsupportedTypeEr
 
 ## Architecture
 
-Clicking an EPUB/MOBI/AZW/AZW3 tile in the library calls `window.open('/reader.html?id=X&store=Y', '_blank')` from `App.js`'s `openVideo()`. The new tab is a standalone React app (`reader-entry.js`) that reads the book from the same IndexedDB database and renders `FoliateViewer` directly.
+Clicking an EPUB/MOBI/AZW/AZW3 tile in the library calls `window.open('/reader.html?id=X&store=Y', '_blank')` from `App.js`'s `openItem()`. The new tab is a standalone React app (`reader-entry.js`) that reads the book from the same IndexedDB database and renders `FoliateViewer` directly.
 
 ```
-App.js (openVideo)
+App.js (openItem)
   └── window.open('/reader.html?id=X&store=Y')
         └── reader-entry.js          ← standalone React entry
               └── FoliateViewer.js
@@ -178,7 +178,7 @@ foliate-js deliberately uses `sandbox="allow-same-origin allow-scripts"` on its 
 
 ## File Type Routing
 
-`App.js` `openVideo()` decides routing:
+`App.js` `openItem()` decides routing:
 
 ```
 epub / mobi / azw / azw3  →  window.open('/reader.html?id=X&store=Y', '_blank')

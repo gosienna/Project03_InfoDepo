@@ -107,6 +107,7 @@ export const DataTile = ({
   onRename,
   readOnly,
   availableTags,
+  itemDownloadProgress,
 }) => {
   const isChannel = tileType === 'channel';
   const isDesk = tileType === 'desk';
@@ -114,6 +115,8 @@ export const DataTile = ({
   const ch = channel;
   const record = isChannel ? ch : isDesk ? desk : video;
   const recordId = record?.id;
+  const dlBlobKey = !isChannel && !isDesk ? (video?.id ?? video?.driveId) : null;
+  const dlProgress = dlBlobKey != null ? (itemDownloadProgress?.[dlBlobKey] ?? null) : null;
 
   const fileExtension = !isChannel && video?.name ? getFileExtension(video.name) : '';
   const isYoutube = !isChannel && video?.type === 'application/x-youtube';
@@ -1028,6 +1031,73 @@ export const DataTile = ({
                 : 'absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded',
         },
         isYoutube ? 'YouTube' : isUrl ? 'URL' : isStandaloneImage ? 'Image' : fileExtension.toUpperCase()
+      ),
+      !isChannel && !isDesk && !video.data && video.driveId && (
+        dlProgress
+          ? React.createElement(
+              'div',
+              { className: 'absolute inset-x-0 bottom-0 z-10 bg-gray-900/85 px-3 pt-2 pb-2.5 flex flex-col gap-1.5' },
+              React.createElement(
+                'div',
+                { className: 'flex justify-between items-center text-xs' },
+                React.createElement(
+                  'span',
+                  { className: 'text-gray-300 truncate' },
+                  dlProgress.total > 0
+                    ? `${formatBytes(dlProgress.loaded, 1)} / ${formatBytes(dlProgress.total, 1)}`
+                    : (dlProgress.loaded > 0 ? formatBytes(dlProgress.loaded, 1) : 'Downloading…')
+                ),
+                React.createElement(
+                  'span',
+                  { className: 'text-indigo-400 font-semibold tabular-nums ml-2 shrink-0' },
+                  dlProgress.total > 0
+                    ? `${Math.min(100, Math.round((dlProgress.loaded / dlProgress.total) * 100))}%`
+                    : ''
+                ),
+              ),
+              React.createElement(
+                'div',
+                { className: 'h-1 rounded-full bg-gray-600 overflow-hidden' },
+                React.createElement('div', {
+                  className: dlProgress.total > 0
+                    ? 'h-full rounded-full bg-indigo-500'
+                    : 'h-full rounded-full bg-indigo-500 animate-pulse',
+                  style: {
+                    width: dlProgress.total > 0
+                      ? `${Math.min(100, Math.round((dlProgress.loaded / dlProgress.total) * 100))}%`
+                      : '40%',
+                    transition: 'width 120ms ease-out',
+                  },
+                }),
+              ),
+            )
+          : React.createElement(
+              'div',
+              { className: 'absolute bottom-2 left-2 z-10' },
+              React.createElement(
+                'svg',
+                {
+                  xmlns: 'http://www.w3.org/2000/svg',
+                  className: 'h-5 w-5 text-gray-300/80',
+                  fill: 'none',
+                  viewBox: '0 0 24 24',
+                  stroke: 'currentColor',
+                  title: 'Not downloaded — click to fetch',
+                },
+                React.createElement('path', {
+                  strokeLinecap: 'round',
+                  strokeLinejoin: 'round',
+                  strokeWidth: 1.5,
+                  d: 'M3 15a4 4 0 004 4h10a4 4 0 001.8-7.6A7 7 0 105.4 11.6 4 4 0 003 15z',
+                }),
+                React.createElement('path', {
+                  strokeLinecap: 'round',
+                  strokeLinejoin: 'round',
+                  strokeWidth: 1.5,
+                  d: 'M12 12v6m0 0l-2-2m2 2l2-2',
+                })
+              )
+            )
       ),
       React.createElement(
         'div',

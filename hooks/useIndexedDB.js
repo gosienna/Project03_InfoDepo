@@ -25,6 +25,7 @@ const isNoteType = (type) =>
 const storeForType = (type) => {
   if (isYoutubeType(type)) return VIDEOS_STORE;
   if (isNoteType(type)) return NOTES_STORE;
+  if (String(type || '').trim().toLowerCase().startsWith('image/')) return IMAGES_STORE;
   return BOOKS_STORE;
 };
 
@@ -41,6 +42,7 @@ const storeForNewItem = (name, type) => {
   if (MARKDOWN_FILE_RE.test(n)) return NOTES_STORE;
   if (isNoteType(type)) return NOTES_STORE;
   if (mime === 'text/x-markdown' || mime === 'text/md') return NOTES_STORE;
+  if (mime.startsWith('image/')) return IMAGES_STORE;
   return BOOKS_STORE;
 };
 
@@ -106,6 +108,15 @@ export const useIndexedDB = () => {
           ')'
         );
       }
+      // Another tab opened a higher DB version — close gracefully and let the
+      // upgrade proceed. The page will reinitialize on the next user interaction
+      // or on reload. Without this handler the browser force-closes the
+      // connection mid-transaction, producing InvalidStateError.
+      database.onversionchange = () => {
+        database.close();
+        setDb(null);
+        console.warn('[InfoDepo] Database version change — connection closed. Reload the tab to reconnect.');
+      };
       setDb(database);
       setIsInitialized(true);
     };
@@ -168,7 +179,7 @@ export const useIndexedDB = () => {
     if (!db) return;
     let tx;
     try {
-      tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE], 'readonly');
+      tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, IMAGES_STORE], 'readonly');
     } catch (err) {
       console.error('IndexedDB transaction failed (missing store or closed DB):', err);
       setItems([]);
@@ -177,7 +188,8 @@ export const useIndexedDB = () => {
     let books = [];
     let notes = [];
     let videos = [];
-    let remaining = 3;
+    let images = [];
+    let remaining = 4;
 
     const tryCombine = () => {
       remaining--;
@@ -191,10 +203,11 @@ export const useIndexedDB = () => {
         ...books.map((r) => withTags(r, BOOKS_STORE)),
         ...notes.map((r) => withTags(r, NOTES_STORE)),
         ...videos.map((r) => withTags(r, VIDEOS_STORE)),
+        ...images.map((r) => withTags(r, IMAGES_STORE)),
       ].sort((a, b) => modifiedTimeSortKey(b) - modifiedTimeSortKey(a));
       if (import.meta.env.DEV) {
         console.info(
-          `[InfoDepo] ${location.origin} — DB rows: books=${books.length} notes=${notes.length} videos=${videos.length} → library UI: ${merged.length}`
+          `[InfoDepo] ${location.origin} — DB rows: books=${books.length} notes=${notes.length} videos=${videos.length} images=${images.length} → library UI: ${merged.length}`
         );
       }
       setItems(merged);
@@ -211,6 +224,10 @@ export const useIndexedDB = () => {
     const videosReq = tx.objectStore(VIDEOS_STORE).getAll();
     videosReq.onsuccess = (e) => { videos = e.target.result; tryCombine(); };
     videosReq.onerror   = (e) => { console.error('Error loading videos:', e.target.error); tryCombine(); };
+
+    const imagesReq = tx.objectStore(IMAGES_STORE).getAll();
+    imagesReq.onsuccess = (e) => { images = e.target.result; tryCombine(); };
+    imagesReq.onerror   = (e) => { console.error('Error loading images:', e.target.error); tryCombine(); };
   }, [db]);
 
   const loadChannels = useCallback((caller = 'unknown') => {
@@ -258,12 +275,14 @@ export const useIndexedDB = () => {
       readStore(VIDEOS_STORE),
       readStore(CHANNELS_STORE),
       readStore(DESKS_STORE),
-    ]).then(([books, notes, videos, chans, desksRows]) => {
+      readStore(IMAGES_STORE),
+    ]).then(([books, notes, videos, chans, desksRows, images]) => {
       const withTags = (r, store) => ({ ...r, idbStore: store, tags: Array.isArray(r.tags) ? r.tags : [] });
       const merged = [
         ...books.map((r) => withTags(r, BOOKS_STORE)),
         ...notes.map((r) => withTags(r, NOTES_STORE)),
         ...videos.map((r) => withTags(r, VIDEOS_STORE)),
+        ...(images || []).map((r) => withTags(r, IMAGES_STORE)),
       ].sort((a, b) => modifiedTimeSortKey(b) - modifiedTimeSortKey(a));
       const sortedChans = chans
         .map((r) => ({ ...r, tags: Array.isArray(r.tags) ? r.tags : [] }))
@@ -282,13 +301,13 @@ export const useIndexedDB = () => {
     if (isInitialized) loadAll();
   }, [isInitialized, loadAll]);
 
-  /** Merged books + notes + videos for Drive share ACL resolution (same shape as Library `items`). */
+  /** Merged books + notes + videos + images for Drive share ACL resolution (same shape as Library `items`). */
   const getMergedLibraryItems = useCallback(() => {
     if (!db) return Promise.resolve([]);
     return new Promise((resolve) => {
       let tx;
       try {
-        tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE], 'readonly');
+        tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, IMAGES_STORE], 'readonly');
       } catch {
         resolve([]);
         return;
@@ -296,7 +315,8 @@ export const useIndexedDB = () => {
       let books = [];
       let notes = [];
       let videos = [];
-      let remaining = 3;
+      let images = [];
+      let remaining = 4;
       const finish = () => {
         remaining--;
         if (remaining > 0) return;
@@ -309,6 +329,7 @@ export const useIndexedDB = () => {
           ...books.map((r) => withTags(r, BOOKS_STORE)),
           ...notes.map((r) => withTags(r, NOTES_STORE)),
           ...videos.map((r) => withTags(r, VIDEOS_STORE)),
+          ...images.map((r) => withTags(r, IMAGES_STORE)),
         ].sort((a, b) => modifiedTimeSortKey(b) - modifiedTimeSortKey(a));
         resolve(merged);
       };
@@ -321,6 +342,9 @@ export const useIndexedDB = () => {
       const vq = tx.objectStore(VIDEOS_STORE).getAll();
       vq.onsuccess = (e) => { videos = e.target.result; finish(); };
       vq.onerror = () => finish();
+      const iq = tx.objectStore(IMAGES_STORE).getAll();
+      iq.onsuccess = (e) => { images = e.target.result; finish(); };
+      iq.onerror = () => finish();
     });
   }, [db]);
 
@@ -742,7 +766,9 @@ export const useIndexedDB = () => {
   const getBookByDriveId = useCallback((driveId) => {
     if (!db || !driveId) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
-      const tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE], 'readonly');
+      let tx;
+      try { tx = db.transaction([BOOKS_STORE, NOTES_STORE, VIDEOS_STORE], 'readonly'); }
+      catch { resolve(undefined); return; }
       let pending = 3;
       let bHit, nHit, vHit;
       const finish = () => { pending--; if (pending === 0) resolve(bHit || nHit || vHit); };
@@ -771,7 +797,9 @@ export const useIndexedDB = () => {
     const normalizedDriveId = String(driveId || '').trim();
     if (!db || !normalizedDriveId) return Promise.resolve(false);
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(CHANNELS_STORE, 'readwrite');
+      let tx;
+      try { tx = db.transaction(CHANNELS_STORE, 'readwrite'); }
+      catch { resolve(false); return; }
       const os = tx.objectStore(CHANNELS_STORE);
       const req = os.getAll();
       req.onsuccess = () => {
@@ -869,7 +897,6 @@ export const useIndexedDB = () => {
   // driveFile may carry driveFolderId for note bundles synced from Drive subfolders.
   const upsertDriveBook = useCallback(async (driveFile, blob, assets, { silent = false } = {}) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
-    if (!blob) return Promise.resolve('skipped'); // no-blob stubs no longer supported
     if (driveFile.name === '_infodepo_index.json') return Promise.resolve('skipped');
     let existing = await getBookByDriveId(driveFile.driveId);
     if (!existing) existing = await getBookByName(driveFile.name);
@@ -894,7 +921,8 @@ export const useIndexedDB = () => {
           driveId: driveFile.driveId,
           modifiedTime: mt,
           localModifiedAt: mt,
-          data: blob, size: blob.size,
+          data: blob !== null ? blob : (existing.data ?? null),
+          size: blob !== null ? blob.size : (existing.size ?? driveFile.size ?? 0),
           tags: Array.isArray(existing.tags) ? existing.tags : [],
           sharedWith: nextSharedWith ?? (Array.isArray(existing.sharedWith) ? existing.sharedWith : []),
           ...(driveFile.ownerEmail ? { ownerEmail: driveFile.ownerEmail } : {}),
@@ -912,7 +940,8 @@ export const useIndexedDB = () => {
           : [];
         const record = {
           name: driveFile.name, type: driveFile.mimeType,
-          data: blob, size: blob.size,
+          data: blob ?? null,
+          size: blob?.size ?? (driveFile.size || 0),
           driveId: driveFile.driveId,
           modifiedTime: mtNew,
           localModifiedAt: mtNew,
@@ -929,6 +958,23 @@ export const useIndexedDB = () => {
       }
     });
   }, [db, loadItems, getBookByDriveId, getBookByName]);
+
+  const updateBookBlob = useCallback(async (id, blob, storeName) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, 'readwrite');
+      const os = tx.objectStore(storeName);
+      const getReq = os.get(id);
+      getReq.onsuccess = () => {
+        const record = getReq.result;
+        if (!record) { reject(new Error('Record not found')); return; }
+        const putReq = os.put({ ...record, data: blob, size: blob.size });
+        putReq.onsuccess = () => { loadItems('updateBookBlob'); resolve(); };
+        putReq.onerror = (e) => reject(e.target.error);
+      };
+      getReq.onerror = (e) => reject(e.target.error);
+    });
+  }, [db, loadItems]);
 
   // --- Channel operations ---
 
@@ -1006,7 +1052,9 @@ export const useIndexedDB = () => {
   const getChannelByDriveId = useCallback((driveId) => {
     if (!db || !driveId) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(CHANNELS_STORE, 'readonly');
+      let tx;
+      try { tx = db.transaction(CHANNELS_STORE, 'readonly'); }
+      catch { resolve(undefined); return; }
       const req = tx.objectStore(CHANNELS_STORE).getAll();
       req.onsuccess = (e) => resolve(e.target.result.find(c => c.driveId === driveId));
       req.onerror = (e) => reject(e.target.error);
@@ -1733,7 +1781,7 @@ export const useIndexedDB = () => {
     setItemDriveId, setNoteFolderData,
     addChannel, deleteChannel, updateChannel,
     getChannelByDriveId, upsertDriveChannel,
-    getBookByDriveId, getBookByName, upsertDriveBook,
+    getBookByDriveId, getBookByName, upsertDriveBook, updateBookBlob,
     deleteItemByDriveId, deleteChannelByDriveId,
     getLocalRecordsByOwnerEmail,
     addDesk, deleteDesk, setDeskLayout, setDeskConnections, setDeskTextItems,

@@ -17,6 +17,23 @@ import { getDriveFolderId } from './utils/driveFolderStorage.js';
 import { DeleteContentModal } from './components/DeleteContentModal.js';
 import { getOwnerDriveAccessToken } from './utils/driveAccessToken.js';
 import { deleteDriveFilesForChannel, deleteDriveFilesForDesk, deleteDriveFilesForMergedItem } from './utils/deleteLibraryContentOnDrive.js';
+
+async function fetchWithProgress(url, headers, fallbackSize, onProgress) {
+  const r = await fetch(url, { headers });
+  if (!r.ok) throw new Error(`Download failed: ${r.status} ${r.statusText}`);
+  const contentLength = parseInt(r.headers.get('content-length') || '0') || fallbackSize || 0;
+  const reader = r.body.getReader();
+  const chunks = [];
+  let loaded = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.length;
+    onProgress(loaded, contentLength);
+  }
+  return new Blob(chunks, { type: r.headers.get('content-type') || 'application/octet-stream' });
+}
 import { fetchUserConfig, resolveUserType } from './utils/userConfig.js';
 import { listAllUserEmails } from './utils/userConfig.js';
 import { clearAllStoredAccessTokens } from './utils/driveOAuthStorage.js';
@@ -26,6 +43,7 @@ import { NewNoteModal } from './components/NewNoteModal.js';
 import { NewYoutubeModal } from './components/NewYoutubeModal.js';
 import { NewChannelModal } from './components/NewChannelModal.js';
 import { NewUrlModal } from './components/NewUrlModal.js';
+import { ImageEditor } from './components/ImageEditor.js';
 
 const App = () => {
   const {
@@ -36,7 +54,7 @@ const App = () => {
     setItemDriveId, setNoteFolderData,
     addChannel, deleteChannel, updateChannel,
     getChannelByDriveId, upsertDriveChannel,
-    getBookByDriveId, getBookByName, upsertDriveBook,
+    getBookByDriveId, getBookByName, upsertDriveBook, updateBookBlob,
     deleteItemByDriveId, deleteChannelByDriveId, getLocalRecordsByOwnerEmail,
     addDesk, deleteDesk, setDeskLayout, setDeskConnections, setDeskTextItems,
     getDeskByDriveId, upsertDriveDesk,
@@ -87,8 +105,28 @@ const App = () => {
   const [isYoutubeOpen, setIsYoutubeOpen] = useState(false);
   const [isChannelOpen, setIsChannelOpen] = useState(false);
   const [isUrlOpen, setIsUrlOpen] = useState(false);
+  const [editingImageItem, setEditingImageItem] = useState(null);
+  const [editingImageSrc, setEditingImageSrc] = useState('');
+  const [itemDownloadProgress, setItemDownloadProgress] = useState({});
+  // Ref holds live progress — mutated directly on every chunk, no React batching involved.
+  // A requestAnimationFrame loop commits the ref to state at ~60fps.
+  const progressRef = useRef({});
+  const progressRafRef = useRef(null);
   const fileInputRef = useRef(null);
   const imageInputRef = useRef(null);
+
+  const startProgressRaf = useCallback(() => {
+    if (progressRafRef.current !== null) return;
+    const tick = () => {
+      setItemDownloadProgress({ ...progressRef.current });
+      if (Object.keys(progressRef.current).length > 0) {
+        progressRafRef.current = requestAnimationFrame(tick);
+      } else {
+        progressRafRef.current = null;
+      }
+    };
+    progressRafRef.current = requestAnimationFrame(tick);
+  }, []);
 
   const recheckDriveOAuthGate = useCallback(() => {
     setLoginGateActive(needsGoogleSignIn());
@@ -221,9 +259,105 @@ const App = () => {
     });
   }, [isInitialized]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const openVideo = (video) => {
+  // Refresh items when the tab regains focus so blob downloads that happened in
+  // reader tabs (lazy loading) are reflected and the cloud icon clears.
+  useEffect(() => {
+    const handleVisibility = () => { if (!document.hidden) loadItems('tab-focus'); };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [loadItems]);
+
+
+  const startProgress = (blobKey, size) => {
+    progressRef.current[blobKey] = { loaded: 0, total: size || 0 };
+    setItemDownloadProgress({ ...progressRef.current });
+    startProgressRaf();
+  };
+  const updateProgress = (blobKey, loaded, total) => {
+    progressRef.current[blobKey] = { loaded, total };
+  };
+  const clearProgress = (blobKey) => {
+    delete progressRef.current[blobKey];
+    setItemDownloadProgress({ ...progressRef.current });
+  };
+
+  const openItem = async (video) => {
     const ext = video.name?.split('.').pop()?.toLowerCase() ?? '';
     const mime = video.type || '';
+    const blobKey = video.id ?? video.driveId;
+
+    // EPUB/MOBI/AZW files open in a dedicated tab (reader.html).
+    // If the blob is not yet cached, download it here in the library tab first so
+    // the tile progress overlay is visible to the user, then open the reader tab.
+    const isEpub = ['epub', 'mobi', 'azw', 'azw3'].includes(ext)
+      || ['application/epub+zip', 'application/x-mobipocket-ebook',
+          'application/vnd.amazon.ebook', 'application/vnd.amazon.mobi8-ebook'].includes(mime);
+    if (isEpub && video.id != null) {
+      if (!video.data && video.driveId) {
+        startProgress(blobKey, video.size);
+        try {
+          const token = await getOwnerDriveAccessToken();
+          const blob = await fetchWithProgress(
+            `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
+            { Authorization: `Bearer ${token}` },
+            video.size || 0,
+            (loaded, total) => updateProgress(blobKey, loaded, total),
+          );
+          if (blob) await updateBookBlob(video.id, blob, video.idbStore || 'books');
+        } catch {
+          // open anyway — reader tab has its own download fallback
+        } finally {
+          clearProgress(blobKey);
+        }
+      }
+      window.open(`/reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+      return;
+    }
+
+    // PDFs open in a dedicated tab (pdf-reader.html) — same download-first logic.
+    const isPdf = ext === 'pdf' || mime === 'application/pdf';
+    if (isPdf && video.id != null) {
+      if (!video.data && video.driveId) {
+        startProgress(blobKey, video.size);
+        try {
+          const token = await getOwnerDriveAccessToken();
+          const blob = await fetchWithProgress(
+            `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
+            { Authorization: `Bearer ${token}` },
+            video.size || 0,
+            (loaded, total) => updateProgress(blobKey, loaded, total),
+          );
+          if (blob) await updateBookBlob(video.id, blob, video.idbStore || 'books');
+        } catch {
+          // open anyway — reader tab has its own download fallback
+        } finally {
+          clearProgress(blobKey);
+        }
+      }
+      window.open(`/pdf-reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+      return;
+    }
+
+    // For non-tab types, download blob on demand if not yet cached locally.
+    if (!video.data && video.driveId) {
+      startProgress(blobKey, video.size);
+      try {
+        const token = await getOwnerDriveAccessToken();
+        const blob = await fetchWithProgress(
+          `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
+          { Authorization: `Bearer ${token}` },
+          video.size || 0,
+          (loaded, total) => updateProgress(blobKey, loaded, total),
+        );
+        if (blob) {
+          await updateBookBlob(video.id, blob, video.idbStore || 'books');
+          video = { ...video, data: blob };
+        }
+      } finally {
+        clearProgress(blobKey);
+      }
+    }
+
     const isUrl = ext === 'url' || mime === 'application/x-url';
     if (isUrl) {
       if (video.data) {
@@ -236,30 +370,27 @@ const App = () => {
       }
       return;
     }
-    // EPUB/MOBI/AZW files open in a dedicated tab (reader.html) so that
-    // foliate-js's blob: URLs run in a top-level browsing context, avoiding
-    // WebKitBlobResource errors that occur when iframes are nested inside a
-    // Shadow DOM inside the main React app on iOS/iPadOS Safari.
-    const isEpub = ['epub', 'mobi', 'azw', 'azw3'].includes(ext)
-      || ['application/epub+zip', 'application/x-mobipocket-ebook',
-          'application/vnd.amazon.ebook', 'application/vnd.amazon.mobi8-ebook'].includes(mime);
-    if (isEpub && video.id != null) {
-      window.open(`/reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
-      return;
-    }
-    // PDFs open in a dedicated tab (pdf-reader.html) to avoid blob: URL access
-    // errors on iOS/iPadOS Safari when the viewer is embedded in the main app.
-    const isPdf = ext === 'pdf' || mime === 'application/pdf';
-    if (isPdf && video.id != null) {
-      window.open(`/pdf-reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+    const isImage = mime.startsWith('image/')
+      || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif', 'heic', 'heif'].includes(ext);
+    if (isImage && video.data instanceof Blob) {
+      if (editingImageSrc) URL.revokeObjectURL(editingImageSrc);
+      const blobUrl = URL.createObjectURL(video.data);
+      setEditingImageItem(video);
+      setEditingImageSrc(blobUrl);
       return;
     }
     setCurrentVideo(video);
     setView('reader');
   };
 
+  const closeImageEditor = useCallback(() => {
+    if (editingImageSrc) URL.revokeObjectURL(editingImageSrc);
+    setEditingImageSrc('');
+    setEditingImageItem(null);
+  }, [editingImageSrc]);
+
   const handleSelectVideo = (video) => {
-    openVideo(video);
+    openItem(video);
   };
 
   const handleBackToLibrary = () => {
@@ -312,6 +443,7 @@ const App = () => {
     const mime = typeof type === 'string' ? type.trim().toLowerCase() : '';
     if (n.endsWith('.youtube') || mime === 'application/x-youtube') return 'videos';
     if (/\.(md|markdown|mdown|mkd)$/i.test(n) || mime === 'text/markdown' || mime === 'text/x-markdown' || mime === 'text/md') return 'notes';
+    if (mime.startsWith('image/')) return 'images';
     return 'books';
   };
 
@@ -338,7 +470,7 @@ const App = () => {
     const file = e.target.files[0];
     if (!file) return;
     const id = await addItem(file.name, file.type, file);
-    addToDeskIfActive('books', id);
+    addToDeskIfActive(inferStore(file.name, file.type), id);
     e.target.value = '';
   };
 
@@ -662,6 +794,7 @@ const App = () => {
           syncProgress,
           setSyncProgress,
           onRegisterSync: (fn) => { syncFnRef.current = fn; },
+          itemDownloadProgress,
         })
       ),
 
@@ -706,6 +839,7 @@ const App = () => {
               onRequestDeleteItem: isEditor ? handleRequestDeleteItem : undefined,
               onRequestDeleteChannel: isEditor ? handleRequestDeleteChannel : undefined,
               onCreateDesk: isEditor ? handleCreateDeskForLayout : undefined,
+              itemDownloadProgress,
             })
           : React.createElement(
               'div',
@@ -791,7 +925,22 @@ const App = () => {
         onRemoveLocal: runItemDeleteLocal,
         onRemoveFromDrive: runItemDeleteWithDrive,
         onClose: closeItemDeleteModal,
-      })
+      }),
+    editingImageItem && React.createElement(ImageEditor, {
+      src: editingImageSrc,
+      filename: editingImageItem.name || 'image.png',
+      onSave: async (blob) => {
+        try {
+          await updateItem(editingImageItem.id, blob, 'image/png');
+        } catch (err) {
+          console.error('ImageEditor save failed:', err);
+          window.alert(err?.message || 'Could not save image.');
+          return;
+        }
+        closeImageEditor();
+      },
+      onClose: closeImageEditor,
+    })
   );
 };
 

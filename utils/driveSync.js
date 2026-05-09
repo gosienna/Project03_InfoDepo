@@ -24,6 +24,14 @@ function coverSidecarParentName(sidecarName) {
   return String(sidecarName).replace(/\.infodepo-cover\.[^.]+$/, '');
 }
 
+export async function downloadDriveFileBlob(accessToken, driveId) {
+  const r = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${driveId}?alt=media`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  return r.ok ? r.blob() : null;
+}
+
 export const CHANNEL_JSON_MARKER = 'infodepo-channel';
 export const DESK_JSON_MARKER = 'infodepo-desk';
 const OWNER_INDEX_FILENAME = '_infodepo_index.json';
@@ -73,6 +81,7 @@ export async function syncDriveToLocal({
   upsertDriveCoverImage,
   onProgress,
   allowedDriveIds,
+  lazyBooks = false,
 }) {
   const progress = onProgress || (() => {});
 
@@ -92,13 +101,7 @@ export async function syncDriveToLocal({
     }));
   };
 
-  const downloadFile = async (driveId) => {
-    const r = await fetch(
-      `https://www.googleapis.com/drive/v3/files/${driveId}?alt=media`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    return r.ok ? r.blob() : null;
-  };
+  const downloadFile = (driveId) => downloadDriveFileBlob(accessToken, driveId);
 
   progress('Listing Drive files...');
   const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
@@ -248,6 +251,19 @@ export async function syncDriveToLocal({
           }
         }
       }
+    }
+
+    // In lazy mode, skip blob download for binary book files (EPUB, PDF, etc.).
+    // JSON files must still be downloaded to detect their type (channel, desk, YouTube).
+    // Markdown notes are small text files and always download eagerly.
+    const isBookBinary = driveFile.mimeType !== 'application/json'
+      && driveFile.mimeType !== 'text/markdown';
+    if (lazyBooks && isBookBinary) {
+      const action = await upsertDriveBook(driveFile, null);
+      if (action === 'added') counts.added++;
+      else if (action === 'updated') counts.updated++;
+      else counts.skipped++;
+      continue;
     }
 
     progress(`Downloading ${driveFile.name}...`);

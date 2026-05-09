@@ -162,6 +162,7 @@ export async function runOwnerSyncPipeline({
     upsertDrivePdfAnnotation,
     upsertDriveCoverImage,
     onProgress,
+    lazyBooks: true,
   });
 
   let peerResult = { added: 0, failed: 0 };
@@ -182,6 +183,7 @@ export async function runOwnerSyncPipeline({
         deleteChannelByDriveId,
         deleteDeskByDriveId,
         onProgress,
+        lazyBooks: true,
       });
     } catch (err) {
       console.warn('[libraryDriveSync] peer sync failed:', err);

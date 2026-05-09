@@ -95,6 +95,7 @@ export const Library = ({
   syncProgress,
   setSyncProgress,
   onRegisterSync,
+  itemDownloadProgress,
 }) => {
   const isEditor = userType === 'master' || userType === 'editor';
   const showLibraryAddMenu = isEditor || (userType === 'viewer' && typeof onAddDesk === 'function');
@@ -534,6 +535,7 @@ export const Library = ({
           deleteChannelByDriveId,
           deleteDeskByDriveId,
           onProgress: setSyncProgress,
+          lazyBooks: true,
         });
         if (cancelled) return;
         loadAll();
@@ -558,7 +560,11 @@ export const Library = ({
       }
     })();
 
-    return () => { cancelled = true; };
+    // Reset the done-flag in cleanup so Strict Mode's second mount can retry.
+    return () => {
+      cancelled = true;
+      viewerPeerSyncDoneRef.current = false;
+    };
   }, [
     userType,
     googleUserEmail,
@@ -717,9 +723,9 @@ export const Library = ({
     if (!hasCredentials || !String(driveFolderId || '').trim()) return;
     if (ownerBackgroundSyncScheduled) return;
     ownerBackgroundSyncScheduled = true;
-    const t = setTimeout(() => runOwnerSyncRef.current(), 0);
-    return () => clearTimeout(t);
-  }, [hasCredentials, driveFolderId]);
+    // Call directly — no setTimeout so Strict Mode cleanup can't cancel it.
+    runOwnerSyncRef.current();
+  }, [hasCredentials, driveFolderId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleFilter = (filter) => {
     setActiveFilters(prev => {
@@ -1173,6 +1179,7 @@ export const Library = ({
                   shareableEmails: shareableUserEmails,
                   onRename: (v, name) => renameItem(v.id, v.idbStore, name),
                   availableTags,
+                  itemDownloadProgress,
                 });
               }
               if (row.kind === 'channel') {

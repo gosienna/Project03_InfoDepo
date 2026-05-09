@@ -25,6 +25,7 @@ export async function syncSharedFromPeers({
   deleteDeskByDriveId,
   upsertDriveCoverImage,
   onProgress,
+  lazyBooks = false,
 }) {
   const progress = onProgress || (() => {});
   const counts = { added: 0, updated: 0, skipped: 0, removed: 0, failed: 0 };
@@ -248,6 +249,44 @@ export async function syncSharedFromPeers({
           ? !sameEmailSet(existing.sharedWith, normalizedSharedWith)
           : true;
         if (existing && !driveIsNewer && !sharedWithChanged) { counts.skipped++; continue; }
+
+        // Binary books (EPUB, PDF, etc.): in lazy mode save metadata only and skip the
+        // blob download. JSON must still download so we can detect YouTube entries.
+        const isBookBinary = driveFile.mimeType !== 'application/json';
+        if (lazyBooks && isBookBinary) {
+          const effectiveFile = { ...driveFile, ownerEmail: peer.email, sharedWith: normalizedSharedWith };
+          const action = await upsertDriveBook(effectiveFile, null, undefined, { silent: true });
+          if (action === 'added') counts.added++;
+          else if (action === 'updated') counts.updated++;
+          else counts.skipped++;
+          // Cover images are small — still fetch so the tile can show a thumbnail.
+          if (entry.coverImageDriveId && upsertDriveCoverImage) {
+            try {
+              const coverMeta = await fetch(
+                `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(entry.coverImageDriveId)}?fields=id,name,mimeType,modifiedTime`,
+                { headers: { Authorization: `Bearer ${accessToken}` } }
+              );
+              if (coverMeta.ok) {
+                const cm = await coverMeta.json();
+                const coverBlob = await fetch(
+                  `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(entry.coverImageDriveId)}?alt=media`,
+                  { headers: { Authorization: `Bearer ${accessToken}` } }
+                ).then((r) => r.ok ? r.blob() : null);
+                if (coverBlob) {
+                  await upsertDriveCoverImage({
+                    driveId: cm.id,
+                    parentItemName: entry.name,
+                    mimeType: cm.mimeType,
+                    modifiedTime: cm.modifiedTime,
+                  }, coverBlob);
+                }
+              }
+            } catch (coverErr) {
+              console.warn(`[peerSync] cover sidecar failed for ${entry.name}:`, coverErr);
+            }
+          }
+          continue;
+        }
 
         progress(`(${itemIdx}/${total}) Downloading: ${truncate(entry.name)}`);
         const blobRes = await fetch(

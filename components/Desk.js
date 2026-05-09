@@ -695,6 +695,7 @@ export const Desk = ({
   onRequestDeleteItem,
   onRequestDeleteChannel,
   onCreateDesk,
+  itemDownloadProgress,
 }) => {
   const { uploadStatuses, handleUpload, handleChannelUpload } = useDriveTileUpload({
     onSetDriveId: onSetItemDriveId || (async () => {}),
@@ -1818,6 +1819,7 @@ export const Desk = ({
                   onSetNoteCoverImage: onSetNoteCoverImage,
                   onSetCoverFromLibrary: !readOnly ? (v) => setCoverPickerTarget(v) : undefined,
                   availableTags,
+                  itemDownloadProgress,
                 })
               : entry._entryType === 'channel'
               ? React.createElement(DataTile, {
