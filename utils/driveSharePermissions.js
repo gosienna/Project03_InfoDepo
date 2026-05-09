@@ -119,6 +119,7 @@ export async function applySharedWithToDriveFiles({
     const did = String(item.driveId || '').trim();
     if (did && Array.isArray(item.sharedWith) && item.sharedWith.length > 0) {
       addDesired(did, item.sharedWith);
+      if (item.coverImageDriveId) addDesired(String(item.coverImageDriveId).trim(), item.sharedWith);
     }
   }
   for (const ch of channels || []) {
@@ -155,6 +156,8 @@ export async function applySharedWithToDriveFiles({
     for (const entry of previousIndex.items) {
       const did = String(entry.driveId || '').trim();
       if (did) allFileIds.add(did);
+      const cid = String(entry.coverImageDriveId || '').trim();
+      if (cid) allFileIds.add(cid);
     }
   }
 

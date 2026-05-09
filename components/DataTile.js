@@ -98,6 +98,7 @@ export const DataTile = ({
   onUpload,
   onSetNoteCoverImage,
   onSetCoverImage,
+  onSetCoverFromLibrary,
   uploadStatus,
   onSetTags,
   onSetSharedWith,
@@ -117,7 +118,8 @@ export const DataTile = ({
   const fileExtension = !isChannel && video?.name ? getFileExtension(video.name) : '';
   const isYoutube = !isChannel && video?.type === 'application/x-youtube';
   const isUrl = !isChannel && video?.type === 'application/x-url';
-  const isBookTile = !isChannel && video?.idbStore === 'books' && !isUrl;
+  const isStandaloneImage = !isChannel && !isDesk && String(video?.type || '').startsWith('image/');
+  const isBookTile = !isChannel && video?.idbStore === 'books' && !isUrl && !isStandaloneImage;
   const isPdfBook =
     isBookTile &&
     (video?.type === 'application/pdf' || (typeof video?.name === 'string' && /\.pdf$/i.test(video.name)));
@@ -133,6 +135,7 @@ export const DataTile = ({
   const [nameInput, setNameInput] = useState('');
   const [isSavingName, setIsSavingName] = useState(false);
   const [noteCoverUrl, setNoteCoverUrl] = useState(null);
+  const [imageThumbUrl, setImageThumbUrl] = useState(null);
   const newTagInputRef = useRef(null);
   const nameInputRef = useRef(null);
   const noteCoverInputRef = useRef(null);
@@ -281,6 +284,16 @@ export const DataTile = ({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [isEpubBook, video?.id, video?.data, video?.size]);
+
+  useEffect(() => {
+    if (!isStandaloneImage || !video?.data || !(video.data instanceof Blob)) {
+      setImageThumbUrl(null);
+      return () => {};
+    }
+    const url = URL.createObjectURL(video.data);
+    setImageThumbUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [isStandaloneImage, video?.id, video?.data, video?.size]);
 
   useEffect(() => {
     setTagInput('');
@@ -877,7 +890,7 @@ export const DataTile = ({
         ),
         !readOnly && onSetCoverImage && React.createElement(
           'div',
-          { className: 'mt-1', onClick: (e) => e.stopPropagation() },
+          { className: 'mt-1 flex items-center gap-1.5', onClick: (e) => e.stopPropagation() },
           React.createElement('input', {
             ref: noteCoverInputRef,
             type: 'file',
@@ -895,6 +908,16 @@ export const DataTile = ({
               title: noteCoverUrl ? 'Change cover image' : 'Set cover image',
             },
             noteCoverUrl ? 'Cover' : 'Set Cover'
+          ),
+          onSetCoverFromLibrary && React.createElement(
+            'button',
+            {
+              type: 'button',
+              onClick: () => onSetCoverFromLibrary(desk),
+              className: 'px-2 py-0.5 rounded bg-gray-700 text-xs text-gray-300 hover:bg-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-all',
+              title: 'Set cover from image library',
+            },
+            'From Library'
           )
         ),
         shareRow
@@ -934,6 +957,13 @@ export const DataTile = ({
     ? React.createElement('img', {
         src: noteCoverUrl,
         alt: `${video?.name || 'Item'} cover`,
+        className: 'w-full h-full object-cover',
+        loading: 'lazy',
+      })
+    : isStandaloneImage && imageThumbUrl
+    ? React.createElement('img', {
+        src: imageThumbUrl,
+        alt: video?.name || 'Image',
         className: 'w-full h-full object-cover',
         loading: 'lazy',
       })
@@ -993,9 +1023,11 @@ export const DataTile = ({
             ? 'absolute top-2 right-2 bg-red-600 text-white text-xs font-bold px-2 py-1 rounded'
             : isUrl
               ? 'absolute top-2 right-2 bg-cyan-700 text-white text-xs font-bold px-2 py-1 rounded'
-              : 'absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded',
+              : isStandaloneImage
+                ? 'absolute top-2 right-2 bg-teal-600 text-white text-xs font-bold px-2 py-1 rounded'
+                : 'absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded',
         },
-        isYoutube ? 'YouTube' : isUrl ? 'URL' : fileExtension.toUpperCase()
+        isYoutube ? 'YouTube' : isUrl ? 'URL' : isStandaloneImage ? 'Image' : fileExtension.toUpperCase()
       ),
       React.createElement(
         'div',
@@ -1108,7 +1140,7 @@ export const DataTile = ({
         : React.createElement('p', { className: 'text-sm text-gray-400' }, formatBytes(video.size)),
       !readOnly && onSetNoteCoverImage && React.createElement(
         'div',
-        { className: 'mt-1', onClick: (e) => e.stopPropagation() },
+        { className: 'mt-1 flex items-center gap-1.5', onClick: (e) => e.stopPropagation() },
         React.createElement('input', {
           ref: noteCoverInputRef,
           type: 'file',
@@ -1126,6 +1158,16 @@ export const DataTile = ({
             title: noteCoverUrl ? 'Change cover image' : 'Set cover image',
           },
           noteCoverUrl ? 'Cover' : 'Set Cover'
+        ),
+        onSetCoverFromLibrary && React.createElement(
+          'button',
+          {
+            type: 'button',
+            onClick: () => onSetCoverFromLibrary(video),
+            className: 'px-2 py-0.5 rounded bg-gray-700 text-xs text-gray-300 hover:bg-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-all',
+            title: 'Set cover from image library',
+          },
+          'From Library'
         )
       ),
       tagRow,

@@ -52,6 +52,8 @@ const App = () => {
     putPdfAnnotationsForItem,
     setPdfAnnotationDriveSync,
     upsertDrivePdfAnnotation,
+    setCoverImageDriveSync,
+    upsertDriveCoverImage,
     getMergedLibraryItems,
     loadItems,
     loadChannels,
@@ -86,6 +88,7 @@ const App = () => {
   const [isChannelOpen, setIsChannelOpen] = useState(false);
   const [isUrlOpen, setIsUrlOpen] = useState(false);
   const fileInputRef = useRef(null);
+  const imageInputRef = useRef(null);
 
   const recheckDriveOAuthGate = useCallback(() => {
     setLoginGateActive(needsGoogleSignIn());
@@ -331,6 +334,14 @@ const App = () => {
     e.target.value = '';
   };
 
+  const handleImageFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const id = await addItem(file.name, file.type, file);
+    addToDeskIfActive('books', id);
+    e.target.value = '';
+  };
+
   const driveCreds = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
   const hasDriveLibrarySetup = !!(
@@ -548,6 +559,13 @@ const App = () => {
       onChange: handleFileChange,
       className: 'hidden',
     }),
+    React.createElement('input', {
+      ref: imageInputRef,
+      type: 'file',
+      accept: 'image/*',
+      onChange: handleImageFileChange,
+      className: 'hidden',
+    }),
     isNewNoteOpen && React.createElement(NewNoteModal, {
       onSave: async (name, type, data) => { const id = await addItem(name, type, data); addToDeskIfActive('notes', id); },
       onClose: () => setIsNewNoteOpen(false),
@@ -636,6 +654,9 @@ const App = () => {
           onOpenChannel: () => setIsChannelOpen(true),
           onOpenFile: () => fileInputRef.current?.click(),
           onOpenUrl: () => setIsUrlOpen(true),
+          onOpenImage: () => imageInputRef.current?.click(),
+          setCoverImageDriveSync,
+          upsertDriveCoverImage,
           isSyncing,
           setIsSyncing,
           syncProgress,
@@ -672,7 +693,8 @@ const App = () => {
               shareableEmails: shareableUserEmails,
               onRenameItem: (rec, storeName, name) => renameItem(rec.id, storeName, name),
               onRenameChannel: (rec, storeName, name) => renameItem(rec.id, storeName, name),
-              onSetNoteCoverImage: (v, file) => setNoteCoverImage(v.id, file, v.idbStore),
+              onSetNoteCoverImage: (v, file) => setNoteCoverImage(v.id, file, v.idbStore || 'books'),
+              libraryImages: items.filter((i) => String(i.type || '').startsWith('image/')),
               readOnly: false,
               role: userType,
               onOpenNewNote: isEditor ? () => setIsNewNoteOpen(true) : undefined,

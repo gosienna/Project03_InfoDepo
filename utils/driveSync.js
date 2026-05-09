@@ -7,6 +7,23 @@ import {
 } from './pdfAnnotationSidecar.js';
 import { cloneBlobForNetwork } from './cloneBlobForNetwork.js';
 
+function coverSidecarExt(mimeType) {
+  const m = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+  return m[String(mimeType)] || 'bin';
+}
+
+export function coverSidecarFilename(itemName, coverMimeType) {
+  return `${itemName}.infodepo-cover.${coverSidecarExt(coverMimeType)}`;
+}
+
+export function isCoverSidecarFilename(name) {
+  return String(name).includes('.infodepo-cover.');
+}
+
+function coverSidecarParentName(sidecarName) {
+  return String(sidecarName).replace(/\.infodepo-cover\.[^.]+$/, '');
+}
+
 export const CHANNEL_JSON_MARKER = 'infodepo-channel';
 export const DESK_JSON_MARKER = 'infodepo-desk';
 const OWNER_INDEX_FILENAME = '_infodepo_index.json';
@@ -53,6 +70,7 @@ export async function syncDriveToLocal({
   getDeskByDriveId,
   upsertDriveDesk,
   upsertDrivePdfAnnotation,
+  upsertDriveCoverImage,
   onProgress,
   allowedDriveIds,
 }) {
@@ -297,6 +315,20 @@ export async function syncDriveToLocal({
     }
 
     for (const driveFile of imageFiles) {
+      if (isCoverSidecarFilename(driveFile.name) && upsertDriveCoverImage) {
+        const parentItemName = coverSidecarParentName(driveFile.name);
+        progress(`Downloading cover for "${parentItemName}"...`);
+        const blobRes = await fetch(
+          `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        if (blobRes.ok) {
+          const blob = await blobRes.blob();
+          await upsertDriveCoverImage({ driveId: driveFile.driveId, parentItemName, mimeType: driveFile.mimeType, modifiedTime: driveFile.modifiedTime }, blob).catch(() => {});
+        }
+        continue;
+      }
+
       let existing = getImageByDriveId ? await getImageByDriveId(driveFile.driveId) : undefined;
       if (!existing && getImageByName) existing = await getImageByName(driveFile.name);
 
@@ -410,6 +442,7 @@ export async function backupAllToGDrive({
   onProgress,
   getPdfAnnotationSidecar,
   setPdfAnnotationDriveSync,
+  onSetCoverImageDriveSync,
 }) {
   const progress = onProgress || (() => {});
   let backed = 0;
@@ -628,6 +661,28 @@ export async function backupAllToGDrive({
         backed++;
       } catch (err) {
         console.warn(`Annotation backup failed for "${item.name}":`, err.message);
+        failed++;
+      }
+    }
+  }
+
+  // Cover image sidecars: upload when cover blob exists but hasn't been uploaded yet.
+  if (onSetCoverImageDriveSync) {
+    for (const item of itemsList) {
+      if (!item.data || !item.coverImage?.data || item.coverImageDriveId) continue;
+      const coverBlob = item.coverImage.data;
+      const coverMime = item.coverImage.type || 'image/jpeg';
+      const sidecarName = coverSidecarFilename(item.name, coverMime);
+      progress(`Backing up cover for "${item.name}"...`);
+      try {
+        const driveFile = await postMultipart(coverBlob, sidecarName, coverMime);
+        await onSetCoverImageDriveSync(item.id, item.idbStore, {
+          coverImageDriveId: driveFile.id,
+          modifiedTime: driveFile.modifiedTime,
+        });
+        backed++;
+      } catch (err) {
+        console.warn(`Cover sidecar backup failed for "${item.name}":`, err.message);
         failed++;
       }
     }

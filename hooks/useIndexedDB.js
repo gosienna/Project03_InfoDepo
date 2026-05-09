@@ -450,6 +450,7 @@ export const useIndexedDB = () => {
         const putReq = os.put({
           ...note,
           coverImage,
+          coverImageDriveId: null,
           localModifiedAt: new Date(),
         });
         putReq.onsuccess = () => {
@@ -899,6 +900,7 @@ export const useIndexedDB = () => {
           ...(driveFile.ownerEmail ? { ownerEmail: driveFile.ownerEmail } : {}),
           ...(driveFile.driveFolderId ? { driveFolderId: driveFile.driveFolderId } : {}),
           ...(Array.isArray(assets) ? { assets } : {}),
+          ...(driveFile.coverImageDriveId ? { coverImageDriveId: driveFile.coverImageDriveId } : {}),
         };
         const putRequest = os.put(updated);
         putRequest.onsuccess = () => { if (!silent) loadItems('upsertDriveBook/updated'); resolve('updated'); };
@@ -919,6 +921,7 @@ export const useIndexedDB = () => {
           ownerEmail: driveFile.ownerEmail || '',
           ...(driveFile.driveFolderId ? { driveFolderId: driveFile.driveFolderId } : {}),
           ...(Array.isArray(assets) ? { assets } : {}),
+          ...(driveFile.coverImageDriveId ? { coverImageDriveId: driveFile.coverImageDriveId } : {}),
         };
         const addRequest = os.add(record);
         addRequest.onsuccess = () => { if (!silent) loadItems('upsertDriveBook/added'); resolve('added'); };
@@ -1453,6 +1456,59 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
+  const setCoverImageDriveSync = useCallback((itemId, storeName, { coverImageDriveId, modifiedTime } = {}) => {
+    if (!db || itemId == null || !storeName) return Promise.reject(new Error('Database not initialized'));
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(storeName, 'readwrite'); }
+      catch (err) { reject(err); return; }
+      const os = tx.objectStore(storeName);
+      const g = os.get(itemId);
+      g.onsuccess = () => {
+        const rec = g.result;
+        if (!rec) { resolve(); return; }
+        const updated = { ...rec };
+        if (coverImageDriveId != null && String(coverImageDriveId).trim() !== '') {
+          updated.coverImageDriveId = String(coverImageDriveId).trim();
+        }
+        if (modifiedTime != null) {
+          updated.modifiedTime = modifiedTime;
+          updated.localModifiedAt = new Date(modifiedTime);
+        }
+        const p = os.put(updated);
+        p.onsuccess = () => resolve();
+        p.onerror = () => reject(p.error);
+      };
+      g.onerror = () => reject(g.error);
+    });
+  }, [db]);
+
+  const upsertDriveCoverImage = useCallback(async (driveFile, blob) => {
+    if (!db || !blob) return 'skipped';
+    const item = await getBookByName(driveFile.parentItemName);
+    if (!item) return 'skipped';
+    const storeName = storeForType(item.type);
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(storeName, 'readwrite'); }
+      catch (err) { resolve('skipped'); return; }
+      const os = tx.objectStore(storeName);
+      const g = os.get(item.id);
+      g.onsuccess = () => {
+        const rec = g.result;
+        if (!rec) { resolve('skipped'); return; }
+        const p = os.put({
+          ...rec,
+          coverImage: { name: driveFile.parentItemName, type: driveFile.mimeType, data: blob },
+          coverImageDriveId: String(driveFile.driveId || '').trim(),
+        });
+        p.onsuccess = () => { loadItems('upsertDriveCoverImage'); resolve('updated'); };
+        p.onerror = () => reject(p.error);
+      };
+      g.onerror = () => reject(g.error);
+    });
+  }, [db, getBookByName, loadItems]);
+
   const setPdfAnnotationDriveSync = useCallback((itemId, idbStore, { annotationDriveId, modifiedTime, pdfDriveId } = {}) => {
     if (!db || itemId == null || !idbStore) return Promise.reject(new Error('Database not initialized'));
     const sidecarKey = pdfAnnotationSidecarKey(itemId, idbStore);
@@ -1692,6 +1748,8 @@ export const useIndexedDB = () => {
     setItemReadingPosition,
     getPdfAnnotationSidecar,
     putPdfAnnotationsForItem,
+    setCoverImageDriveSync,
+    upsertDriveCoverImage,
     setPdfAnnotationDriveSync,
     upsertDrivePdfAnnotation,
     getMergedLibraryItems,

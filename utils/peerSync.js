@@ -23,6 +23,7 @@ export async function syncSharedFromPeers({
   deleteItemByDriveId,
   deleteChannelByDriveId,
   deleteDeskByDriveId,
+  upsertDriveCoverImage,
   onProgress,
 }) {
   const progress = onProgress || (() => {});
@@ -275,6 +276,32 @@ export async function syncSharedFromPeers({
         if (action === 'added') counts.added++;
         else if (action === 'updated') counts.updated++;
         else counts.skipped++;
+
+        if (entry.coverImageDriveId && upsertDriveCoverImage) {
+          try {
+            const coverMeta = await fetch(
+              `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(entry.coverImageDriveId)}?fields=id,name,mimeType,modifiedTime`,
+              { headers: { Authorization: `Bearer ${accessToken}` } }
+            );
+            if (coverMeta.ok) {
+              const cm = await coverMeta.json();
+              const coverBlob = await fetch(
+                `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(entry.coverImageDriveId)}?alt=media`,
+                { headers: { Authorization: `Bearer ${accessToken}` } }
+              ).then((r) => r.ok ? r.blob() : null);
+              if (coverBlob) {
+                await upsertDriveCoverImage({
+                  driveId: cm.id,
+                  parentItemName: entry.name,
+                  mimeType: cm.mimeType,
+                  modifiedTime: cm.modifiedTime,
+                }, coverBlob);
+              }
+            }
+          } catch (coverErr) {
+            console.warn(`[peerSync] cover sidecar failed for ${entry.name}:`, coverErr);
+          }
+        }
       } catch (err) {
         console.warn(`[peerSync] failed for ${entry.name} from ${peer.email}:`, err);
         counts.failed++;

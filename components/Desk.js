@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { DataTile } from './DataTile.js';
+import { CoverImagePickerModal } from './CoverImagePickerModal.js';
 import { AddContentDropdown } from './AddContentDropdown.js';
 import { normalizeTag } from '../utils/tagUtils.js';
 import { useDriveTileUpload, channelUploadKey } from '../hooks/useDriveTileUpload.js';
@@ -682,6 +683,7 @@ export const Desk = ({
   onRenameItem,
   onRenameChannel,
   onSetNoteCoverImage,
+  libraryImages,
   readOnly,
   role,
   onOpenNewNote,
@@ -700,6 +702,7 @@ export const Desk = ({
   });
 
   const autoUploadTriggeredRef = useRef(new Set());
+  const previousDeskIdRef = useRef(desk?.id ?? null);
 
   const viewportRef = useRef(null);
   const historyRef = useRef({ past: [], future: [] });
@@ -743,6 +746,9 @@ export const Desk = ({
   useEffect(() => {
     // Sync refs when desk data changes; normalize layout keys in the same pass so
     // we never briefly apply a stale prop layout over a migrated ref.
+    const nextDeskId = desk?.id ?? null;
+    const deskChanged = previousDeskIdRef.current !== nextDeskId;
+    previousDeskIdRef.current = nextDeskId;
     let layout = desk?.layout && typeof desk.layout === 'object' ? desk.layout : {};
     let connections = Array.isArray(desk?.connections) ? desk.connections : [];
     const migrated = migrateDeskDataKeys(layout, connections, items, channels, desks);
@@ -761,7 +767,9 @@ export const Desk = ({
       const hasUnresolvableDriveKey = Object.keys(layout).some(
         (k) => k.startsWith('drive:') && resolveLayoutEntry(k, items, channels, desks)._entryType === 'pending'
       );
-      if (!hasUnresolvableDriveKey) layoutRef.current = layout;
+      // Always apply when switching desks. The unresolved-drive guard is only for
+      // same-desk refreshes to avoid briefly hiding tiles during async loads.
+      if (deskChanged || !hasUnresolvableDriveKey) layoutRef.current = layout;
       connectionsRef.current = connections;
     }
     textItemsRef.current = Array.isArray(desk?.textItems) ? desk.textItems : [];
@@ -822,6 +830,7 @@ export const Desk = ({
   // --- Pan ---
   const panningRef = useRef(null);
   const spaceRef = useRef(false);
+  const [coverPickerTarget, setCoverPickerTarget] = useState(null);
   const [connectMode, setConnectMode] = useState(false);
   const [connectStartKey, setConnectStartKey] = useState(null);
   const [selectedItemKeys, setSelectedItemKeys] = useState([]);
@@ -1491,6 +1500,24 @@ export const Desk = ({
   }, [commitConnections]);
 
   return React.createElement(
+    React.Fragment,
+    null,
+    coverPickerTarget && React.createElement(CoverImagePickerModal, {
+      images: (libraryImages || []).filter((i) => i.data instanceof Blob),
+      onClose: () => setCoverPickerTarget(null),
+      onSelect: async (imageItem) => {
+        const target = coverPickerTarget;
+        setCoverPickerTarget(null);
+        if (!onSetNoteCoverImage || !target) return;
+        try {
+          const file = new File([imageItem.data], imageItem.name, { type: imageItem.type });
+          await onSetNoteCoverImage(target, file);
+        } catch (err) {
+          window.alert(err?.message || 'Could not set cover image.');
+        }
+      },
+    }),
+    React.createElement(
     'div',
     {
       ref: viewportRef,
@@ -1789,6 +1816,7 @@ export const Desk = ({
                   shareableEmails: shareableEmails || [],
                   onRename: onRenameItem ? (v, name) => onRenameItem(v, v.idbStore, name) : undefined,
                   onSetNoteCoverImage: onSetNoteCoverImage,
+                  onSetCoverFromLibrary: !readOnly ? (v) => setCoverPickerTarget(v) : undefined,
                   availableTags,
                 })
               : entry._entryType === 'channel'
@@ -2204,5 +2232,6 @@ export const Desk = ({
         ' (top-right) to place items here.'
       )
     )
-  );
+    ) // close viewport div
+  ); // close Fragment
 };

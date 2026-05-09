@@ -21,6 +21,7 @@ export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items
       type: item.type,
       modifiedTime: item.modifiedTime instanceof Date ? item.modifiedTime.toISOString() : String(item.modifiedTime || ''),
       sharedWith: Array.isArray(item.sharedWith) ? item.sharedWith : [],
+      ...(item.coverImageDriveId ? { coverImageDriveId: item.coverImageDriveId } : {}),
     });
   }
   for (const ch of channels || []) {

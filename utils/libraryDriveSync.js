@@ -39,6 +39,8 @@ export async function runOwnerSyncPipeline({
   getPdfAnnotationSidecar,
   setPdfAnnotationDriveSync,
   upsertDrivePdfAnnotation,
+  setCoverImageDriveSync,
+  upsertDriveCoverImage,
   mergeItemSharedWithByDriveId,
   mergeChannelSharedWithByDriveId,
   mergeDeskSharedWithByDriveId,
@@ -139,6 +141,7 @@ export async function runOwnerSyncPipeline({
     onProgress,
     getPdfAnnotationSidecar,
     setPdfAnnotationDriveSync,
+    onSetCoverImageDriveSync: setCoverImageDriveSync,
   });
 
   const syncResult = await syncDriveToLocal({
@@ -157,6 +160,7 @@ export async function runOwnerSyncPipeline({
     getDeskByDriveId,
     upsertDriveDesk,
     upsertDrivePdfAnnotation,
+    upsertDriveCoverImage,
     onProgress,
   });
 

@@ -2,6 +2,7 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { DataTile } from './DataTile.js';
+import { CoverImagePickerModal } from './CoverImagePickerModal.js';
 import { BookIcon } from './icons/BookIcon.js';
 import { getDriveCredentials, hasGoogleApiKeyOrProxy } from '../utils/driveCredentials.js';
 import { getDriveFolderId, setDriveFolderId, parseDriveFolderIdInput } from '../utils/driveFolderStorage.js';
@@ -62,6 +63,8 @@ export const Library = ({
   getPdfAnnotationSidecar,
   setPdfAnnotationDriveSync,
   upsertDrivePdfAnnotation,
+  setCoverImageDriveSync,
+  upsertDriveCoverImage,
   setRecordTags,
   setItemSharedWith,
   mergeItemSharedWithByDriveId,
@@ -86,6 +89,7 @@ export const Library = ({
   onOpenChannel,
   onOpenFile,
   onOpenUrl,
+  onOpenImage,
   isSyncing,
   setIsSyncing,
   syncProgress,
@@ -116,6 +120,7 @@ export const Library = ({
   const [libraryPageIndex, setLibraryPageIndex] = useState(0);
   const [libraryDisplayPolicy, setLibraryDisplayPolicy] = useState(() => readLibraryDisplayPolicy());
   const [activeFilters,    setActiveFilters]    = useState(new Set());
+  const [coverPickerTarget, setCoverPickerTarget] = useState(null);
 
   const [syncResult,  setSyncResult]  = useState(null);
 
@@ -629,6 +634,8 @@ export const Library = ({
         getPdfAnnotationSidecar,
         setPdfAnnotationDriveSync,
         upsertDrivePdfAnnotation,
+        setCoverImageDriveSync,
+        upsertDriveCoverImage,
         mergeItemSharedWithByDriveId,
         mergeChannelSharedWithByDriveId,
         mergeDeskSharedWithByDriveId,
@@ -675,6 +682,7 @@ export const Library = ({
         deleteItemByDriveId,
         deleteChannelByDriveId,
         deleteDeskByDriveId,
+        upsertDriveCoverImage,
         onProgress: setSyncProgress,
       });
       loadAll();
@@ -741,7 +749,10 @@ export const Library = ({
   const filteredItems = useMemo(() => items.filter(item => {
     if (item.name === '_infodepo_index.json') return false;
     if (activeFilters.size > 0) {
-      const effectiveKey = item.type === 'application/x-url' ? 'url' : item.idbStore;
+      const effectiveKey =
+        item.type === 'application/x-url' ? 'url'
+        : String(item.type || '').startsWith('image/') ? 'images'
+        : item.idbStore;
       if (!activeFilters.has(effectiveKey)) return false;
     }
     if (query && !matchesNameOrTags(item.name, item.tags)) return false;
@@ -938,6 +949,7 @@ export const Library = ({
           onAddChannel: isEditor ? onOpenChannel : undefined,
           onAddFile: isEditor ? onOpenFile : undefined,
           onAddUrl: isEditor ? onOpenUrl : undefined,
+          onAddImage: isEditor ? onOpenImage : undefined,
           onAddDesk: onAddDesk ? () => {
             const name = window.prompt('Desk name:', 'New Desk');
             if (name && name.trim()) onAddDesk(name.trim());
@@ -1005,6 +1017,7 @@ export const Library = ({
               { key: 'notes',    label: 'Notes',    activeClass: 'bg-emerald-600 border-emerald-500 text-white' },
               { key: 'videos',   label: 'Videos',   activeClass: 'bg-red-600 border-red-500 text-white' },
               { key: 'url',      label: 'URLs',     activeClass: 'bg-cyan-700 border-cyan-600 text-white' },
+              { key: 'images',   label: 'Images',   activeClass: 'bg-teal-600 border-teal-500 text-white' },
               { key: 'channels', label: 'Channels', activeClass: 'bg-red-900 border-red-800 text-white' },
               { key: 'desks',    label: 'Desks',    activeClass: 'bg-violet-700 border-violet-600 text-white' },
             ].map(({ key, label, activeClass }) =>
@@ -1075,12 +1088,13 @@ export const Library = ({
         'div',
         { className: 'flex items-center gap-1.5 flex-wrap mt-1.5' },
         [...activeFilters].map((key) => {
-          const labels = { books: 'Books', notes: 'Notes', videos: 'Videos', url: 'URLs', channels: 'Channels', desks: 'Desks' };
+          const labels = { books: 'Books', notes: 'Notes', videos: 'Videos', url: 'URLs', images: 'Images', channels: 'Channels', desks: 'Desks' };
           const colors = {
             books: 'bg-indigo-900/50 text-indigo-300 border-indigo-700/50',
             notes: 'bg-emerald-900/50 text-emerald-300 border-emerald-700/50',
             videos: 'bg-red-900/50 text-red-300 border-red-700/50',
             url: 'bg-cyan-900/50 text-cyan-300 border-cyan-700/50',
+            images: 'bg-teal-900/50 text-teal-300 border-teal-700/50',
             channels: 'bg-red-900/60 text-red-200 border-red-800/50',
             desks: 'bg-violet-900/50 text-violet-300 border-violet-700/50',
           };
@@ -1150,6 +1164,7 @@ export const Library = ({
                   onSetNoteCoverImage: onSetNoteCoverImage
                     ? (v, file) => onSetNoteCoverImage(v.id, file, v.idbStore)
                     : undefined,
+                  onSetCoverFromLibrary: isEditor ? (v) => setCoverPickerTarget(v) : undefined,
                   uploadStatus: uploadStatuses[libraryItemKey(video)] ?? null,
                   readOnly: !isEditor,
                   onSetTags: (v, tags) => setRecordTags(v.id, v.idbStore, tags),
@@ -1195,6 +1210,7 @@ export const Library = ({
                   onSetCoverImage: isEditor && onSetNoteCoverImage
                     ? (desk, file) => onSetNoteCoverImage(desk.id, file, 'desks')
                     : undefined,
+                  onSetCoverFromLibrary: isEditor ? (dk) => setCoverPickerTarget({ ...dk, _storeName: 'desks' }) : undefined,
                 });
               }
               return null;
@@ -1561,6 +1577,23 @@ export const Library = ({
         )
       )
     ), document.body),
+
+    coverPickerTarget && React.createElement(CoverImagePickerModal, {
+      images: (items || []).filter((i) => String(i.type || '').startsWith('image/') && i.data instanceof Blob),
+      onClose: () => setCoverPickerTarget(null),
+      onSelect: async (imageItem) => {
+        const target = coverPickerTarget;
+        setCoverPickerTarget(null);
+        if (!onSetNoteCoverImage || !target) return;
+        try {
+          const file = new File([imageItem.data], imageItem.name, { type: imageItem.type });
+          const storeName = target._storeName || target.idbStore || 'notes';
+          await onSetNoteCoverImage(target.id, file, storeName);
+        } catch (err) {
+          window.alert(err?.message || 'Could not set cover image.');
+        }
+      },
+    }),
 
     pendingDelete &&
       React.createElement(DeleteContentModal, {
