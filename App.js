@@ -21,6 +21,13 @@ import { deleteDriveFilesForChannel, deleteDriveFilesForDesk, deleteDriveFilesFo
 async function fetchWithProgress(url, headers, fallbackSize, onProgress) {
   const r = await fetch(url, { headers });
   if (!r.ok) throw new Error(`Download failed: ${r.status} ${r.statusText}`);
+  const contentType = r.headers.get('content-type') || 'application/octet-stream';
+  // Safari/iOS may return a null body for cross-origin CORS responses; fall back to arrayBuffer.
+  if (!r.body || typeof r.body.getReader !== 'function') {
+    const buffer = await r.arrayBuffer();
+    onProgress(buffer.byteLength, buffer.byteLength);
+    return new Blob([buffer], { type: contentType });
+  }
   const contentLength = parseInt(r.headers.get('content-length') || '0') || fallbackSize || 0;
   const reader = r.body.getReader();
   const chunks = [];
@@ -32,7 +39,7 @@ async function fetchWithProgress(url, headers, fallbackSize, onProgress) {
     loaded += value.length;
     onProgress(loaded, contentLength);
   }
-  return new Blob(chunks, { type: r.headers.get('content-type') || 'application/octet-stream' });
+  return new Blob(chunks, { type: contentType });
 }
 import { fetchUserConfig, resolveUserType } from './utils/userConfig.js';
 import { listAllUserEmails } from './utils/userConfig.js';
@@ -287,54 +294,60 @@ const App = () => {
     const blobKey = video.id ?? video.driveId;
 
     // EPUB/MOBI/AZW files open in a dedicated tab (reader.html).
-    // If the blob is not yet cached, download it here in the library tab first so
-    // the tile progress overlay is visible to the user, then open the reader tab.
+    // window.open() must be called synchronously (before any await) to preserve the
+    // user-activation gesture on Safari — Safari blocks popup windows opened after async ops.
+    // If the blob is lazy (not yet cached), download it in the background so the tile
+    // progress overlay is visible; the reader tab has its own download fallback in parallel.
     const isEpub = ['epub', 'mobi', 'azw', 'azw3'].includes(ext)
       || ['application/epub+zip', 'application/x-mobipocket-ebook',
           'application/vnd.amazon.ebook', 'application/vnd.amazon.mobi8-ebook'].includes(mime);
     if (isEpub && video.id != null) {
+      window.open(`/reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
       if (!video.data && video.driveId) {
         startProgress(blobKey, video.size);
-        try {
-          const token = await getOwnerDriveAccessToken();
-          const blob = await fetchWithProgress(
-            `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
-            { Authorization: `Bearer ${token}` },
-            video.size || 0,
-            (loaded, total) => updateProgress(blobKey, loaded, total),
-          );
-          if (blob) await updateBookBlob(video.id, blob, video.idbStore || 'books');
-        } catch {
-          // open anyway — reader tab has its own download fallback
-        } finally {
-          clearProgress(blobKey);
-        }
+        (async () => {
+          try {
+            const token = await getOwnerDriveAccessToken();
+            const blob = await fetchWithProgress(
+              `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
+              { Authorization: `Bearer ${token}` },
+              video.size || 0,
+              (loaded, total) => updateProgress(blobKey, loaded, total),
+            );
+            if (blob) await updateBookBlob(video.id, blob, video.idbStore || 'books');
+          } catch {
+            // reader tab has its own download fallback
+          } finally {
+            clearProgress(blobKey);
+          }
+        })();
       }
-      window.open(`/reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
       return;
     }
 
-    // PDFs open in a dedicated tab (pdf-reader.html) — same download-first logic.
+    // PDFs open in a dedicated tab (pdf-reader.html) — same window.open-first pattern.
     const isPdf = ext === 'pdf' || mime === 'application/pdf';
     if (isPdf && video.id != null) {
+      window.open(`/pdf-reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
       if (!video.data && video.driveId) {
         startProgress(blobKey, video.size);
-        try {
-          const token = await getOwnerDriveAccessToken();
-          const blob = await fetchWithProgress(
-            `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
-            { Authorization: `Bearer ${token}` },
-            video.size || 0,
-            (loaded, total) => updateProgress(blobKey, loaded, total),
-          );
-          if (blob) await updateBookBlob(video.id, blob, video.idbStore || 'books');
-        } catch {
-          // open anyway — reader tab has its own download fallback
-        } finally {
-          clearProgress(blobKey);
-        }
+        (async () => {
+          try {
+            const token = await getOwnerDriveAccessToken();
+            const blob = await fetchWithProgress(
+              `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
+              { Authorization: `Bearer ${token}` },
+              video.size || 0,
+              (loaded, total) => updateProgress(blobKey, loaded, total),
+            );
+            if (blob) await updateBookBlob(video.id, blob, video.idbStore || 'books');
+          } catch {
+            // reader tab has its own download fallback
+          } finally {
+            clearProgress(blobKey);
+          }
+        })();
       }
-      window.open(`/pdf-reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
       return;
     }
 

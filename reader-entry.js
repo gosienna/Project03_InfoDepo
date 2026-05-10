@@ -67,6 +67,14 @@ async function saveReadingPosition(db, id, storeName, position) {
 async function fetchWithProgress(url, headers, fallbackSize, onProgress, cancelledFn) {
   const r = await fetch(url, { headers });
   if (!r.ok) throw new Error(`Download failed: ${r.status} ${r.statusText}`);
+  const mimeType = r.headers.get('content-type') || 'application/octet-stream';
+  // Safari/iOS may return a null body for cross-origin CORS responses; fall back to arrayBuffer.
+  if (!r.body || typeof r.body.getReader !== 'function') {
+    const buffer = await r.arrayBuffer();
+    if (cancelledFn()) return null;
+    onProgress(buffer.byteLength, buffer.byteLength);
+    return new Blob([buffer], { type: mimeType });
+  }
   const contentLength = parseInt(r.headers.get('content-length') || '0') || fallbackSize || 0;
   const reader = r.body.getReader();
   const chunks = [];
@@ -79,7 +87,6 @@ async function fetchWithProgress(url, headers, fallbackSize, onProgress, cancell
     loaded += value.length;
     onProgress(loaded, contentLength);
   }
-  const mimeType = r.headers.get('content-type') || 'application/octet-stream';
   return new Blob(chunks, { type: mimeType });
 }
 
