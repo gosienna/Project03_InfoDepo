@@ -445,7 +445,7 @@ const FILTER_TABS = [
   { key: 'desk',    label: 'Desks' },
 ];
 
-const InlineAddSearch = ({ items, channels, desks, currentDeskId, currentLayout, onAdd }) => {
+const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskId, currentLayout, onAdd }) => {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('all');
@@ -453,6 +453,7 @@ const InlineAddSearch = ({ items, channels, desks, currentDeskId, currentLayout,
   const inputRef = useRef(null);
 
   const q = query.trim().toLowerCase();
+  const normalizedUserEmail = String(googleUserEmail || '').trim().toLowerCase();
 
   const allRows = useMemo(() => {
     const inLayout = new Set(Object.keys(currentLayout));
@@ -460,18 +461,24 @@ const InlineAddSearch = ({ items, channels, desks, currentDeskId, currentLayout,
     for (const item of items) {
       const key = itemEntryKey(item);
       if (inLayout.has(key)) continue;
+      const itemOwner = String(item.ownerEmail || '').trim().toLowerCase();
+      if (itemOwner && itemOwner === normalizedUserEmail) continue;
       const label = (item.name || '').replace(/\.youtube$/i, '');
       rows.push({ key, label, sub: item.idbStore, tags: item.tags || [], lastVisitedAt: item.lastVisitedAt });
     }
     for (const ch of channels) {
       const key = channelEntryKey(ch);
       if (inLayout.has(key)) continue;
+      const chOwner = String(ch.ownerEmail || '').trim().toLowerCase();
+      if (chOwner && chOwner === normalizedUserEmail) continue;
       rows.push({ key, label: ch.name || ch.handle || '', sub: 'channel', tags: ch.tags || [], lastVisitedAt: ch.lastVisitedAt });
     }
     for (const d of (desks || [])) {
       if (d.id === currentDeskId) continue;
       const key = deskEntryKey(d);
       if (inLayout.has(key)) continue;
+      const deskOwner = String(d.ownerEmail || '').trim().toLowerCase();
+      if (deskOwner && deskOwner === normalizedUserEmail) continue;
       rows.push({ key, label: d.name || 'Untitled Desk', sub: 'desk', tags: d.tags || [], lastVisitedAt: d.lastVisitedAt });
     }
     rows.sort((a, b) => {
@@ -480,7 +487,7 @@ const InlineAddSearch = ({ items, channels, desks, currentDeskId, currentLayout,
       return tb - ta;
     });
     return rows;
-  }, [items, channels, desks, currentDeskId, currentLayout]);
+  }, [items, channels, desks, normalizedUserEmail, currentDeskId, currentLayout]);
 
   // Tags matching the current query text (for suggestion pills)
   const matchingTags = useMemo(() => {
@@ -669,6 +676,7 @@ export const Desk = ({
   items,
   channels,
   desks,
+  googleUserEmail,
   onSelectItem,
   onSelectChannel,
   onSelectDesk,
@@ -2107,6 +2115,7 @@ export const Desk = ({
         items,
         channels,
         desks,
+        googleUserEmail,
         currentDeskId: desk?.id,
         currentLayout: layoutRef.current,
         onAdd: addItemToDesk,

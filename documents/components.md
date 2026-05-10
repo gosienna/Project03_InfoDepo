@@ -37,7 +37,7 @@
 
 - Master-only editor for Drive-hosted `config.json`.
 - Uses row-based `users` map (`email -> { role, folderId }`).
-- Viewer rows show `N/A` for folder ID.
+- **All roles** (including `viewer`) show an editable folder ID input. For viewers this is the Drive folder used by `runViewerDeskSyncPipeline` for desk backup/pull.
 - Uses broad scope (`CONFIG_MANAGE_SCOPE`) so existing `config.json` can be updated.
 
 ### `Library.js`
@@ -50,9 +50,14 @@
   - immediate ACL reconcile on sharing updates
   - owner index write (`_infodepo_index.json`)
   - viewer peer sync (`syncSharedFromPeers`, including cover sidecar download)
+  - viewer desk sync (`runViewerDeskSyncPipeline`) when viewer has a Drive folder ID in config
 - Desk tiles appear alongside item/channel tiles; clicking a desk tile switches to Desk mode.
 - Uses `AddContentDropdown` (receives `onOpenNewNote`, `onOpenYoutube`, `onOpenChannel`, `onOpenFile`, `onOpenImage`, `onOpenUrl` callbacks from App). "New Desk" option prompts for name and creates the desk.
 - Viewer peer sync also prunes revoked peer-owned content from local IndexedDB.
+- **In-body progress banner**: while `isSyncing` is true, a teal spinner banner replaces the sync-result banner and displays `syncProgress` (e.g. `"5 / 68"` or `"Fetching shared content index…"`). The result banner is only shown when `!isSyncing`.
+- **Viewer auto-sync**: triggers `runViewerPeerSync` once on mount (after role/config are ready). Calls `setIsSyncing(true/false)` unconditionally in `finally` so the Header spinner and in-body banner are both active for viewers.
+- **Background sync guard**: the one-per-load `useEffect` that schedules `runOwnerSync` checks `userType !== 'master' && userType !== 'editor'` before proceeding, preventing viewers from accidentally running the owner backup pipeline.
+- **`runOwnerSync` viewer guard**: early-returns immediately if `userType === 'viewer'`.
 - **CoverImagePickerModal**: rendered when `coverPickerTarget` is set (via `onSetCoverFromLibrary` on DataTile). Images list is filtered to items with `type.startsWith('image/')` and non-null `data`.
 - **System Settings modal** still rendered here (uses Library-local state for Drive folder, display policy, sign-out, clear). `isSystemSettingsOpen`/`setIsSystemSettingsOpen` are lifted to App and passed as props; the trigger button lives in `Header`. The modal is rendered via `ReactDOM.createPortal` into `document.body` so it appears above all views (library, desk, explorer) even when the Library container has `display: none`. z-index is `z-[110]` (above the header's `z-[100]`). The modal box is capped at `max-h-[90vh]` with the body section scrollable (`overflow-y-auto`).
 - **System Settings → Storage**: shows a progress bar of used vs. limit, and an input to adjust the GB cap (saved via `saveSyncSettings`).
@@ -151,9 +156,10 @@
   - `listPeerUsers`
   - `listAllUserEmails`
 - `utils/ownerIndex.js`: writes/reads `_infodepo_index.json`.
-- `utils/peerSync.js`: viewer discovery, download, and prune.
+- `utils/peerSync.js`: viewer peer-content discovery, two-phase download (`globalTotal` computed before any downloads start), and prune.
+- `utils/driveSync.js`: `syncDriveToLocal` (pre-scans note bundles; unified `X / N` counter across all phases; cover sidecars handled silently in Phase 4) and `backupAllToGDrive`.
 - `utils/driveSharePermissions.js`: applies Drive ACLs from `sharedWith`.
-- `utils/libraryDriveSync.js`: backup + pull + owner index + peer sync orchestration.
+- `utils/libraryDriveSync.js`: `runOwnerSyncPipeline` (backup + pull + owner index + peer sync) and `runViewerDeskSyncPipeline` (viewer desk backup + pull only).
 
 ## Notes
 

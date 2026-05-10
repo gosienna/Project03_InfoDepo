@@ -82,80 +82,96 @@ export async function syncDriveToLocal({
   onProgress,
   allowedDriveIds,
   lazyBooks = false,
+  onBatchComplete,
 }) {
   const progress = onProgress || (() => {});
 
   const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
-  const listFolderContents = async (id) => {
+  const listAllFolderFiles = async (id, throwOnError = false) => {
     const q = encodeURIComponent(`'${id}' in parents and trashed = false`);
-    const f = encodeURIComponent('files(id,name,mimeType,size,modifiedTime)');
-    const r = await fetchGoogleApisGet(
-      `/drive/v3/files?q=${q}&fields=${f}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    if (!r.ok) return [];
-    return ((await r.json()).files || []).map(f => ({
-      driveId: f.id, name: f.name, mimeType: f.mimeType,
-      size: parseInt(f.size) || 0, modifiedTime: f.modifiedTime,
-    }));
+    const f = encodeURIComponent('nextPageToken,files(id,name,mimeType,size,modifiedTime)');
+    const results = [];
+    let pageToken = null;
+    do {
+      const pt = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
+      const r = await fetchGoogleApisGet(
+        `/drive/v3/files?q=${q}&fields=${f}&pageSize=1000${pt}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (!r.ok) {
+        if (throwOnError) {
+          const err = await r.json().catch(() => ({}));
+          throw new Error(err.error?.message || r.statusText);
+        }
+        return results;
+      }
+      const data = await r.json();
+      for (const file of data.files || []) {
+        results.push({
+          driveId: file.id, name: file.name, mimeType: file.mimeType,
+          size: parseInt(file.size) || 0, modifiedTime: file.modifiedTime,
+        });
+      }
+      pageToken = data.nextPageToken || null;
+    } while (pageToken);
+    return results;
   };
+
+  const listFolderContents = (id) => listAllFolderFiles(id, false);
 
   const downloadFile = (driveId) => downloadDriveFileBlob(accessToken, driveId);
 
-  progress('Listing Drive files...');
-  const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
-  const fields = encodeURIComponent('files(id,name,mimeType,size,modifiedTime)');
-  const res = await fetchGoogleApisGet(
-    `/drive/v3/files?q=${query}&fields=${fields}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } }
-  );
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error?.message || res.statusText);
-  }
-  const data = await res.json();
-  const allRawItems = data.files || [];
+  progress('Listing Drive files…');
+  const allRawItems = await listAllFolderFiles(folderId, true);
 
-  // Separate folders from files.
-  const driveFolders = allRawItems
-    .filter(f => f.mimeType === FOLDER_MIME)
-    .map(f => ({ driveId: f.id, name: f.name, mimeType: f.mimeType, modifiedTime: f.modifiedTime }));
-
-  const allDriveFiles = allRawItems
-    .filter(f => ALL_SYNCABLE_MIME_TYPES.includes(f.mimeType))
-    .map(f => ({
-      driveId: f.id,
-      name: f.name,
-      mimeType: f.mimeType,
-      size: parseInt(f.size) || 0,
-      modifiedTime: f.modifiedTime,
-    }));
+  const driveFolders = allRawItems.filter(f => f.mimeType === FOLDER_MIME);
+  const allDriveFiles = allRawItems.filter(f => ALL_SYNCABLE_MIME_TYPES.includes(f.mimeType));
 
   let contentFiles = allDriveFiles.filter(
     (f) => SUPPORTED_MIME_TYPES.includes(f.mimeType) && f.name !== OWNER_INDEX_FILENAME
   );
-  let imageFiles = allDriveFiles.filter(
-    (f) => IMAGE_MIME_TYPES.includes(f.mimeType)
-  );
+  let imageFiles = allDriveFiles.filter((f) => IMAGE_MIME_TYPES.includes(f.mimeType));
 
   if (allowedDriveIds && allowedDriveIds.size > 0) {
     contentFiles = contentFiles.filter((f) => allowedDriveIds.has(f.driveId));
-    imageFiles = imageFiles.filter((f) => allowedDriveIds.has(f.driveId));
+    imageFiles   = imageFiles.filter((f) => allowedDriveIds.has(f.driveId));
   }
 
   contentFiles.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
   imageFiles.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
 
-  const counts = { added: 0, updated: 0, skipped: 0 };
-
-  // Phase 0: sync note bundles stored as Drive folders (folder contains a .md + image assets).
+  // Pre-scan Drive folders to identify note bundles (.md + assets inside a subfolder).
+  // Done up-front so we know the global total before any downloads begin.
+  const noteBundles = [];
   for (const folder of driveFolders) {
     const contents = await listFolderContents(folder.driveId);
-    const mdFile = contents.find(f => /\.(md|markdown|mdown|mkd)$/i.test(f.name) && f.mimeType === 'text/markdown');
-    if (!mdFile) continue; // not a note bundle
+    const mdFile = contents.find(
+      f => /\.(md|markdown|mdown|mkd)$/i.test(f.name) && f.mimeType === 'text/markdown'
+    );
+    if (!mdFile) continue;
+    const bundleImgs = contents.filter(f => IMAGE_MIME_TYPES.includes(f.mimeType));
+    noteBundles.push({ folder, mdFile, bundleImgs });
+  }
 
-    const imgFiles = contents.filter(f => IMAGE_MIME_TYPES.includes(f.mimeType));
+  // Cover sidecars are downloaded silently (they're UI metadata, not user content).
+  const coverFiles      = imageFiles.filter(f => isCoverSidecarFilename(f.name));
+  const userImageFiles  = imageFiles.filter(f => !isCoverSidecarFilename(f.name));
+
+  const globalTotal = noteBundles.length + contentFiles.length + userImageFiles.length;
+  let globalIdx = 0;
+  let batchProcessed = 0;
+  const batchTick = () => {
+    batchProcessed++;
+    if (onBatchComplete && batchProcessed % 20 === 0) onBatchComplete();
+  };
+
+  const counts = { added: 0, updated: 0, skipped: 0 };
+
+  // Phase 1: note bundles
+  for (const { folder, mdFile, bundleImgs } of noteBundles) {
+    globalIdx++;
+    progress(`${globalIdx} / ${globalTotal}`);
 
     let existing = await getBookByDriveId(mdFile.driveId);
     if (!existing) existing = await getBookByName(mdFile.name);
@@ -166,15 +182,14 @@ export async function syncDriveToLocal({
 
     if (existing && !driveIsNewer) {
       counts.skipped++;
-      continue;
+      batchTick(); continue;
     }
 
-    progress(`Downloading note bundle "${folder.name}"...`);
     const mdBlob = await downloadFile(mdFile.driveId);
-    if (!mdBlob) { counts.skipped++; continue; }
+    if (!mdBlob) { counts.skipped++; batchTick(); continue; }
 
     const assets = [];
-    for (const imgFile of imgFiles) {
+    for (const imgFile of bundleImgs) {
       const blob = await downloadFile(imgFile.driveId);
       if (blob) assets.push({ name: imgFile.name, data: blob, type: imgFile.mimeType, driveId: imgFile.driveId });
     }
@@ -183,10 +198,14 @@ export async function syncDriveToLocal({
     const action = await upsertDriveBook(bundleFile, mdBlob, assets);
     if (action === 'added') counts.added++;
     else counts.updated++;
+    batchTick();
   }
 
-  // Phase 1: sync content files (books, notes, videos)
+  // Phase 2: content files (books, notes, channels, desks, YouTube)
   for (const driveFile of contentFiles) {
+    globalIdx++;
+    progress(`${globalIdx} / ${globalTotal}`);
+
     if (
       driveFile.mimeType === 'application/json' &&
       isPdfAnnotationSidecarFilename(driveFile.name) &&
@@ -199,7 +218,7 @@ export async function syncDriveToLocal({
         );
         if (!blobRes.ok) {
           counts.skipped++;
-          continue;
+          batchTick(); continue;
         }
         const text = await blobRes.text();
         const annAction = await upsertDrivePdfAnnotation(driveFile, text);
@@ -210,7 +229,7 @@ export async function syncDriveToLocal({
         console.warn(`PDF annotation sidecar sync failed for ${driveFile.name}:`, e);
         counts.skipped++;
       }
-      continue;
+      batchTick(); continue;
     }
 
     let existing = await getBookByDriveId(driveFile.driveId);
@@ -223,21 +242,17 @@ export async function syncDriveToLocal({
     if (existing && !driveIsNewer) {
       if (!existing.driveId) await upsertDriveBook(driveFile, existing.data);
       counts.skipped++;
-      continue;
+      batchTick(); continue;
     }
 
     // For JSON files not in books/notes/videos, check channels/desks before downloading.
-    // Those files appear as "no local copy" from getBookByDriveId's perspective.
     if (!existing && driveFile.mimeType === 'application/json') {
       if (getChannelByDriveId) {
         const existingChannel = await getChannelByDriveId(driveFile.driveId);
         if (existingChannel) {
           const chNewer = !existingChannel.modifiedTime ||
             new Date(driveFile.modifiedTime) > new Date(existingChannel.modifiedTime);
-          if (!chNewer) {
-            counts.skipped++;
-            continue;
-          }
+          if (!chNewer) { counts.skipped++; batchTick(); continue; }
         }
       }
       if (getDeskByDriveId) {
@@ -245,17 +260,13 @@ export async function syncDriveToLocal({
         if (existingDesk) {
           const deskNewer = !existingDesk.modifiedTime ||
             new Date(driveFile.modifiedTime) > new Date(existingDesk.modifiedTime);
-          if (!deskNewer) {
-            counts.skipped++;
-            continue;
-          }
+          if (!deskNewer) { counts.skipped++; batchTick(); continue; }
         }
       }
     }
 
-    // In lazy mode, skip blob download for binary book files (EPUB, PDF, etc.).
-    // JSON files must still be downloaded to detect their type (channel, desk, YouTube).
-    // Markdown notes are small text files and always download eagerly.
+    // In lazy mode, skip blob download for binary files (EPUB, PDF).
+    // JSON and markdown must always download to detect type.
     const isBookBinary = driveFile.mimeType !== 'application/json'
       && driveFile.mimeType !== 'text/markdown';
     if (lazyBooks && isBookBinary) {
@@ -263,10 +274,9 @@ export async function syncDriveToLocal({
       if (action === 'added') counts.added++;
       else if (action === 'updated') counts.updated++;
       else counts.skipped++;
-      continue;
+      batchTick(); continue;
     }
 
-    progress(`Downloading ${driveFile.name}...`);
     const blobRes = await fetch(
       `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -274,7 +284,7 @@ export async function syncDriveToLocal({
     if (!blobRes.ok) {
       console.warn(`Failed to download ${driveFile.name}:`, blobRes.statusText);
       counts.skipped++;
-      continue;
+      batchTick(); continue;
     }
     let blob = await blobRes.blob();
     let effectiveFile = driveFile;
@@ -289,14 +299,14 @@ export async function syncDriveToLocal({
           if (action === 'added') counts.added++;
           else if (action === 'updated') counts.updated++;
           else counts.skipped++;
-          continue;
+          batchTick(); continue;
         } else if (parsed._type === DESK_JSON_MARKER && upsertDriveDesk) {
           const { _type, ...deskData } = parsed;
           const action = await upsertDriveDesk(driveFile, deskData);
           if (action === 'added') counts.added++;
           else if (action === 'updated') counts.updated++;
           else counts.skipped++;
-          continue;
+          batchTick(); continue;
         } else if (parsed.url && /youtube\.com|youtu\.be/.test(parsed.url)) {
           const safeTitle = (parsed.title || 'YouTube Video').replace(/[/\\?%*:|"<>]/g, '-');
           effectiveFile = { ...driveFile, name: safeTitle + '.youtube', mimeType: 'application/x-youtube' };
@@ -308,10 +318,11 @@ export async function syncDriveToLocal({
     const action = await upsertDriveBook(effectiveFile, blob);
     if (action === 'added') counts.added++;
     else counts.updated++;
+    batchTick();
   }
 
-  // Phase 2: sync image files
-  if (imageFiles.length > 0 && upsertDriveImage) {
+  // Phase 3: note-attached image files (counted in progress)
+  if (userImageFiles.length > 0 && upsertDriveImage) {
     const noteIdByImageName = new Map();
     if (getNotes) {
       try {
@@ -330,20 +341,9 @@ export async function syncDriveToLocal({
       }
     }
 
-    for (const driveFile of imageFiles) {
-      if (isCoverSidecarFilename(driveFile.name) && upsertDriveCoverImage) {
-        const parentItemName = coverSidecarParentName(driveFile.name);
-        progress(`Downloading cover for "${parentItemName}"...`);
-        const blobRes = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
-          { headers: { Authorization: `Bearer ${accessToken}` } }
-        );
-        if (blobRes.ok) {
-          const blob = await blobRes.blob();
-          await upsertDriveCoverImage({ driveId: driveFile.driveId, parentItemName, mimeType: driveFile.mimeType, modifiedTime: driveFile.modifiedTime }, blob).catch(() => {});
-        }
-        continue;
-      }
+    for (const driveFile of userImageFiles) {
+      globalIdx++;
+      progress(`${globalIdx} / ${globalTotal}`);
 
       let existing = getImageByDriveId ? await getImageByDriveId(driveFile.driveId) : undefined;
       if (!existing && getImageByName) existing = await getImageByName(driveFile.name);
@@ -352,12 +352,8 @@ export async function syncDriveToLocal({
         ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
         : true;
 
-      if (existing && !driveIsNewer) {
-        counts.skipped++;
-        continue;
-      }
+      if (existing && !driveIsNewer) { counts.skipped++; continue; }
 
-      progress(`Downloading image ${driveFile.name}...`);
       const blobRes = await fetch(
         `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -368,7 +364,6 @@ export async function syncDriveToLocal({
         continue;
       }
       const blob = await blobRes.blob();
-
       const noteId = noteIdByImageName.get(driveFile.name) || (existing ? existing.noteId : 0);
       const action = await upsertDriveImage(driveFile, blob, noteId);
       if (action === 'added') counts.added++;
@@ -377,7 +372,24 @@ export async function syncDriveToLocal({
     }
   }
 
-  progress('');
+  // Phase 4: cover sidecars — silent, not counted in progress
+  if (coverFiles.length > 0 && upsertDriveCoverImage) {
+    for (const driveFile of coverFiles) {
+      const parentItemName = coverSidecarParentName(driveFile.name);
+      const blobRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (blobRes.ok) {
+        const blob = await blobRes.blob();
+        await upsertDriveCoverImage(
+          { driveId: driveFile.driveId, parentItemName, mimeType: driveFile.mimeType, modifiedTime: driveFile.modifiedTime },
+          blob
+        ).catch(() => {});
+      }
+    }
+  }
+
   return counts;
 }
 
@@ -772,6 +784,5 @@ export async function backupAllToGDrive({
     }
   }
 
-  progress('');
   return { backed, failed };
 }

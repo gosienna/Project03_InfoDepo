@@ -945,7 +945,7 @@ export const useIndexedDB = () => {
           driveId: driveFile.driveId,
           modifiedTime: mtNew,
           localModifiedAt: mtNew,
-          tags: [],
+          tags: Array.isArray(driveFile.tags) ? normalizeTagsList(driveFile.tags) : [],
           sharedWith: nextSharedWith,
           ownerEmail: driveFile.ownerEmail || '',
           ...(driveFile.driveFolderId ? { driveFolderId: driveFile.driveFolderId } : {}),
@@ -1246,7 +1246,7 @@ export const useIndexedDB = () => {
           modifiedTime: mt,
           localModifiedAt: mt,
           tags: Array.isArray(deskData.tags) ? deskData.tags : [],
-          sharedWith: [],
+          sharedWith: Array.isArray(deskData.sharedWith) ? deskData.sharedWith : [],
           ownerEmail: driveFile.ownerEmail || '',
         });
         addReq.onsuccess = () => { if (!silent) loadDesks('upsertDriveDesk/added'); resolve('added'); };

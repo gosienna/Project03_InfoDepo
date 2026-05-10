@@ -155,6 +155,7 @@ function EpubReaderApp() {
     let cancelled = false;
     (async () => {
       try {
+        console.log('[InfoDepo][epub-reader] opening DB', { itemId, storeName });
         const database = await openDb();
         if (cancelled) { database.close(); return; }
         setDb(database);
@@ -162,14 +163,18 @@ function EpubReaderApp() {
         if (cancelled) return;
         if (!item) { setError('Book not found in library.'); return; }
         document.title = (item.name || 'EPUB Reader') + ' — InfoDepo';
+        console.log('[InfoDepo][epub-reader] item loaded', { name: item.name, hasData: !!item.data, driveId: item.driveId, size: item.size });
 
         if (!item.data && item.driveId) {
           const { clientId } = getDriveCredentials();
           const token = clientId ? getStoredAccessToken(clientId, OWNER_DRIVE_SCOPE) : null;
+          console.log('[InfoDepo][epub-reader] lazy blob — token check', { clientId: clientId?.slice(0, 10), hasToken: !!token });
           if (!token) {
+            console.warn('[InfoDepo][epub-reader] no valid token in localStorage; cannot download blob');
             setError('Book not yet downloaded. Return to the library tab and click the book to fetch it.');
             return;
           }
+          console.log('[InfoDepo][epub-reader] downloading blob from Drive...');
           setBookName(item.name || '');
           setDownloading(true);
           let blob;
@@ -186,6 +191,7 @@ function EpubReaderApp() {
             );
           } finally {}
           if (cancelled || !blob) return;
+          console.log('[InfoDepo][epub-reader] blob downloaded, saving to IDB', { size: blob.size });
           await saveBlobToIdb(database, itemId, storeName, blob);
           if (!cancelled) {
             setBook({ ...item, data: blob });
@@ -194,8 +200,10 @@ function EpubReaderApp() {
           return;
         }
 
+        console.log('[InfoDepo][epub-reader] blob already in IDB, rendering');
         setBook(item);
       } catch (err) {
+        console.error('[InfoDepo][epub-reader] error:', err?.message || err);
         if (!cancelled) {
           setError(err?.message || String(err));
           setDownloading(false);

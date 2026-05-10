@@ -7,12 +7,13 @@ import { BookIcon } from './icons/BookIcon.js';
 import { getDriveCredentials, hasGoogleApiKeyOrProxy } from '../utils/driveCredentials.js';
 import { getDriveFolderId, setDriveFolderId, parseDriveFolderIdInput } from '../utils/driveFolderStorage.js';
 import {
+  getStoredAccessToken,
   removeStoredAccessToken,
   clearAllStoredAccessTokens,
   getAllStoredAccessTokens,
 } from '../utils/driveOAuthStorage.js';
 import { AddContentDropdown } from './AddContentDropdown.js';
-import { runOwnerSyncPipeline } from '../utils/libraryDriveSync.js';
+import { runOwnerSyncPipeline, runViewerDeskSyncPipeline } from '../utils/libraryDriveSync.js';
 import { libraryItemKey } from '../utils/libraryItemKey.js';
 import { fetchGoogleUserEmail } from '../utils/googleUser.js';
 import { normalizeTag } from '../utils/tagUtils.js';
@@ -24,7 +25,7 @@ import { deleteDriveFilesForMergedItem, deleteDriveFilesForChannel } from '../ut
 import { getIndexFileId } from '../utils/ownerIndex.js';
 import { fetchOwnerIndex } from '../utils/ownerIndex.js';
 import { writeOwnerIndex } from '../utils/ownerIndex.js';
-import { listAllUserEmails } from '../utils/userConfig.js';
+import { listAllUserEmails, getUserFolderId } from '../utils/userConfig.js';
 import { syncSharedFromPeers } from '../utils/peerSync.js';
 import {
   LIBRARY_DISPLAY_POLICIES,
@@ -513,9 +514,20 @@ export const Library = ({
     let cancelled = false;
     (async () => {
       syncInFlightRef.current = true;
-      setSyncProgress('Checking shared content from configured users...');
+      setIsSyncing(true);
+      setSyncProgress('');
       setSyncResult(null);
       try {
+        // On iOS Safari, requestAccessToken({ prompt:'' }) requires a user gesture when
+        // the stored token has expired — the silent GIS iframe refresh is blocked by ITP.
+        // Pre-check the stored token; if absent, skip the auto-sync and prompt the user
+        // to tap the Sync button (which runs under a user gesture and succeeds).
+        const storedToken = getStoredAccessToken(credentials.clientId, OWNER_DRIVE_SCOPE);
+        if (!storedToken) {
+          viewerPeerSyncDoneRef.current = false;
+          if (!cancelled) setSyncResult({ error: 'Session expired — tap Sync to sign in again.' });
+          return;
+        }
         const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
         const peerResult = await syncSharedFromPeers({
           accessToken: token,
@@ -536,27 +548,32 @@ export const Library = ({
           deleteDeskByDriveId,
           onProgress: setSyncProgress,
           lazyBooks: true,
+          onBatchComplete: loadAll,
         });
-        if (cancelled) return;
-        loadAll();
-        setSyncResult({
-          sharedFor: googleUserEmail,
-          backed: 0,
-          backupFailed: 0,
-          added: peerResult.added,
-          updated: peerResult.updated,
-          skipped: peerResult.skipped,
-          removed: peerResult.removed || 0,
-          failed: peerResult.failed,
-          peerAdded: peerResult.added,
-          peerRemoved: peerResult.removed || 0,
-          peerFailed: peerResult.failed,
-        });
+        if (!cancelled) {
+          console.log('[InfoDepo][viewer-sync] peerSync complete', peerResult, '— calling loadAll');
+          loadAll();
+          setSyncResult({
+            sharedFor: googleUserEmail,
+            backed: 0,
+            backupFailed: 0,
+            added: peerResult.added,
+            updated: peerResult.updated,
+            skipped: peerResult.skipped,
+            removed: peerResult.removed || 0,
+            failed: peerResult.failed,
+            peerAdded: peerResult.added,
+            peerRemoved: peerResult.removed || 0,
+            peerFailed: peerResult.failed,
+          });
+        }
       } catch (err) {
+        console.error('[InfoDepo][viewer-sync] error:', err?.message || err);
         if (!cancelled) setSyncResult({ error: err?.message || 'Viewer shared-content sync failed.' });
       } finally {
         syncInFlightRef.current = false;
-        if (!cancelled) setSyncProgress('');
+        setIsSyncing(false);
+        setSyncProgress('');
       }
     })();
 
@@ -598,6 +615,7 @@ export const Library = ({
   };
 
   const runOwnerSync = async () => {
+    if (userType === 'viewer') return;
     if (!hasCredentials || syncInFlightRef.current) return;
     syncInFlightRef.current = true;
     setIsSyncing(true);
@@ -646,6 +664,7 @@ export const Library = ({
         mergeChannelSharedWithByDriveId,
         mergeDeskSharedWithByDriveId,
         deleteDeskByDriveId,
+        onBatchComplete: loadAll,
       });
       console.log('[InfoDepo] ownerSync result:', combined);
       loadAll();
@@ -668,9 +687,33 @@ export const Library = ({
     syncInFlightRef.current = true;
     setIsSyncing(true);
     setSyncResult(null);
-    setSyncProgress('Checking shared content from configured users...');
+    setSyncProgress('');
+
+    let deskResult = { backed: 0, backupFailed: 0, added: 0, updated: 0, skipped: 0 };
+
     try {
       const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
+
+      const viewerFolderId = getUserFolderId(googleUserEmail, userConfig);
+      if (viewerFolderId) {
+        setSyncProgress('Backing up viewer desks…');
+        deskResult = await runViewerDeskSyncPipeline({
+          accessToken: token,
+          folderId: viewerFolderId,
+          desks,
+          onSetDriveId: (id, storeName, driveId, syncMeta = null) =>
+            onSetDriveId(id, storeName, driveId, { ...(syncMeta || {}), silent: true }),
+          onProgress: setSyncProgress,
+          getBookByDriveId,
+          getBookByName,
+          getDeskByDriveId,
+          upsertDriveDesk: (driveFile, deskData) =>
+            upsertDriveDesk(driveFile, deskData, { silent: true }),
+          onBatchComplete: loadAll,
+        });
+      }
+
+      setSyncProgress('Checking shared content from configured users...');
       const peerResult = await syncSharedFromPeers({
         accessToken: token,
         myEmail: googleUserEmail,
@@ -690,23 +733,26 @@ export const Library = ({
         deleteDeskByDriveId,
         upsertDriveCoverImage,
         onProgress: setSyncProgress,
+        onBatchComplete: loadAll,
+        lazyBooks: true,
       });
       loadAll();
       setSyncResult({
-        sharedFor: googleUserEmail,
-        backed: 0,
-        backupFailed: 0,
-        added: peerResult.added,
-        updated: peerResult.updated,
-        skipped: peerResult.skipped,
-        removed: peerResult.removed || 0,
-        failed: peerResult.failed,
-        peerAdded: peerResult.added,
-        peerRemoved: peerResult.removed || 0,
-        peerFailed: peerResult.failed,
+        sharedFor:    googleUserEmail,
+        backed:       deskResult.backed,
+        backupFailed: deskResult.backupFailed,
+        added:        deskResult.added + peerResult.added,
+        updated:      (deskResult.updated || 0) + (peerResult.updated || 0),
+        skipped:      deskResult.skipped,
+        removed:      peerResult.removed || 0,
+        failed:       peerResult.failed,
+        peerAdded:    peerResult.added,
+        peerRemoved:  peerResult.removed || 0,
+        peerFailed:   peerResult.failed,
       });
     } catch (err) {
-      setSyncResult({ error: err?.message || 'Viewer shared-content sync failed.' });
+      setSyncResult({ error: err?.message || 'Viewer sync failed.' });
+      removeStoredAccessToken(credentials.clientId, OWNER_DRIVE_SCOPE);
     } finally {
       syncInFlightRef.current = false;
       setIsSyncing(false);
@@ -721,11 +767,12 @@ export const Library = ({
 
   useEffect(() => {
     if (!hasCredentials || !String(driveFolderId || '').trim()) return;
+    if (userType !== 'master' && userType !== 'editor') return;
     if (ownerBackgroundSyncScheduled) return;
     ownerBackgroundSyncScheduled = true;
     // Call directly — no setTimeout so Strict Mode cleanup can't cancel it.
     runOwnerSyncRef.current();
-  }, [hasCredentials, driveFolderId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hasCredentials, driveFolderId, userType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleFilter = (filter) => {
     setActiveFilters(prev => {
@@ -1120,8 +1167,16 @@ export const Library = ({
       )
     ),
 
+    // Sync progress banner — visible while sync is running
+    isSyncing && React.createElement(
+      'div',
+      { className: 'mb-4 px-4 py-2 rounded-xl text-sm flex items-center gap-3 bg-teal-900/30 text-teal-300 border border-teal-800/40' },
+      React.createElement('div', { className: 'h-3.5 w-3.5 border-2 border-teal-400 border-t-transparent rounded-full animate-spin flex-shrink-0' }),
+      syncProgress || 'Syncing…',
+    ),
+
     // Sync result banner (covers both backup and sync phases)
-    syncResult && React.createElement(
+    !isSyncing && syncResult && React.createElement(
       'div',
       {
         className: `mb-4 px-4 py-2 rounded-xl text-sm flex items-center justify-between ${syncResult.error ? 'bg-red-900/30 text-red-300 border border-red-800/40' : syncResult.failed > 0 ? 'bg-amber-900/30 text-amber-300 border border-amber-800/40' : 'bg-teal-900/30 text-teal-300 border border-teal-800/40'}`,

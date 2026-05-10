@@ -17,10 +17,11 @@ InfoDepo synchronization is now based on owner folders plus item-level sharing m
 
 `runOwnerSyncPipeline(...)` executes:
 
-1. **Backup local -> Drive** (`backupAllToGDrive`)
-2. **Pull Drive -> local** (`syncDriveToLocal`, with `lazyBooks: true`)
-3. **Write owner index** (`writeOwnerIndex`)
-4. **Peer sync** (`syncSharedFromPeers`, with `lazyBooks: true`) when config is available
+1. **Fetch + merge Drive index** — fetch `_infodepo_index.json` from Drive; merge any `sharedWith` differences into local IDB (Drive is authoritative); build `indexMetaByDriveId` map for new items downloaded in step 3.
+2. **Write owner index** (`writeOwnerIndex`) — rewrite the index with the merged state.
+3. **Backup local -> Drive** (`backupAllToGDrive`)
+4. **Pull Drive -> local** (`syncDriveToLocal`, with `lazyBooks: true`)
+5. **Peer sync** (`syncSharedFromPeers`, with `lazyBooks: true`) when config is available
 
 Returned summary includes `backed`, `backupFailed`, `added`, `updated`, `skipped`, `removed`, `peerAdded`, `peerRemoved`, `peerFailed`.
 
@@ -46,16 +47,31 @@ Binary book files (EPUB, PDF, TXT — anything with a non-JSON, non-Markdown MIM
 
 ## Viewer shared-content sync
 
-For `viewer`, `Library.js` triggers `syncSharedFromPeers` once after role/config are ready:
+For `viewer`, `Library.js` triggers `syncSharedFromPeers` once after role/config are ready. The function uses a **two-phase approach** so a `X / N` progress counter is shown before any downloads start:
 
-1. list peers from `config.users` that have `folderId`
-2. fetch each peer's `_infodepo_index.json`
-3. keep entries where `sharedWith` contains viewer email
-4. **prune** peer-owned local rows no longer shared
-5. upsert remaining shared entries — binary books as metadata-only (`lazyBooks: true`), JSON eagerly
-6. for each book entry with `coverImageDriveId`, download and store the cover sidecar (always eager)
+**Phase 1 — index gathering** (progress: `"Fetching shared content index…"`):
 
-This keeps viewer IndexedDB aligned when owner revokes sharing.
+1. List peers from `config.users` that have `folderId`.
+2. Fetch each peer's `_infodepo_index.json`.
+3. Filter entries where `sharedWith` contains the viewer email.
+4. Accumulate all `sharedWithMe` arrays into `peerData[]` and compute `globalTotal`.
+
+**Phase 2 — prune + download** (progress: `"${globalIdx} / ${globalTotal}"`):
+
+5. For each peer in `peerData`: prune peer-owned local rows whose `driveId` is no longer in the peer's shared set.
+6. For each shared entry: increment `globalIdx`, emit `"${globalIdx} / ${globalTotal}"`, then upsert — binary books as metadata-only (`lazyBooks: true`), JSON eagerly.
+7. For each entry with `coverImageDriveId`, download and store the cover sidecar (always eager, not counted in `globalTotal`).
+
+This keeps viewer IndexedDB aligned when an owner revokes sharing.
+
+## Viewer desk sync
+
+Viewers can back up their own desks to a personal Drive folder. The folder ID is set by the master in the "Manage Users" panel (`UserConfigModal`). `runViewerDeskSyncPipeline` in `utils/libraryDriveSync.js` handles this:
+
+1. **Backup** — calls `backupAllToGDrive` with `items: [], channels: []` so only desks are processed.
+2. **Pull** — calls `syncDriveToLocal` with a no-op `upsertDriveBook` (viewer folder only contains desk JSON; non-desk files are safely ignored) and only `getDeskByDriveId` / `upsertDriveDesk` wired.
+
+`runViewerPeerSync` in `Library.js` runs the desk pipeline first (if the viewer has a `folderId` in config), then runs the peer-content sync.
 
 ## Cover image sidecar backup and sync
 
@@ -71,7 +87,7 @@ Cover images set on items (books/notes/videos) are backed up to Drive as a sidec
 3. Call `onSetCoverImageDriveSync(itemId, storeName, { coverImageDriveId, modifiedTime })` to persist the Drive file ID.
 
 **Download flow (`syncDriveToLocal`):**
-- In Phase 2 (image files), before note-image matching: detect `.infodepo-cover.` filenames.
+- Cover sidecars are handled silently in **Phase 4** (after note bundles, content files, and user images). They are not counted in `globalTotal` and emit no progress message.
 - Download blob → call `upsertDriveCoverImage({ driveId, parentItemName, mimeType, modifiedTime }, blob)`.
 - `parentItemName` is derived by stripping `.infodepo-cover.${ext}` from the filename.
 
@@ -134,6 +150,26 @@ Because **backup runs before pull** in the same sync, dirty local desks are norm
 - `localModifiedAt`: local edit timestamp.
 - **Backup upload** (items, channels, desks): when `driveId` is missing or **`localModifiedAt` > `modifiedTime`** (`deskNeedsBackupUpload` for desks, analogous helpers for other kinds in `utils/driveSync.js`).
 - **Pull into an existing desk**: `upsertDriveDesk` uses **Drive `modifiedTime` vs stored `modifiedTime`** only (not `localModifiedAt`); see **Desk backup and sync** above.
+
+## Sync progress display
+
+Both owner and viewer syncs show a unified **`X / N`** counter (e.g. `"5 / 68"`) in the Library's in-body progress banner and in the Header Sync button text while `isSyncing` is true.
+
+**`syncDriveToLocal` (owner)** uses a pre-scan approach:
+
+- **Phase 0** — list Drive subfolders; identify note bundles by looking for a `.md` file inside each folder. Compute `globalTotal = noteBundles.length + contentFiles.length + userImageFiles.length`. Cover sidecars are excluded from the total.
+- **Phase 1** — download note bundles; emit `"${globalIdx} / ${globalTotal}"` at the start of each.
+- **Phase 2** — download content files (EPUB, PDF, JSON, etc.); same counter.
+- **Phase 3** — download user image files; same counter.
+- **Phase 4** — download cover sidecars silently (no counter, no progress message).
+
+Neither `syncDriveToLocal` nor `backupAllToGDrive` clears the progress message on completion — the `finally` block in `Library.js` is the sole clearer via `setSyncProgress('')`.
+
+**`syncSharedFromPeers` (viewer)** uses a two-phase approach (see **Viewer shared-content sync** above).
+
+**Viewer auto-sync** calls `setIsSyncing(true)` before entering the pipeline and `setIsSyncing(false)` unconditionally in `finally`, so the Header Sync button spinner appears for viewers the same as it does for owners.
+
+**Background sync guard** — the one-per-load background `useEffect` in `Library.js` checks `userType !== 'master' && userType !== 'editor'` before scheduling `runOwnerSync`. This prevents a viewer who previously held a master session (and still has a `driveFolderId` in `localStorage`) from accidentally running the owner backup pipeline alongside the viewer peer sync.
 
 ## Rendering strategy during sync
 

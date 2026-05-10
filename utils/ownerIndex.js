@@ -21,6 +21,7 @@ export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items
       type: item.type,
       modifiedTime: item.modifiedTime instanceof Date ? item.modifiedTime.toISOString() : String(item.modifiedTime || ''),
       sharedWith: Array.isArray(item.sharedWith) ? item.sharedWith : [],
+      tags: Array.isArray(item.tags) ? item.tags : [],
       ...(item.coverImageDriveId ? { coverImageDriveId: item.coverImageDriveId } : {}),
     });
   }
@@ -33,6 +34,7 @@ export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items
       type: 'infodepo-channel',
       modifiedTime: ch.modifiedTime instanceof Date ? ch.modifiedTime.toISOString() : String(ch.modifiedTime || ''),
       sharedWith: Array.isArray(ch.sharedWith) ? ch.sharedWith : [],
+      tags: Array.isArray(ch.tags) ? ch.tags : [],
     });
   }
   for (const dk of desks || []) {
@@ -44,6 +46,7 @@ export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items
       type: 'infodepo-desk',
       modifiedTime: dk.modifiedTime instanceof Date ? dk.modifiedTime.toISOString() : String(dk.modifiedTime || ''),
       sharedWith: Array.isArray(dk.sharedWith) ? dk.sharedWith : [],
+      tags: Array.isArray(dk.tags) ? dk.tags : [],
     });
   }
 

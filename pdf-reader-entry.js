@@ -215,6 +215,7 @@ function PdfReaderApp() {
     let database;
     (async () => {
       try {
+        console.log('[InfoDepo][pdf-reader] opening DB', { itemId, storeName });
         database = await openDb();
         if (cancelled) { database.close(); return; }
         setDb(database);
@@ -224,16 +225,20 @@ function PdfReaderApp() {
         if (!foundItem) { setError('PDF not found in library.'); return; }
 
         document.title = (foundItem.name || 'PDF Reader') + ' — InfoDepo';
+        console.log('[InfoDepo][pdf-reader] item loaded', { name: foundItem.name, hasData: !!foundItem.data, driveId: foundItem.driveId, size: foundItem.size });
 
         let resolvedData = foundItem.data;
 
         if (!resolvedData && foundItem.driveId) {
           const { clientId } = getDriveCredentials();
           const token = clientId ? getStoredAccessToken(clientId, OWNER_DRIVE_SCOPE) : null;
+          console.log('[InfoDepo][pdf-reader] lazy blob — token check', { clientId: clientId?.slice(0, 10), hasToken: !!token });
           if (!token) {
+            console.warn('[InfoDepo][pdf-reader] no valid token in localStorage; cannot download blob');
             setError('PDF not yet downloaded. Return to the library tab and click the book to fetch it.');
             return;
           }
+          console.log('[InfoDepo][pdf-reader] downloading blob from Drive...');
           setBookName(foundItem.name || '');
           setDownloading(true);
           let blob;
@@ -250,6 +255,7 @@ function PdfReaderApp() {
             );
           } finally {}
           if (cancelled || !blob) return;
+          console.log('[InfoDepo][pdf-reader] blob downloaded, saving to IDB', { size: blob.size });
           await saveBlobToIdb(database, itemId, storeName, blob);
           resolvedData = blob;
           if (!cancelled) setDownloading(false);
@@ -257,6 +263,7 @@ function PdfReaderApp() {
 
         // Materialize IDB blob into memory immediately — iOS Safari IDB blobs reference
         // temporary backing files that become unreadable after the transaction closes.
+        console.log('[InfoDepo][pdf-reader] materializing blob...');
         const materializedData = await materializeBlob(resolvedData);
         if (cancelled) return;
 
@@ -272,10 +279,12 @@ function PdfReaderApp() {
         }
 
         if (!cancelled) {
+          console.log('[InfoDepo][pdf-reader] rendering PDF');
           setItem({ ...foundItem, data: materializedData });
           setAnnotations(anns);
         }
       } catch (err) {
+        console.error('[InfoDepo][pdf-reader] error:', err?.message || err);
         if (!cancelled) {
           setError(err?.message || String(err));
           setDownloading(false);

@@ -294,68 +294,106 @@ const App = () => {
     const blobKey = video.id ?? video.driveId;
 
     // EPUB/MOBI/AZW files open in a dedicated tab (reader.html).
-    // window.open() must be called synchronously (before any await) to preserve the
-    // user-activation gesture on Safari — Safari blocks popup windows opened after async ops.
-    // If the blob is lazy (not yet cached), download it in the background so the tile
-    // progress overlay is visible; the reader tab has its own download fallback in parallel.
+    // Strategy for lazy blobs (data == null):
+    //   1. await getOwnerDriveAccessToken() — fast (microtask if cached, or GIS refresh).
+    //      This ensures a fresh token is written to localStorage before the reader tab opens,
+    //      so the reader tab's own download fallback can use it.
+    //   2. window.open() — called BEFORE the blob download (a slow network request).
+    //      On Safari, user-activation is preserved through microtask-only awaits but lost
+    //      after fetch/stream ops, so the window must open before the download starts.
+    //   3. Blob download runs fire-and-forget to show tile progress and pre-populate IDB.
     const isEpub = ['epub', 'mobi', 'azw', 'azw3'].includes(ext)
       || ['application/epub+zip', 'application/x-mobipocket-ebook',
           'application/vnd.amazon.ebook', 'application/vnd.amazon.mobi8-ebook'].includes(mime);
     if (isEpub && video.id != null) {
-      window.open(`/reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+      console.log('[InfoDepo][openItem] epub/mobi', { id: video.id, store: video.idbStore, hasData: !!video.data, driveId: video.driveId });
       if (!video.data && video.driveId) {
         startProgress(blobKey, video.size);
-        (async () => {
-          try {
-            const token = await getOwnerDriveAccessToken();
-            const blob = await fetchWithProgress(
-              `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
-              { Authorization: `Bearer ${token}` },
-              video.size || 0,
-              (loaded, total) => updateProgress(blobKey, loaded, total),
-            );
-            if (blob) await updateBookBlob(video.id, blob, video.idbStore || 'books');
-          } catch {
-            // reader tab has its own download fallback
-          } finally {
-            clearProgress(blobKey);
-          }
-        })();
+        let fetchToken = null;
+        try {
+          fetchToken = await getOwnerDriveAccessToken();
+          console.log('[InfoDepo][openItem] epub token ready, opening reader tab');
+        } catch (tokenErr) {
+          console.warn('[InfoDepo][openItem] epub token error:', tokenErr?.message);
+          clearProgress(blobKey);
+        }
+        window.open(`/reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+        if (fetchToken) {
+          (async () => {
+            try {
+              const blob = await fetchWithProgress(
+                `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
+                { Authorization: `Bearer ${fetchToken}` },
+                video.size || 0,
+                (loaded, total) => updateProgress(blobKey, loaded, total),
+              );
+              if (blob) {
+                await updateBookBlob(video.id, blob, video.idbStore || 'books');
+                console.log('[InfoDepo][openItem] epub pre-download done:', video.name);
+              }
+            } catch (dlErr) {
+              console.warn('[InfoDepo][openItem] epub background download failed:', dlErr?.message);
+            } finally {
+              clearProgress(blobKey);
+            }
+          })();
+        }
+      } else {
+        console.log('[InfoDepo][openItem] epub has local data, opening reader tab directly');
+        window.open(`/reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
       }
       return;
     }
 
-    // PDFs open in a dedicated tab (pdf-reader.html) — same window.open-first pattern.
+    // PDFs open in a dedicated tab (pdf-reader.html) — same token-first, open-before-download pattern.
     const isPdf = ext === 'pdf' || mime === 'application/pdf';
     if (isPdf && video.id != null) {
-      window.open(`/pdf-reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+      console.log('[InfoDepo][openItem] pdf', { id: video.id, store: video.idbStore, hasData: !!video.data, driveId: video.driveId });
       if (!video.data && video.driveId) {
         startProgress(blobKey, video.size);
-        (async () => {
-          try {
-            const token = await getOwnerDriveAccessToken();
-            const blob = await fetchWithProgress(
-              `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
-              { Authorization: `Bearer ${token}` },
-              video.size || 0,
-              (loaded, total) => updateProgress(blobKey, loaded, total),
-            );
-            if (blob) await updateBookBlob(video.id, blob, video.idbStore || 'books');
-          } catch {
-            // reader tab has its own download fallback
-          } finally {
-            clearProgress(blobKey);
-          }
-        })();
+        let fetchToken = null;
+        try {
+          fetchToken = await getOwnerDriveAccessToken();
+          console.log('[InfoDepo][openItem] pdf token ready, opening reader tab');
+        } catch (tokenErr) {
+          console.warn('[InfoDepo][openItem] pdf token error:', tokenErr?.message);
+          clearProgress(blobKey);
+        }
+        window.open(`/pdf-reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+        if (fetchToken) {
+          (async () => {
+            try {
+              const blob = await fetchWithProgress(
+                `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
+                { Authorization: `Bearer ${fetchToken}` },
+                video.size || 0,
+                (loaded, total) => updateProgress(blobKey, loaded, total),
+              );
+              if (blob) {
+                await updateBookBlob(video.id, blob, video.idbStore || 'books');
+                console.log('[InfoDepo][openItem] pdf pre-download done:', video.name);
+              }
+            } catch (dlErr) {
+              console.warn('[InfoDepo][openItem] pdf background download failed:', dlErr?.message);
+            } finally {
+              clearProgress(blobKey);
+            }
+          })();
+        }
+      } else {
+        console.log('[InfoDepo][openItem] pdf has local data, opening reader tab directly');
+        window.open(`/pdf-reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
       }
       return;
     }
 
-    // For non-tab types, download blob on demand if not yet cached locally.
+    // For non-tab types (TXT, MD, YouTube, images), download blob on demand.
+    console.log('[InfoDepo][openItem] non-tab item', { ext, mime, id: video.id, hasData: !!video.data, driveId: video.driveId });
     if (!video.data && video.driveId) {
       startProgress(blobKey, video.size);
       try {
         const token = await getOwnerDriveAccessToken();
+        console.log('[InfoDepo][openItem] non-tab token ready, downloading blob');
         const blob = await fetchWithProgress(
           `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
           { Authorization: `Bearer ${token}` },
@@ -365,7 +403,12 @@ const App = () => {
         if (blob) {
           await updateBookBlob(video.id, blob, video.idbStore || 'books');
           video = { ...video, data: blob };
+          console.log('[InfoDepo][openItem] non-tab blob ready:', video.name);
+        } else {
+          console.warn('[InfoDepo][openItem] non-tab fetchWithProgress returned null blob');
         }
+      } catch (err) {
+        console.warn('[InfoDepo][openItem] non-tab download failed:', err?.message);
       } finally {
         clearProgress(blobKey);
       }
@@ -826,6 +869,7 @@ const App = () => {
               items,
               channels,
               desks,
+              googleUserEmail,
               onSelectItem: handleSelectVideo,
               onSelectChannel: handleSelectChannel,
               onSelectDesk: handleSelectDesk,

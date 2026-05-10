@@ -94,23 +94,16 @@ function UserRow({ email, entry, onChange, onRemove, isMaster }) {
       },
       ROLE_OPTIONS.map((r) => React.createElement('option', { key: r, value: r }, r))
     ),
-    entry.role !== 'viewer'
-      ? React.createElement('input', {
-          type: 'text',
-          value: entry.folderId || '',
-          onChange: (e) => onChange(email, { ...entry, folderId: e.target.value }),
-          placeholder: 'Folder ID',
-          className: 'w-28 bg-gray-800 border border-gray-600 text-gray-200 text-xs rounded px-2 py-1 placeholder-gray-500 font-mono',
-          title: 'Google Drive folder ID for this user',
-        })
-      : React.createElement(
-          'span',
-          {
-            className: 'w-28 text-center bg-gray-800 border border-gray-600 text-gray-400 text-[11px] rounded px-2 py-1',
-            title: 'Viewer does not require a folder ID',
-          },
-          'N/A'
-        ),
+    React.createElement('input', {
+      type: 'text',
+      value: entry.folderId || '',
+      onChange: (e) => onChange(email, { ...entry, folderId: e.target.value }),
+      placeholder: 'Folder ID',
+      className: 'w-28 bg-gray-800 border border-gray-600 text-gray-200 text-xs rounded px-2 py-1 placeholder-gray-500 font-mono',
+      title: entry.role === 'viewer'
+        ? 'Drive folder ID for viewer desk backup'
+        : 'Google Drive folder ID for this user',
+    }),
     React.createElement(
       'button',
       {
