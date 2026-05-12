@@ -63,6 +63,41 @@ const renderMarkdown = (text, assetUrls) => {
   while (i < lines.length) {
     const line = lines[i];
 
+    // Table block — | header | row | followed by |---|---| separator
+    if (line.startsWith('|')) {
+      const tableLines = [];
+      while (i < lines.length && lines[i].startsWith('|')) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      const parseRow = (row) => row.split('|').slice(1, -1).map(c => c.trim());
+      if (tableLines.length >= 2 && /^\|[\s\-:|]+\|/.test(tableLines[1])) {
+        const headers  = parseRow(tableLines[0]);
+        const dataRows = tableLines.slice(2).map(parseRow);
+        const cellStyle = 'border:1px solid #374151;padding:6px 12px';
+        let html = '<table style="border-collapse:collapse;width:100%;margin:4px 0">';
+        html += '<thead><tr>';
+        headers.forEach(h => { html += `<th style="${cellStyle};text-align:left;background:#1f2937;font-weight:600">${inlineMarkdown(h, assetUrls)}</th>`; });
+        html += '</tr></thead>';
+        if (dataRows.length > 0) {
+          html += '<tbody>';
+          dataRows.forEach(row => {
+            html += '<tr>';
+            for (let ci = 0; ci < headers.length; ci++) {
+              html += `<td style="${cellStyle}">${inlineMarkdown(row[ci] ?? '', assetUrls)}</td>`;
+            }
+            html += '</tr>';
+          });
+          html += '</tbody>';
+        }
+        html += '</table>';
+        output.push(html);
+      } else {
+        tableLines.forEach(l => output.push(`<div style="margin:0">${inlineMarkdown(l, assetUrls)}</div>`));
+      }
+      continue;
+    }
+
     // Fenced code block
     if (line.startsWith('```')) {
       const codeLines = [];
@@ -273,6 +308,23 @@ const htmlDivsToMarkdown = (containerEl, assetUrls) => {
       continue;
     }
 
+    if (tag === 'table') {
+      const ths = node.querySelectorAll('thead tr th, thead tr td');
+      const trs = node.querySelectorAll('tbody tr');
+      if (ths.length > 0) {
+        const headers = Array.from(ths).map(th => th.textContent.trim().replace(/\|/g, '\\|'));
+        lines.push('| ' + headers.join(' | ') + ' |');
+        lines.push('| ' + headers.map(() => '---').join(' | ') + ' |');
+        trs.forEach(tr => {
+          const cells = Array.from(tr.querySelectorAll('td, th')).map(td => td.textContent.trim().replace(/\|/g, '\\|'));
+          // pad/trim to match header count
+          const padded = Array.from({ length: headers.length }, (_, ci) => cells[ci] ?? '');
+          lines.push('| ' + padded.join(' | ') + ' |');
+        });
+      }
+      continue;
+    }
+
     if (tag === 'div') {
       if (node.innerHTML === '&nbsp;' || (node.textContent.trim() === '' && !node.querySelector('img'))) {
         lines.push('');
@@ -384,6 +436,7 @@ const SLASH_COMMANDS = [
   { id: 'canvas',   label: 'Canvas',         hint: 'blank 800x600',   insert: null,   canvas: true     },
   { id: 'youtube',  label: 'YouTube embed',  hint: 'paste URL',       insert: '[Video Title](https://youtube.com/watch?v=)' },
   { id: 'goto',     label: 'Go to section',  hint: 'jump to heading', insert: null,   gotoSection: true },
+  { id: 'table',    label: 'Table',          hint: '3 × 3 grid',      insert: null,   table: true },
 ];
 
 export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, readOnly, onRename }) => {
@@ -584,6 +637,14 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
         requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start; ta.focus(); pushHistory(newText, start); });
         return;
       }
+      if (cmd.table) {
+        const tpl = '| Col 1 | Col 2 | Col 3 |\n|-------|-------|-------|\n| Cell  | Cell  | Cell  |\n';
+        const withTable = newText.slice(0, start) + tpl + newText.slice(start);
+        setText(withTable); setIsDirty(true);
+        const newCursor = start + tpl.indexOf('Col 1');
+        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newCursor; ta.focus(); pushHistory(withTable, newCursor); });
+        return;
+      }
       pendingImageSize.current = cmd.imageSize;
       requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start; ta.focus(); pushHistory(newText, start); });
       imageInputRef.current?.click();
@@ -596,7 +657,27 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newCursor; ta.focus(); pushHistory(newText, newCursor); });
   };
 
-  // ── HTML-mode slash command helpers ────────────────────────────────
+  // ── HTML-mode helpers ──────────────────────────────────────────────
+
+  const placeCursor = (el, pos) => {
+    try {
+      let target = el;
+      if (target.nodeType !== Node.TEXT_NODE) {
+        const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+        target = walker.firstChild() || target;
+      }
+      const r = document.createRange();
+      if (target.nodeType === Node.TEXT_NODE) {
+        r.setStart(target, Math.min(pos, target.textContent.length));
+      } else {
+        r.setStart(target, 0);
+      }
+      r.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    } catch (_) {}
+  };
 
   const HEADING_STYLES = {
     h1: 'font-weight:800;text-decoration:underline;text-underline-offset:3px;margin:0',
@@ -751,6 +832,43 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       }
     }
 
+    // Tab / Shift-Tab to navigate table cells in HTML mode
+    if (e.key === 'Tab' && !slashMenu) {
+      const sel = window.getSelection();
+      if (sel && sel.isCollapsed && contentEditableRef.current) {
+        let cellEl = sel.focusNode;
+        if (cellEl && cellEl.nodeType === Node.TEXT_NODE) cellEl = cellEl.parentElement;
+        while (cellEl && cellEl.tagName !== 'TD' && cellEl.tagName !== 'TH' && cellEl !== contentEditableRef.current) cellEl = cellEl.parentElement;
+        if (cellEl && (cellEl.tagName === 'TD' || cellEl.tagName === 'TH')) {
+          e.preventDefault();
+          const allCells = Array.from(cellEl.closest('table').querySelectorAll('th, td'));
+          const idx = allCells.indexOf(cellEl);
+          const target = e.shiftKey ? allCells[idx - 1] : allCells[idx + 1];
+          if (target) {
+            placeCursor(target, 0);
+          } else if (!e.shiftKey) {
+            // Tab after last cell — append a new row
+            const table = cellEl.closest('table');
+            const colCount = table.querySelector('tr').querySelectorAll('th, td').length;
+            const tbody = table.querySelector('tbody') || table;
+            const newRow = document.createElement('tr');
+            const cellStyle = 'border:1px solid #374151;padding:6px 12px';
+            for (let ci = 0; ci < colCount; ci++) {
+              const td = document.createElement('td');
+              td.setAttribute('style', cellStyle);
+              td.appendChild(document.createElement('br'));
+              newRow.appendChild(td);
+            }
+            tbody.appendChild(newRow);
+            placeCursor(newRow.querySelector('td'), 0);
+            htmlPristine.current = false;
+            setIsDirty(true);
+          }
+          return;
+        }
+      }
+    }
+
     // Tab / Shift-Tab to indent/unindent list items in HTML mode
     if (e.key === 'Tab' && !slashMenu) {
       const sel = window.getSelection();
@@ -821,27 +939,6 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     const before = node.textContent.slice(0, offset);
     const after  = node.textContent.slice(cursorEnd);
     node.textContent = before + after;
-
-    // Place cursor inside the given element at a text position
-    const placeCursor = (el, pos) => {
-      try {
-        let target = el;
-        // Walk into the first text node if el is an element
-        if (target.nodeType !== Node.TEXT_NODE) {
-          const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
-          target = walker.firstChild() || target;
-        }
-        const r = document.createRange();
-        if (target.nodeType === Node.TEXT_NODE) {
-          r.setStart(target, Math.min(pos, target.textContent.length));
-        } else {
-          r.setStart(target, 0);
-        }
-        r.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(r);
-      } catch (_) {}
-    };
 
     if (cmd.insert === null && !cmd.gotoSection) {
       placeCursor(node, offset);
@@ -925,8 +1022,44 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       return;
     }
 
+    if (cmd.table) {
+      const cellStyle = 'border:1px solid #374151;padding:6px 12px';
+      const table = document.createElement('table');
+      table.setAttribute('style', 'border-collapse:collapse;width:100%;margin:4px 0');
+      const thead = document.createElement('thead');
+      const headerRow = document.createElement('tr');
+      ['Col 1', 'Col 2', 'Col 3'].forEach(h => {
+        const th = document.createElement('th');
+        th.setAttribute('style', `${cellStyle};text-align:left;background:#1f2937;font-weight:600`);
+        th.textContent = h;
+        headerRow.appendChild(th);
+      });
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      const dataRow = document.createElement('tr');
+      for (let ci = 0; ci < 3; ci++) {
+        const td = document.createElement('td');
+        td.setAttribute('style', cellStyle);
+        td.appendChild(document.createElement('br'));
+        dataRow.appendChild(td);
+      }
+      tbody.appendChild(dataRow);
+      table.appendChild(tbody);
+
+      if (lineDiv) {
+        lineDiv.replaceWith(table);
+      } else {
+        contentEditableRef.current.appendChild(table);
+      }
+      placeCursor(table.querySelector('th'), 0);
+      htmlPristine.current = false;
+      setIsDirty(true);
+      return;
+    }
+
     if (cmd.insert) {
-      setCursor();
+      placeCursor(node, offset);
       document.execCommand('insertText', false, cmd.insert);
       htmlPristine.current = false;
       setIsDirty(true);

@@ -232,37 +232,26 @@ export async function syncDriveToLocal({
       batchTick(); continue;
     }
 
-    let existing = await getBookByDriveId(driveFile.driveId);
-    if (!existing) existing = await getBookByName(driveFile.name);
+    let bookExisting = await getBookByDriveId(driveFile.driveId);
+    if (!bookExisting) bookExisting = await getBookByName(driveFile.name);
+
+    let existing = bookExisting;
+
+    // For JSON files not found in books/notes/videos, also search channels and desks.
+    if (!existing && driveFile.mimeType === 'application/json') {
+      if (getChannelByDriveId) existing = await getChannelByDriveId(driveFile.driveId);
+      if (!existing && getDeskByDriveId) existing = await getDeskByDriveId(driveFile.driveId);
+    }
 
     const driveIsNewer = existing
       ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
       : true;
 
     if (existing && !driveIsNewer) {
-      if (!existing.driveId) await upsertDriveBook(driveFile, existing.data);
+      // Only patch missing driveId for books/notes/videos — channels/desks manage their own driveId.
+      if (bookExisting && !bookExisting.driveId) await upsertDriveBook(driveFile, bookExisting.data);
       counts.skipped++;
       batchTick(); continue;
-    }
-
-    // For JSON files not in books/notes/videos, check channels/desks before downloading.
-    if (!existing && driveFile.mimeType === 'application/json') {
-      if (getChannelByDriveId) {
-        const existingChannel = await getChannelByDriveId(driveFile.driveId);
-        if (existingChannel) {
-          const chNewer = !existingChannel.modifiedTime ||
-            new Date(driveFile.modifiedTime) > new Date(existingChannel.modifiedTime);
-          if (!chNewer) { counts.skipped++; batchTick(); continue; }
-        }
-      }
-      if (getDeskByDriveId) {
-        const existingDesk = await getDeskByDriveId(driveFile.driveId);
-        if (existingDesk) {
-          const deskNewer = !existingDesk.modifiedTime ||
-            new Date(driveFile.modifiedTime) > new Date(existingDesk.modifiedTime);
-          if (!deskNewer) { counts.skipped++; batchTick(); continue; }
-        }
-      }
     }
 
     // In lazy mode, skip blob download for binary files (EPUB, PDF).
@@ -376,6 +365,12 @@ export async function syncDriveToLocal({
   if (coverFiles.length > 0 && upsertDriveCoverImage) {
     for (const driveFile of coverFiles) {
       const parentItemName = coverSidecarParentName(driveFile.name);
+
+      if (getBookByName) {
+        const parentItem = await getBookByName(parentItemName);
+        if (parentItem?.coverImageDriveId === driveFile.driveId) continue;
+      }
+
       const blobRes = await fetch(
         `https://www.googleapis.com/drive/v3/files/${driveFile.driveId}?alt=media`,
         { headers: { Authorization: `Bearer ${accessToken}` } }
