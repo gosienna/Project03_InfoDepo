@@ -107,6 +107,77 @@
 - If no images: shows "No images in library yet — import an image first."
 - Used by both `Library.js` and `Desk.js` via `coverPickerTarget` state.
 
+### `MarkdownEditor.js`
+
+Markdown note editor with two edit modes and rich inline content.
+
+#### Edit modes
+
+| Mode | How it works |
+|------|-------------|
+| **HTML Edit** (default) | Single `contenteditable` div initialized from `renderMarkdown`. Edits go directly to the DOM; no re-render loop. Switching to MD mode serializes the DOM back to markdown via `htmlDivsToMarkdown`. |
+| **Markdown Edit** | Split-pane: raw markdown textarea (left) + live HTML preview (right, re-rendered on every keystroke). |
+
+#### Slash commands (`/`)
+
+Type `/` at the start of a line to open the command palette:
+
+| Command | Inserts |
+|---------|---------|
+| `/h1`, `/h2`, `/h3` | Heading at the chosen level |
+| `/ul-dash`, `/ul-star`, `/ul-plus` | Unordered list with the chosen marker |
+| `/ol` | Numbered list |
+| `/image` | Opens local file picker; inserts `![name](file)` |
+| `/canvas` | Blank 800×600 drawing canvas (PNG asset) |
+| `/youtube` | YouTube link template |
+| `/table` | 3×3 markdown table |
+| `/math` | Inline math input (`$...$`) |
+| `/math-block` | Display-mode math block (`$$...$$`) |
+| `/goto` | Section-link picker (jumps to a heading anchor) |
+
+#### Math (LaTeX via KaTeX)
+
+Math is rendered using **KaTeX** (loaded synchronously from CDN in `index.html`).
+
+**Syntax:**
+- Inline: `` $E=mc^2$ `` → rendered inline
+- Block: `$$\n\frac{x^2}{2}\n$$` (multi-line) or `$$expr$$` (single-line) → centered display block
+
+**Editing workflow in HTML mode:**
+1. `/math` or `/math-block` inserts an amber-styled editable field (distinctive `caret-color: #fbbf24`, dashed amber border).
+2. Type the LaTeX expression directly into the field.
+3. After **3 seconds of inactivity** (or pressing Escape), the field is replaced with the KaTeX-rendered output (`contenteditable="false"`).
+4. Press **Backspace** when the cursor is immediately after a rendered math element to revert it to the editable amber field.
+5. Blur (click away) commits any open math field immediately.
+
+**Round-trip:** Every rendered element carries `data-latex="<raw expr>"` and `data-display="true|false"`. `htmlDivsToMarkdown` reads these to reconstruct `$...$` / `$$...$$` syntax when switching to MD mode or saving.
+
+**Fallback:** If KaTeX is not yet loaded, the raw expression is shown with amber monospace styling.
+
+#### Tables
+
+Markdown table syntax (`| col | col |` + `|---|---|` separator) is parsed by `renderMarkdown` and rendered as a styled `<table>`. In HTML mode, pressing **Tab** moves the cursor to the next cell; Tab from the last cell appends a new row.
+
+Round-trip: `htmlDivsToMarkdown` serializes `<table>` elements back to pipe-delimited markdown rows.
+
+#### Images
+
+- **Inline size syntax:** `![alt|300](file)` → `width:300px`; `![alt|300x200](file)` → fixed 300×200 with `object-fit:cover`.
+- **Drag handle:** Hover an image to reveal a resize handle on its right edge; drag to resize. Width is written back into the markdown `alt` field.
+- **Edit button:** Hover reveals an "Edit" button that opens `ImageEditor` for cropping/filtering.
+- Paste or drag an image file into the editor to import it as an asset.
+
+#### Key internal functions
+
+| Function | Purpose |
+|----------|---------|
+| `renderMarkdown(text, assetUrls)` | Markdown → HTML (block-level: tables, math, code, lists, headings, HR, paragraphs; inline: math, images, code, bold, italic, YouTube embeds, links) |
+| `inlineMarkdown(text, assetUrls)` | Inline markdown → HTML fragment |
+| `renderMath(expr, display)` | LaTeX expr → KaTeX HTML wrapped in `data-latex` element |
+| `htmlDivsToMarkdown(el, assetUrls)` | contentEditable DOM → markdown string (round-trip) |
+| `commitMathElement(el)` | Render pending math element with KaTeX and lock it |
+| `revertMathElement(el)` | Unlock a rendered math element back to amber editable field |
+
 ### `Reader.js`
 
 - Dispatches viewers by extension/MIME for inline (same-tab) viewers:

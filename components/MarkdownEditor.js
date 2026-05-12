@@ -31,6 +31,8 @@ function loadWasm() {
 // Image size syntax: ![alt|300](file) → width:300px  |  ![alt|300x200](file) → 300×200px
 const inlineMarkdown = (text, assetUrls) =>
   text
+    .replace(/\$\$([^$\n]+?)\$\$/g, (_, expr) => renderMath(expr.trim(), true))
+    .replace(/\$(?!\s|\$)([^$\n]+?)(?<!\s)\$(?!\$)/g, (_, expr) => renderMath(expr, false))
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
       const url = (assetUrls && assetUrls[src]) || src;
       const sizeMatch = alt.match(/\|(\d+)(?:x(\d+))?$/);
@@ -95,6 +97,22 @@ const renderMarkdown = (text, assetUrls) => {
       } else {
         tableLines.forEach(l => output.push(`<div style="margin:0">${inlineMarkdown(l, assetUrls)}</div>`));
       }
+      continue;
+    }
+
+    // Block math — $$...$$ (multi-line or single-line)
+    if (line.startsWith('$$')) {
+      const singleLine = line.match(/^\$\$(.+)\$\$$/);
+      if (singleLine) {
+        output.push(renderMath(singleLine[1].trim(), true));
+        i++;
+        continue;
+      }
+      const bodyLines = [];
+      i++;
+      while (i < lines.length && lines[i] !== '$$') { bodyLines.push(lines[i]); i++; }
+      i++; // consume closing $$
+      output.push(renderMath(bodyLines.join('\n').trim(), true));
       continue;
     }
 
@@ -209,6 +227,27 @@ const escapeHtml = (str) =>
 const unescapeHtml = (str) =>
   str.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
 
+// Render a LaTeX expression to HTML via KaTeX.
+// Wraps output with data-latex/data-display so htmlDivsToMarkdown can round-trip.
+// Falls back to styled raw text when window.katex is not yet loaded.
+const renderMath = (expr, display) => {
+  const tag   = display ? 'div' : 'span';
+  const attrs = `data-latex="${escapeHtml(expr)}" data-display="${display}" contenteditable="false"`;
+  if (window.katex) {
+    try {
+      const inner = window.katex.renderToString(expr, { displayMode: display, throwOnError: false, output: 'html' });
+      const style = display ? 'overflow-x:auto;margin:8px 0;text-align:center' : 'display:inline';
+      return `<${tag} ${attrs} style="${style}">${inner}</${tag}>`;
+    } catch (_) {}
+  }
+  const raw   = escapeHtml(expr);
+  const delim = display ? `$$${raw}$$` : `$${raw}$`;
+  const style = display
+    ? 'font-family:monospace;background:#1f2937;border-radius:6px;padding:8px 12px;color:#fbbf24;display:block;overflow-x:auto;margin:8px 0'
+    : 'font-family:monospace;background:#374151;padding:2px 5px;border-radius:3px;font-size:.9em;color:#fbbf24';
+  return `<${tag} ${attrs} style="${style}">${delim}</${tag}>`;
+};
+
 // Reverse of renderMarkdown — walks the contentEditable DOM and reconstructs
 // the original markdown text, preserving images, blank lines, headings, lists,
 // code blocks, inline formatting, and YouTube embeds.
@@ -223,6 +262,7 @@ const htmlDivsToMarkdown = (containerEl, assetUrls) => {
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const tag = node.tagName.toLowerCase();
     if (tag === 'br') return '\n';
+    if (tag === 'span' && node.dataset?.latex !== undefined && node.dataset.display === 'false') return `$${node.dataset.latex}$`;
     if (tag === 'strong' || tag === 'b') return `**${childrenToMd(node)}**`;
     if (tag === 'em' || tag === 'i') return `*${childrenToMd(node)}*`;
     if (tag === 'code' && !node.closest('pre')) return `\`${node.textContent}\``;
@@ -326,6 +366,10 @@ const htmlDivsToMarkdown = (containerEl, assetUrls) => {
     }
 
     if (tag === 'div') {
+      if (node.dataset?.latex !== undefined && node.dataset.display === 'true') {
+        lines.push(`$$\n${node.dataset.latex}\n$$`);
+        continue;
+      }
       if (node.innerHTML === '&nbsp;' || (node.textContent.trim() === '' && !node.querySelector('img'))) {
         lines.push('');
         continue;
@@ -423,6 +467,9 @@ function createCanvasFilename(existing = {}) {
   return candidate;
 }
 
+const MATH_EDIT_INLINE_STYLE = 'display:inline-block;border-bottom:2px solid #fbbf24;padding:1px 6px 1px 4px;background:#1c1917;color:#fde68a;font-family:monospace;font-size:.95em;caret-color:#fbbf24;border-radius:3px 3px 0 0;min-width:8px;line-height:1.5;white-space:pre';
+const MATH_EDIT_BLOCK_STYLE  = 'display:block;border:2px dashed #fbbf24;border-radius:6px;padding:10px 14px;background:#1c1917;color:#fde68a;font-family:monospace;font-size:.95em;caret-color:#fbbf24;margin:8px 0;min-height:2em;white-space:pre-wrap;outline:none';
+
 // Slash command definitions
 const SLASH_COMMANDS = [
   { id: 'h1',       label: 'Title',          hint: '# Heading',       insert: '# ',   blockOnly: true },
@@ -436,7 +483,9 @@ const SLASH_COMMANDS = [
   { id: 'canvas',   label: 'Canvas',         hint: 'blank 800x600',   insert: null,   canvas: true     },
   { id: 'youtube',  label: 'YouTube embed',  hint: 'paste URL',       insert: '[Video Title](https://youtube.com/watch?v=)' },
   { id: 'goto',     label: 'Go to section',  hint: 'jump to heading', insert: null,   gotoSection: true },
-  { id: 'table',    label: 'Table',          hint: '3 × 3 grid',      insert: null,   table: true },
+  { id: 'table',      label: 'Table',        hint: '3 × 3 grid',    insert: null, table: true },
+  { id: 'math',       label: 'Inline math',  hint: '$ expr $',       insert: null, mathInline: true },
+  { id: 'math-block', label: 'Math block',   hint: '$$ expr $$',     insert: null, mathBlock: true, blockOnly: true },
 ];
 
 export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, readOnly, onRename }) => {
@@ -469,6 +518,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   const historyIdxRef        = useRef(-1);
   const htmlPristine         = useRef(true);   // true = contenteditable not yet edited by user
   const htmlSlashRef         = useRef(null);   // { node, offset } — tracks '/' position in contentEditable for slash commands
+  const mathRenderTimerRef   = useRef(null);   // setTimeout id for deferred math render
 
   useEffect(() => { textRef.current = text; }, [text]);
 
@@ -645,6 +695,20 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
         requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = newCursor; ta.focus(); pushHistory(withTable, newCursor); });
         return;
       }
+      if (cmd.mathInline) {
+        const tpl      = '$ $';
+        const withMath = newText.slice(0, start) + tpl + newText.slice(start);
+        setText(withMath); setIsDirty(true);
+        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start + 1; ta.focus(); pushHistory(withMath, start + 1); });
+        return;
+      }
+      if (cmd.mathBlock) {
+        const tpl      = '$$\n\n$$\n';
+        const withMath = newText.slice(0, start) + tpl + newText.slice(start);
+        setText(withMath); setIsDirty(true);
+        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start + 3; ta.focus(); pushHistory(withMath, start + 3); });
+        return;
+      }
       pendingImageSize.current = cmd.imageSize;
       requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start; ta.focus(); pushHistory(newText, start); });
       imageInputRef.current?.click();
@@ -679,6 +743,48 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     } catch (_) {}
   };
 
+  // Commit a pending math element: render with KaTeX and lock it
+  const commitMathElement = (el) => {
+    if (!el?.isConnected || !el.hasAttribute('data-math-pending')) return;
+    clearTimeout(mathRenderTimerRef.current);
+    const expr      = el.textContent.trim();
+    const isDisplay = el.dataset.display === 'true';
+    el.removeAttribute('data-math-pending');
+    el.setAttribute('contenteditable', 'false');
+    el.setAttribute('data-latex', expr);
+    if (!expr) { el.remove(); return; }
+    el.style.cssText = isDisplay ? 'overflow-x:auto;margin:8px 0;text-align:center' : 'display:inline';
+    if (window.katex) {
+      try { el.innerHTML = window.katex.renderToString(expr, { displayMode: isDisplay, throwOnError: false, output: 'html' }); }
+      catch (_) { el.textContent = isDisplay ? `$$${expr}$$` : `$${expr}$`; }
+    } else {
+      el.textContent = isDisplay ? `$$${expr}$$` : `$${expr}$`;
+    }
+    htmlPristine.current = false;
+    setIsDirty(true);
+  };
+
+  // Revert a rendered math element back to raw editable text
+  const revertMathElement = (el) => {
+    if (!el || el.dataset.latex === undefined) return;
+    const expr      = el.dataset.latex;
+    const isDisplay = el.dataset.display === 'true';
+    el.setAttribute('data-math-pending', 'true');
+    el.removeAttribute('contenteditable');
+    el.style.cssText = isDisplay ? MATH_EDIT_BLOCK_STYLE : MATH_EDIT_INLINE_STYLE;
+    el.textContent = expr;
+    try {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let last = null; while (walker.nextNode()) last = walker.currentNode;
+      if (last) {
+        const r = document.createRange(); r.setStart(last, last.length); r.collapse(true);
+        const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+      }
+    } catch (_) {}
+    htmlPristine.current = false;
+    setIsDirty(true);
+  };
+
   const HEADING_STYLES = {
     h1: 'font-weight:800;text-decoration:underline;text-underline-offset:3px;margin:0',
     h2: 'font-weight:700;border-bottom:1px solid #4b5563;margin:0',
@@ -695,6 +801,27 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     htmlPristine.current = false;
     setIsDirty(true);
     setSaveMsg(null);
+
+    // If cursor is inside a math-pending element, manage the render timer and skip slash detection
+    const selNow = window.getSelection();
+    if (selNow?.focusNode) {
+      let mEl = selNow.focusNode.nodeType === Node.TEXT_NODE ? selNow.focusNode.parentElement : selNow.focusNode;
+      mEl = mEl?.closest?.('[data-math-pending]');
+      if (mEl) {
+        mEl.setAttribute('data-latex', mEl.textContent.trim());
+        clearTimeout(mathRenderTimerRef.current);
+        mathRenderTimerRef.current = setTimeout(() => {
+          commitMathElement(mEl);
+          try {
+            if (mEl.parentNode) {
+              const r = document.createRange(); r.setStartAfter(mEl); r.collapse(true);
+              const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+            }
+          } catch (_) {}
+        }, 3000);
+        return;
+      }
+    }
 
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount || !sel.isCollapsed) {
@@ -733,6 +860,58 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       e.preventDefault();
       if (isDirty && !isSaving) handleSave();
       return;
+    }
+
+    // Math element keyboard handling
+    if (e.key === 'Backspace' && !e.metaKey && !e.ctrlKey) {
+      const selB = window.getSelection();
+      if (selB && selB.isCollapsed && contentEditableRef.current) {
+        const fNode = selB.focusNode;
+        const fOff  = selB.focusOffset;
+
+        // Inside an empty pending math element → remove it
+        let pendEl = fNode?.nodeType === Node.TEXT_NODE ? fNode.parentElement : fNode;
+        pendEl = pendEl?.closest?.('[data-math-pending]');
+        if (pendEl && pendEl.textContent === '') {
+          e.preventDefault();
+          clearTimeout(mathRenderTimerRef.current);
+          pendEl.remove();
+          htmlPristine.current = false; setIsDirty(true);
+          return;
+        }
+
+        // Detect rendered math element immediately before the cursor.
+        // Two browser-reported positions after a contenteditable="false" element:
+        //   A) focusNode is a text node at offset 0 → previous sibling is the math el
+        //   B) focusNode is an element at offset N → childNodes[N-1] is the math el
+        if (!pendEl) {
+          let prevMath = null;
+          if (fNode.nodeType === Node.TEXT_NODE && fOff === 0) {
+            const ps = fNode.previousSibling;
+            if (ps?.nodeType === Node.ELEMENT_NODE && ps.dataset?.latex !== undefined && !ps.hasAttribute('data-math-pending')) prevMath = ps;
+          }
+          if (!prevMath && fNode.nodeType === Node.ELEMENT_NODE && fOff > 0) {
+            const ps = fNode.childNodes[fOff - 1];
+            if (ps?.nodeType === Node.ELEMENT_NODE && ps.dataset?.latex !== undefined && !ps.hasAttribute('data-math-pending')) prevMath = ps;
+          }
+          if (prevMath) {
+            e.preventDefault();
+            clearTimeout(mathRenderTimerRef.current);
+            revertMathElement(prevMath);
+            return;
+          }
+        }
+      }
+    }
+
+    // Escape inside pending math → commit immediately
+    if (e.key === 'Escape') {
+      const selE = window.getSelection();
+      if (selE?.focusNode) {
+        let mEl = selE.focusNode.nodeType === Node.TEXT_NODE ? selE.focusNode.parentElement : selE.focusNode;
+        mEl = mEl?.closest?.('[data-math-pending]');
+        if (mEl) { e.preventDefault(); commitMathElement(mEl); return; }
+      }
     }
 
     if (headingMenu !== null) {
@@ -940,7 +1119,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     const after  = node.textContent.slice(cursorEnd);
     node.textContent = before + after;
 
-    if (cmd.insert === null && !cmd.gotoSection) {
+    if (cmd.insert === null && !cmd.gotoSection && !cmd.table && !cmd.mathInline && !cmd.mathBlock) {
       placeCursor(node, offset);
       if (cmd.canvas) {
         const filename = createCanvasFilename(assetUrls);
@@ -1055,6 +1234,44 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       placeCursor(table.querySelector('th'), 0);
       htmlPristine.current = false;
       setIsDirty(true);
+      return;
+    }
+
+    if (cmd.mathInline) {
+      const span = document.createElement('span');
+      span.setAttribute('data-math-pending', 'true');
+      span.setAttribute('data-display', 'false');
+      span.setAttribute('data-latex', '');
+      span.style.cssText = MATH_EDIT_INLINE_STYLE;
+      const afterText = node.textContent.slice(offset);
+      node.textContent = node.textContent.slice(0, offset);
+      const afterNode = document.createTextNode(afterText || '​');
+      node.after(span);
+      span.after(afterNode);
+      try {
+        const r = document.createRange(); r.setStart(span, 0); r.collapse(true);
+        const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      } catch (_) {}
+      htmlPristine.current = false; setIsDirty(true);
+      return;
+    }
+
+    if (cmd.mathBlock) {
+      const mathDiv = document.createElement('div');
+      mathDiv.setAttribute('data-math-pending', 'true');
+      mathDiv.setAttribute('data-display', 'true');
+      mathDiv.setAttribute('data-latex', '');
+      mathDiv.style.cssText = MATH_EDIT_BLOCK_STYLE;
+      const blankDiv = document.createElement('div');
+      blankDiv.style.margin = '0';
+      blankDiv.appendChild(document.createElement('br'));
+      if (lineDiv) lineDiv.replaceWith(mathDiv); else contentEditableRef.current.appendChild(mathDiv);
+      mathDiv.after(blankDiv);
+      try {
+        const r = document.createRange(); r.setStart(mathDiv, 0); r.collapse(true);
+        const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      } catch (_) {}
+      htmlPristine.current = false; setIsDirty(true);
       return;
     }
 
@@ -1610,7 +1827,10 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
               contentEditableRef.current?.querySelector(`#${CSS.escape(slug)}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }
           },
-          onBlur: () => setTimeout(() => { setSlashMenu(null); setHeadingMenu(null); htmlSlashRef.current = null; }, 150),
+          onBlur: () => setTimeout(() => {
+            contentEditableRef.current?.querySelectorAll('[data-math-pending]').forEach(el => commitMathElement(el));
+            setSlashMenu(null); setHeadingMenu(null); htmlSlashRef.current = null;
+          }, 150),
           onDragOver: (e) => e.preventDefault(),
           onDrop: (e) => {
             e.preventDefault();

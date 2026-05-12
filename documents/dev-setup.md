@@ -86,6 +86,7 @@ This button is automatically removed in production builds by Vite's tree-shaking
 - `Permissions-Policy: unload=*` header is set in `vite.config.js` to allow EPUB.js's `unload` event listeners (blocked by default in Chrome 117+)
 - Google API scripts (`gsi/client`, `api.js`) are loaded in `index.html` via CDN — used by `DevDriveBrowser` for OAuth
 - React, Tailwind, EPUB.js, JSZip are all CDN-loaded — not bundled by Vite
+- **KaTeX** (`katex@0.16.11`) is loaded synchronously from jsDelivr CDN (CSS + JS) for LaTeX math rendering in `MarkdownEditor`. It must load before any ES module runs, so it is placed before the `<script type="importmap">` block in `index.html` with no `defer`/`async`. `window.katex` is available globally after load.
 
 ## Credential Validation
 

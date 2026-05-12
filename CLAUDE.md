@@ -23,6 +23,7 @@ A client-side media library and reader. Content (books, notes, YouTube links, ch
 - **YouTube Data API v3** — channel video listing (reuses `VITE_API_KEY`)
 - **Google OAuth 2.0 + Drive API v3** — folder sync/backup, share permissions, OAuth gate
 - **EPUB.js** — EPUB rendering (CDN)
+- **KaTeX 0.16.11** — LaTeX math rendering in `MarkdownEditor` (CDN, loaded synchronously)
 - **Playwright** — headless browser testing
 
 ## Running Locally
@@ -68,7 +69,7 @@ App.js                            # View switching (library ↔ reader ↔ chann
 └── Reader.js                     # Dispatches to viewer by file extension / MIME type
     ├── PdfViewer.js
     ├── TxtViewer.js
-    ├── MarkdownEditor.js         # Markdown editor with HTML/Markdown dual modes, slash commands, go-to-section, image assets
+    ├── MarkdownEditor.js         # Markdown editor — HTML/Markdown dual modes, slash commands (/table /math /math-block), KaTeX LaTeX rendering, image assets
     ├── YoutubeViewer.js          # YouTube embed via youtube-nocookie.com iframe
     └── UnsupportedViewer.js
 
