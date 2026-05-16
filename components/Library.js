@@ -22,9 +22,7 @@ import { DeleteContentModal } from './DeleteContentModal.js';
 import { applySharedWithToDriveFiles } from '../utils/driveSharePermissions.js';
 import { getOwnerDriveAccessToken, invalidateDriveAccessTokenCache } from '../utils/driveAccessToken.js';
 import { deleteDriveFilesForMergedItem, deleteDriveFilesForChannel } from '../utils/deleteLibraryContentOnDrive.js';
-import { getIndexFileId } from '../utils/ownerIndex.js';
-import { fetchOwnerIndex } from '../utils/ownerIndex.js';
-import { writeOwnerIndex } from '../utils/ownerIndex.js';
+import { getIndexFileId, fetchOwnerIndex, writeOwnerIndex, updateOwnerIndexEntry } from '../utils/ownerIndex.js';
 import { listAllUserEmails, getUserFolderId } from '../utils/userConfig.js';
 import { syncSharedFromPeers } from '../utils/peerSync.js';
 import {
@@ -42,6 +40,7 @@ import {
   resetDriveImplicitUploadToken,
 } from '../utils/driveOAuthImplicitFlowToken.js';
 import { useDriveTileUpload, channelUploadKey } from '../hooks/useDriveTileUpload.js';
+import { backupSingleDesk, syncSingleDeskFromDrive } from '../utils/driveSync.js';
 
 /** Ensures startup background sync runs once per page load (survives React Strict Mode remount). */
 let ownerBackgroundSyncScheduled = false;
@@ -64,6 +63,7 @@ export const Library = ({
   getPdfAnnotationSidecar,
   setPdfAnnotationDriveSync,
   upsertDrivePdfAnnotation,
+  getAnnotationByDriveId,
   setCoverImageDriveSync,
   upsertDriveCoverImage,
   setRecordTags,
@@ -96,6 +96,9 @@ export const Library = ({
   syncProgress,
   setSyncProgress,
   onRegisterSync,
+  onRegisterItemBackup,
+  onRegisterInitialDeskSync,
+  onRegisterSetSharedWith,
   itemDownloadProgress,
 }) => {
   const isEditor = userType === 'master' || userType === 'editor';
@@ -108,6 +111,8 @@ export const Library = ({
   const syncInFlightRef = useRef(false);
   const runOwnerSyncRef = useRef(() => {});
   const viewerPeerSyncDoneRef = useRef(false);
+  const deskBackupTimersRef = useRef(new Map());
+  const desksRef = useRef(desks);
   const credentials = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
   const [driveFolderDraft, setDriveFolderDraft] = useState('');
@@ -343,6 +348,10 @@ export const Library = ({
     const previousSharedWith = Array.isArray(record?.sharedWith) ? [...record.sharedWith] : [];
     await setItemSharedWith(record.id, storeName, emails);
 
+    // Track channel mutations so we can patch stale React state when writing the index.
+    // loadChannels/loadDesks are async — state won't have caught up by the time writeOwnerIndex runs.
+    const propagatedChannelUpdates = new Map(); // channelId → merged sharedWith
+
     // When sharing a desk, propagate newly added emails to all items/channels in the layout.
     // Removal from the desk does NOT revoke item-level access (items may be independently shared).
     if (storeName === 'desks') {
@@ -365,6 +374,7 @@ export const Library = ({
           if (ch) {
             const merged = [...new Set([...(ch.sharedWith || []), ...addedEmails])];
             await setItemSharedWith(ch.id, 'channels', merged);
+            propagatedChannelUpdates.set(ch.id, merged);
           }
         }
       }
@@ -417,13 +427,24 @@ export const Library = ({
         try {
           const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
           const mergedItems = await getMergedLibraryItems();
+          // React state for channels/desks may be stale — loadChannels/loadDesks from
+          // setItemSharedWith are async and likely haven't resolved yet. Patch the
+          // changed record and any channels updated by desk propagation directly.
+          const channelsForIndex = (channels || []).map((c) => {
+            if (storeName === 'channels' && c.id === record.id) return { ...c, sharedWith: emails };
+            if (propagatedChannelUpdates.has(c.id)) return { ...c, sharedWith: propagatedChannelUpdates.get(c.id) };
+            return c;
+          });
+          const desksForIndex = storeName === 'desks'
+            ? (desks || []).map((d) => d.id === record.id ? { ...d, sharedWith: emails } : d)
+            : (desks || []);
           await writeOwnerIndex({
             accessToken: token,
             folderId: driveFolderId,
             ownerEmail: normalizedUserEmail,
             items: mergedItems,
-            channels: channels || [],
-            desks: desks || [],
+            channels: channelsForIndex,
+            desks: desksForIndex,
           });
           console.log('[InfoDepo] Owner index updated after sharedWith change.');
         } catch (idxErr) {
@@ -658,6 +679,7 @@ export const Library = ({
         getPdfAnnotationSidecar,
         setPdfAnnotationDriveSync,
         upsertDrivePdfAnnotation,
+        getAnnotationByDriveId,
         setCoverImageDriveSync,
         upsertDriveCoverImage,
         mergeItemSharedWithByDriveId,
@@ -701,12 +723,10 @@ export const Library = ({
           accessToken: token,
           folderId: viewerFolderId,
           desks,
+          ownerEmail: normalizedUserEmail,
           onSetDriveId: (id, storeName, driveId, syncMeta = null) =>
             onSetDriveId(id, storeName, driveId, { ...(syncMeta || {}), silent: true }),
           onProgress: setSyncProgress,
-          getBookByDriveId,
-          getBookByName,
-          getDeskByDriveId,
           upsertDriveDesk: (driveFile, deskData) =>
             upsertDriveDesk(driveFile, deskData, { silent: true }),
           onBatchComplete: loadAll,
@@ -764,6 +784,65 @@ export const Library = ({
 
   runOwnerSyncRef.current = runOwnerSync;
   onRegisterSync?.(runSync);
+
+  // Keep desksRef current so the debounced backup callback always reads the latest IDB state.
+  desksRef.current = desks;
+
+  const triggerDeskBackup = (deskId) => {
+    if (!credentials?.clientId || !String(driveFolderId || '').trim()) return;
+    if (userType !== 'master' && userType !== 'editor') return;
+    clearTimeout(deskBackupTimersRef.current.get(deskId));
+    deskBackupTimersRef.current.set(deskId, setTimeout(async () => {
+      deskBackupTimersRef.current.delete(deskId);
+      const desk = desksRef.current.find((d) => d.id === deskId);
+      if (!desk) return;
+      try {
+        const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
+        if (!token) return;
+        let capturedDriveId = null;
+        let capturedModifiedTime = null;
+        const wrappedOnSetDriveId = async (id, storeName, driveId, meta) => {
+          await onSetDriveId(id, storeName, driveId, meta);
+          capturedDriveId = driveId;
+          capturedModifiedTime = meta?.modifiedTime;
+        };
+        const result = await backupSingleDesk(desk, { accessToken: token, folderId: driveFolderId, onSetDriveId: wrappedOnSetDriveId });
+        if (result === 'backed' && capturedDriveId) {
+          try {
+            await updateOwnerIndexEntry(capturedDriveId, {
+              modifiedTime: capturedModifiedTime || '',
+              name: desk.name,
+              type: 'infodepo-desk',
+              sharedWith: Array.isArray(desk.sharedWith) ? desk.sharedWith : [],
+              tags: Array.isArray(desk.tags) ? desk.tags : [],
+            }, { accessToken: token, folderId: driveFolderId, ownerEmail: normalizedUserEmail });
+          } catch (indexErr) {
+            console.warn('[InfoDepo] index update after desk backup failed:', indexErr.message);
+          }
+        }
+      } catch (err) {
+        console.warn('[InfoDepo] single desk backup failed:', err.message);
+      }
+    }, 3000));
+  };
+
+  onRegisterItemBackup?.((id, storeName) => {
+    if (storeName === 'desks') triggerDeskBackup(id);
+  });
+
+  onRegisterSetSharedWith?.((record, storeName, emails) => handleSetSharedWith(record, storeName, emails));
+
+  onRegisterInitialDeskSync?.(async (desk) => {
+    if (!credentials?.clientId || !String(driveFolderId || '').trim()) return;
+    if (userType !== 'master' && userType !== 'editor') return;
+    try {
+      const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
+      if (!token) return;
+      await syncSingleDeskFromDrive(desk, { accessToken: token, upsertDriveDesk });
+    } catch (err) {
+      console.warn('[InfoDepo] initial desk sync failed:', err.message);
+    }
+  });
 
   useEffect(() => {
     if (!hasCredentials || !String(driveFolderId || '').trim()) return;

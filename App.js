@@ -63,7 +63,7 @@ const App = () => {
     getChannelByDriveId, upsertDriveChannel,
     getBookByDriveId, getBookByName, upsertDriveBook, updateBookBlob,
     deleteItemByDriveId, deleteChannelByDriveId, getLocalRecordsByOwnerEmail,
-    addDesk, deleteDesk, setDeskLayout, setDeskConnections, setDeskTextItems,
+    addDesk, deleteDesk, setDeskLayout, setDeskConnections, setDeskTextItems, migrateDeskLayout,
     getDeskByDriveId, upsertDriveDesk,
     setRecordTags,
     setItemSharedWith,
@@ -73,6 +73,7 @@ const App = () => {
     deleteDeskByDriveId,
     renameItem,
     setItemReadingPosition,
+    getAnnotationByDriveId,
     getPdfAnnotationSidecar,
     putPdfAnnotationsForItem,
     setPdfAnnotationDriveSync,
@@ -108,6 +109,11 @@ const App = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState('');
   const syncFnRef = useRef(null);
+  const itemBackupFnRef = useRef(null);
+  const initialDeskSyncFnRef = useRef(null);
+  const setSharedWithFnRef = useRef(null);
+  const firstDeskDisplayedRef = useRef(false);
+  const [initialDeskSyncing, setInitialDeskSyncing] = useState(false);
   const [isNewNoteOpen, setIsNewNoteOpen] = useState(false);
   const [isYoutubeOpen, setIsYoutubeOpen] = useState(false);
   const [isChannelOpen, setIsChannelOpen] = useState(false);
@@ -219,11 +225,21 @@ const App = () => {
   }, [desks]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When switching to desk mode, auto-select the most-recently-visited desk.
+  // On the very first display, gate rendering until a targeted Drive pull resolves
+  // so that a stale local copy cannot be accidentally edited before reconciliation.
   useEffect(() => {
     if (mode === 'desk' && !currentDesk && desks.length > 0) {
       const timeOf = (d) => new Date(d.lastVisitedAt ?? d.localModifiedAt ?? d.modifiedTime ?? 0).getTime();
       const mostRecent = desks.reduce((best, d) => timeOf(d) > timeOf(best) ? d : best, desks[0]);
       setCurrentDesk(mostRecent);
+
+      if (!firstDeskDisplayedRef.current && mostRecent.driveId && initialDeskSyncFnRef.current) {
+        firstDeskDisplayedRef.current = true;
+        setInitialDeskSyncing(true);
+        initialDeskSyncFnRef.current(mostRecent).finally(() => setInitialDeskSyncing(false));
+      } else {
+        firstDeskDisplayedRef.current = true;
+      }
     }
   }, [mode, desks]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -815,6 +831,7 @@ const App = () => {
           getImageByName,
           upsertDriveImage,
           getNotes,
+          getAnnotationByDriveId,
           getPdfAnnotationSidecar,
           setPdfAnnotationDriveSync,
           upsertDrivePdfAnnotation,
@@ -850,6 +867,9 @@ const App = () => {
           syncProgress,
           setSyncProgress,
           onRegisterSync: (fn) => { syncFnRef.current = fn; },
+          onRegisterItemBackup: (fn) => { itemBackupFnRef.current = fn; },
+          onRegisterInitialDeskSync: (fn) => { initialDeskSyncFnRef.current = fn; },
+          onRegisterSetSharedWith: (fn) => { setSharedWithFnRef.current = fn; },
           itemDownloadProgress,
         })
       ),
@@ -863,7 +883,14 @@ const App = () => {
 
       // Desk
       mode === 'desk' && view === 'library' && (
-        currentDesk
+        initialDeskSyncing
+          ? React.createElement(
+              'div',
+              { className: 'flex flex-col items-center justify-center h-full gap-3 text-gray-400' },
+              React.createElement('div', { className: 'w-6 h-6 border-2 border-gray-400 border-t-transparent rounded-full animate-spin' }),
+              React.createElement('span', { className: 'text-sm' }, 'Syncing desk…')
+            )
+          : currentDesk
           ? React.createElement(Desk, {
               desk: currentDesk,
               items,
@@ -874,11 +901,16 @@ const App = () => {
               onSelectChannel: handleSelectChannel,
               onSelectDesk: handleSelectDesk,
               onUpdateLayout: setDeskLayout,
+              onMigrateDeskLayout: migrateDeskLayout,
               onUpdateConnections: setDeskConnections,
               onUpdateTextItems: setDeskTextItems,
+              onDeskModified: (id) => itemBackupFnRef.current?.(id, 'desks'),
               onRenameDesk: (id, name) => renameItem(id, 'desks', name),
               onSetTags: (rec, storeName, tags) => setRecordTags(rec.id, storeName, tags),
-              onSetSharedWith: (rec, storeName, emails) => setItemSharedWith(rec.id, storeName, emails),
+              onSetSharedWith: (rec, storeName, emails) =>
+                setSharedWithFnRef.current
+                  ? setSharedWithFnRef.current(rec, storeName, emails)
+                  : setItemSharedWith(rec.id, storeName, emails),
               canShareRecord: canEditShareForRecord,
               shareableEmails: shareableUserEmails,
               onRenameItem: (rec, storeName, name) => renameItem(rec.id, storeName, name),

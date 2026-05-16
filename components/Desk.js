@@ -681,8 +681,10 @@ export const Desk = ({
   onSelectChannel,
   onSelectDesk,
   onUpdateLayout,
+  onMigrateDeskLayout,
   onUpdateConnections,
   onUpdateTextItems,
+  onDeskModified,
   onRenameDesk,
   onSetTags,
   onSetSharedWith,
@@ -761,13 +763,19 @@ export const Desk = ({
     let layout = desk?.layout && typeof desk.layout === 'object' ? desk.layout : {};
     let connections = Array.isArray(desk?.connections) ? desk.connections : [];
     const migrated = migrateDeskDataKeys(layout, connections, items, channels, desks);
-    if (migrated.changed && !readOnly && desk?.id != null && onUpdateLayout) {
+    if (migrated.changed && !readOnly && desk?.id != null) {
       layout = migrated.layout;
       connections = migrated.connections;
       layoutRef.current = layout;
       connectionsRef.current = connections;
-      onUpdateLayout(desk.id, layout);
-      if (onUpdateConnections) onUpdateConnections(desk.id, connections);
+      // Use the migration path (no localModifiedAt bump) when available; fall back to
+      // the regular update only if the migration callback isn't wired up.
+      if (onMigrateDeskLayout) {
+        onMigrateDeskLayout(desk.id, layout, connections);
+      } else {
+        if (onUpdateLayout) onUpdateLayout(desk.id, layout);
+        if (onUpdateConnections) onUpdateConnections(desk.id, connections);
+      }
     } else {
       // Don't advance layoutRef to a desk.layout that has drive: keys which can't
       // yet be resolved — this happens in the brief window between loadDesks() and
@@ -783,7 +791,7 @@ export const Desk = ({
     }
     textItemsRef.current = Array.isArray(desk?.textItems) ? desk.textItems : [];
     rerender();
-  }, [desk?.layout, desk?.connections, desk?.textItems, items, channels, desks, readOnly, desk?.id, onUpdateLayout, onUpdateConnections, rerender]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [desk?.layout, desk?.connections, desk?.textItems, items, channels, desks, readOnly, desk?.id, onUpdateLayout, onMigrateDeskLayout, onUpdateConnections, rerender]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const commitLayout = useCallback((newLayout, options = {}) => {
     if (options.recordHistory !== false) {
@@ -792,8 +800,9 @@ export const Desk = ({
     }
     layoutRef.current = newLayout;
     if (onUpdateLayout && desk?.id != null) onUpdateLayout(desk.id, newLayout);
+    if (desk?.id != null) onDeskModified?.(desk.id);
     rerender();
-  }, [onUpdateLayout, desk?.id, rerender, snapshotState]);
+  }, [onUpdateLayout, onDeskModified, desk?.id, rerender, snapshotState]);
 
   const commitConnections = useCallback((next, options = {}) => {
     if (options.recordHistory !== false) {
@@ -802,14 +811,16 @@ export const Desk = ({
     }
     connectionsRef.current = Array.isArray(next) ? next : [];
     if (onUpdateConnections && desk?.id != null) onUpdateConnections(desk.id, connectionsRef.current);
+    if (desk?.id != null) onDeskModified?.(desk.id);
     rerender();
-  }, [onUpdateConnections, desk?.id, rerender, snapshotState]);
+  }, [onUpdateConnections, onDeskModified, desk?.id, rerender, snapshotState]);
 
   const commitTextItems = useCallback((next) => {
     textItemsRef.current = Array.isArray(next) ? next : [];
     if (onUpdateTextItems && desk?.id != null) onUpdateTextItems(desk.id, textItemsRef.current);
+    if (desk?.id != null) onDeskModified?.(desk.id);
     rerender();
-  }, [onUpdateTextItems, desk?.id, rerender]);
+  }, [onUpdateTextItems, onDeskModified, desk?.id, rerender]);
 
   const applyDeskState = useCallback((state) => {
     layoutRef.current = cloneLayout(state?.layout);
@@ -817,9 +828,10 @@ export const Desk = ({
     if (desk?.id != null) {
       if (onUpdateLayout) onUpdateLayout(desk.id, layoutRef.current);
       if (onUpdateConnections) onUpdateConnections(desk.id, connectionsRef.current);
+      onDeskModified?.(desk.id);
     }
     rerender();
-  }, [cloneConnections, cloneLayout, desk?.id, onUpdateConnections, onUpdateLayout, rerender]);
+  }, [cloneConnections, cloneLayout, desk?.id, onUpdateConnections, onUpdateLayout, onDeskModified, rerender]);
 
   const undoDesk = useCallback(() => {
     const prev = historyRef.current.past.pop();
@@ -1727,7 +1739,7 @@ export const Desk = ({
                 outline: connectMode && connectStartKey === key ? '2px solid #818cf8' : 'none',
               },
             },
-            (entry._entryType === 'pending' || entry._pendingUpload)
+            (entry._entryType === 'pending' || (entry._pendingUpload && onSetItemDriveId))
               ? (() => {
                   const uKey = entry._pendingUpload
                     ? (entry._entryType === 'channel' ? channelUploadKey(entry) : libraryItemKey(entry))

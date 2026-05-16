@@ -1,192 +1,263 @@
 # Drive synchronization
 
-InfoDepo synchronization is now based on owner folders plus item-level sharing metadata (`sharedWith`), not share-link JSON files.
+InfoDepo synchronization is based on owner folders plus item-level sharing metadata (`sharedWith`).
 
 ## Code map
 
 | File | Role |
 |------|------|
-| `utils/libraryDriveSync.js` | `runOwnerSyncPipeline` orchestration |
-| `utils/driveSync.js` | backup and folder pull implementation; recognizes `.desk.json` files |
-| `utils/ownerIndex.js` | write/read `_infodepo_index.json` |
+| `utils/libraryDriveSync.js` | `runOwnerSyncPipeline` and `runViewerDeskSyncPipeline` orchestration |
+| `utils/driveSync.js` | `classifyChanges`, `backupChangedItems`, `pullChangedItems`, `syncFolderAssetsAndSidecars`; single-item helpers |
+| `utils/ownerIndex.js` | write/read `_infodepo_index.json`; `updateOwnerIndexEntry` for per-edit patches |
 | `utils/peerSync.js` | peer discovery/download/prune for shared content |
-| `components/Library.js` | owner `runOwnerSync` (manual Sync + one startup run per page load); registers sync with `App.js` header; viewer peer sync |
-| `App.js` | Header **Sync** calls the owner sync function registered from `Library` (`syncFnRef`); `Library` stays mounted (hidden) so Sync works from desk/reader views |
+| `components/Library.js` | owner `runOwnerSync` (manual Sync + one startup run per page load); per-edit desk debounce; registers sync functions with `App.js` |
+| `App.js` | Header **Sync** calls the owner sync function registered from `Library` (`syncFnRef`); gates first desk display until initial sync resolves; `Library` stays mounted (hidden) so Sync works from desk/reader views; `setSharedWithFnRef` routes Desk sharing changes through the full `handleSetSharedWith` flow |
+
+---
 
 ## Owner pipeline
 
-`runOwnerSyncPipeline(...)` executes:
+`runOwnerSyncPipeline(...)` executes seven steps sequentially:
 
-1. **Fetch + merge Drive index** — fetch `_infodepo_index.json` from Drive; merge any `sharedWith` differences into local IDB (Drive is authoritative); build `indexMetaByDriveId` map for new items downloaded in step 3.
-2. **Write owner index** (`writeOwnerIndex`) — rewrite the index with the merged state.
-3. **Backup local -> Drive** (`backupAllToGDrive`)
-4. **Pull Drive -> local** (`syncDriveToLocal`, with `lazyBooks: true`)
-5. **Peer sync** (`syncSharedFromPeers`, with `lazyBooks: true`) when config is available
+### Step 1 — Fetch + merge Drive index
 
-Returned summary includes `backed`, `backupFailed`, `added`, `updated`, `skipped`, `removed`, `peerAdded`, `peerRemoved`, `peerFailed`.
+Fetches `_infodepo_index.json` from Drive (one API call). For each entry, compares `sharedWith` against the local IDB record. If they differ, patches the local record via `mergeItem/Channel/DeskSharedWithByDriveId`. The fetched `driveIndex` object is held in memory for Step 2.
 
-Desk records are backed up as `<name>.desk.json` with `_type: 'infodepo-desk'` marker. The pull step recognizes this marker and calls `upsertDriveDesk` to sync desk layouts from Drive.
+### Step 2 — Classify changes (`classifyChanges`)
 
-## Lazy book loading
+`classifyChanges(driveIndex, syncItems, syncChannels, syncDesks)` is a **pure function** (no I/O) that compares the Drive index against local arrays to produce two lists:
 
-Binary book files (EPUB, PDF, TXT — anything with a non-JSON, non-Markdown MIME type) are synced in **metadata-only mode** during both owner pull and peer sync. The blob is not downloaded at sync time; only the Drive metadata (name, driveId, mimeType, size, modifiedTime) is stored with `data: null`.
+| List | Criteria |
+|------|----------|
+| `toBackup` | No `driveId` locally, OR `driveId` not in index, OR `localModifiedAt > indexEntry.modifiedTime` |
+| `toPull` | `indexEntry.modifiedTime > local.modifiedTime`, OR driveId present in index but absent locally |
 
-**On click**, `App.js`'s `openItem` handler detects `data === null && driveId` for EPUB/PDF items and downloads the blob in the library tab before opening the reader tab. This keeps the user on the library page during the download so the progress overlay on the DataTile is visible. Once the blob is saved to IndexedDB, the reader tab is opened with data already cached. If the library-tab download fails, the reader tab (`reader-entry.js` / `pdf-reader-entry.js`) falls back to its own download path using the OAuth token cached in `localStorage`.
+Items with `idbStore === 'images'` are excluded from `toBackup` (standalone image files are handled by Step 6). Duplicates in `toPull` are deduplicated by `driveId`.
 
-**Visual indicator**: `DataTile` renders a cloud-download icon on tiles whose `data` is null and `driveId` is set. During an active download the icon is replaced by a progress overlay (bytes downloaded / total, percentage, animated progress bar). The overlay is driven by `itemDownloadProgress` — a per-blobKey progress map passed from `App.js` to both `Library` and `Desk` so tiles are updated regardless of which view the user is in.
+### Step 3 — Backup changed items (`backupChangedItems`)
 
-**Tab refresh**: when the user returns to the library tab after reading, a `visibilitychange` handler calls `loadItems()` to clear the cloud icon for items that were downloaded in the reader tab.
+Uploads only the pre-classified `toBackup` list. Each entry is processed according to its `storeName`:
 
-**Exceptions — always downloaded eagerly:**
-- `application/json` files (must be parsed to detect YouTube entries, channels, desks)
-- `text/markdown` notes (small text files)
-- Cover image sidecars (small; needed for tile thumbnails)
-- PDF annotation sidecars (small JSON)
+| Type | Logic |
+|------|-------|
+| Items (books, notes, videos) | `noteBundleNeedsBackup` safety gate; note bundles → create/reuse folder; simple files → PATCH or POST |
+| Channels | Serialize with `_type: 'infodepo-channel'`; PATCH or POST |
+| Desks | Delegate to `backupSingleDesk`; PATCH or POST |
 
-**When it runs:** There is no background timer for desks alone. The full pipeline runs only when **owner sync** runs (see below).
+PDF annotation sidecars and cover image sidecars iterate the **full** items list (these can become dirty independently of the main blob). Returns `{ backed, failed, updatedEntries }` where `updatedEntries` is `[{ id, storeName, driveId, modifiedTime, driveFolderId? }]`.
 
-## Viewer shared-content sync
+After this step, `syncItems/syncChannels/syncDesks` are patched with the new driveIds and modifiedTimes from `updatedEntries` so the index write in Step 4 is accurate.
 
-For `viewer`, `Library.js` triggers `syncSharedFromPeers` once after role/config are ready. The function uses a **two-phase approach** so a `X / N` progress counter is shown before any downloads start:
+### Step 4 — Write owner index
 
-**Phase 1 — index gathering** (progress: `"Fetching shared content index…"`):
+Writes `_infodepo_index.json` with the merged + patched state. **Skipped** unless:
+- At least one local item has a `driveId` (guards against overwriting a valid Drive index on first sync), AND
+- Either something was backed up (`backupResult.updatedEntries.length > 0`) OR `sharedWith` was patched in Step 1.
 
-1. List peers from `config.users` that have `folderId`.
-2. Fetch each peer's `_infodepo_index.json`.
-3. Filter entries where `sharedWith` contains the viewer email.
-4. Accumulate all `sharedWithMe` arrays into `peerData[]` and compute `globalTotal`.
+The index entry for each item now includes `driveFolderId` for note bundles, enabling Step 5 to list the correct subfolder without a root folder scan.
 
-**Phase 2 — prune + download** (progress: `"${globalIdx} / ${globalTotal}"`):
+### Step 5 — Pull changed items (`pullChangedItems`)
 
-5. For each peer in `peerData`: prune peer-owned local rows whose `driveId` is no longer in the peer's shared set.
-6. For each shared entry: increment `globalIdx`, emit `"${globalIdx} / ${globalTotal}"`, then upsert — binary books as metadata-only (`lazyBooks: true`), JSON eagerly.
-7. For each entry with `coverImageDriveId`, download and store the cover sidecar (always eager, not counted in `globalTotal`).
+Downloads only the `toPull` entries by fetching each `driveId` directly — no full folder listing. Files are dispatched by entry type:
 
-This keeps viewer IndexedDB aligned when an owner revokes sharing.
+| Type | Action |
+|------|--------|
+| `infodepo-channel` | Fetch JSON → `upsertDriveChannel` |
+| `infodepo-desk` | Fetch JSON → `upsertDriveDesk` |
+| Note (`.md`) with `driveFolderId` | List subfolder, download `.md` + image assets → `upsertDriveBook` |
+| Note without `driveFolderId` | Download `.md` directly (degraded: no assets) |
+| Binary (EPUB, PDF, TXT) with `lazyBooks` | Metadata only (`data: null`) → `upsertDriveBook` |
+| YouTube (`.youtube`) | Fetch JSON, parse URL → rewrite to `application/x-youtube` blob |
+| Other JSON | Fetch and pass directly → `upsertDriveBook` |
 
-## Viewer desk sync
+`sharedWith` and `tags` from the index entry are embedded in the `driveFile` object passed to upsert callbacks, so no separate `withIndexMeta` wrapper is needed.
 
-Viewers can back up their own desks to a personal Drive folder. The folder ID is set by the master in the "Manage Users" panel (`UserConfigModal`). `runViewerDeskSyncPipeline` in `utils/libraryDriveSync.js` handles this:
+### Step 6 — Sync images and sidecars (`syncFolderAssetsAndSidecars`)
 
-1. **Backup** — calls `backupAllToGDrive` with `items: [], channels: []` so only desks are processed.
-2. **Pull** — calls `syncDriveToLocal` with a no-op `upsertDriveBook` (viewer folder only contains desk JSON; non-desk files are safely ignored) and only `getDeskByDriveId` / `upsertDriveDesk` wired.
+Lists the root Drive folder once to discover files not tracked by the index:
 
-`runViewerPeerSync` in `Library.js` runs the desk pipeline first (if the viewer has a `folderId` in config), then runs the peer-content sync.
+| Phase | Content |
+|-------|---------|
+| PDF annotation sidecars | JSON files matching `.infodepo-pdf-annotations.json` pattern |
+| User images (Phase 3) | Non-cover image files; matched to parent notes by markdown `![](filename)` scan |
+| Cover sidecars (Phase 4) | Silent; not counted in progress; skip if `coverImageDriveId` already matches |
 
-## Cover image sidecar backup and sync
+Note bundle image assets in subfolders are handled by `pullChangedItems` (Step 5), not here.
 
-Cover images set on items (books/notes/videos) are backed up to Drive as a sidecar file alongside the main content file:
+### Step 7 — Peer sync (`syncSharedFromPeers`)
 
-**Filename convention:** `${item.name}.infodepo-cover.${ext}` where `ext` is derived from the cover MIME type (`jpg`, `png`, `webp`, `gif`, or `bin`).
+Downloads content shared by other owners. Uses a two-phase approach (index gather → prune + download). See [Viewer shared-content sync](#viewer-shared-content-sync) for details.
 
-**Detection helper:** `isCoverSidecarFilename(name)` — returns true when the filename contains `.infodepo-cover.`. Exported from `utils/driveSync.js`.
+---
 
-**Backup flow (`backupAllToGDrive`):**
-1. After PDF annotation sidecars are uploaded, iterate all items.
-2. For each item with `coverImage.data && !coverImageDriveId`: POST the cover blob as `${item.name}.infodepo-cover.${ext}`.
-3. Call `onSetCoverImageDriveSync(itemId, storeName, { coverImageDriveId, modifiedTime })` to persist the Drive file ID.
+## Dirty detection
 
-**Download flow (`syncDriveToLocal`):**
-- Cover sidecars are handled silently in **Phase 4** (after note bundles, content files, and user images). They are not counted in `globalTotal` and emit no progress message.
-- Download blob → call `upsertDriveCoverImage({ driveId, parentItemName, mimeType, modifiedTime }, blob)`.
-- `parentItemName` is derived by stripping `.infodepo-cover.${ext}` from the filename.
+| Field | Set when | Used for |
+|-------|----------|----------|
+| `localModifiedAt` | User edits locally (IDB write) | Backup dirty check in `classifyChanges` |
+| `modifiedTime` | After backup upload (Drive response) or after download from Drive | Pull skip check in `classifyChanges` |
 
-**IDB functions:**
-- `setCoverImageDriveSync(itemId, storeName, { coverImageDriveId, modifiedTime })` — persists Drive ID after upload.
-- `upsertDriveCoverImage(driveFile, blob)` — finds parent item by name, stores `coverImage: { name, type, data }` and `coverImageDriveId`.
-- `setNoteCoverImage` — clears `coverImageDriveId: null` on the record so the next backup re-uploads.
+Invariant after successful backup or download: `localModifiedAt ≤ modifiedTime`, so the item is clean on the next sync.
 
-**Owner index:** `coverImageDriveId` is included in each item's index entry when present, enabling receivers to discover and download the cover sidecar directly.
+`classifyChanges` compares `localModifiedAt` against the **index** `modifiedTime` (not local `modifiedTime`). This is more correct than the previous approach — it detects when Drive was updated by another device even if the local `modifiedTime` hasn't been written yet.
 
-**Peer sync:** After downloading each shared item, if `entry.coverImageDriveId` is set, the cover blob is fetched and passed to `upsertDriveCoverImage`.
+Helper functions in `utils/driveSync.js`:
+- `itemNeedsBackupUpload(item)` — requires blob; checks `driveId` missing or `localModifiedAt > modifiedTime`.
+- `deskNeedsBackupUpload(desk)` — same logic without blob requirement.
+- `channelNeedsBackupUpload(ch)` — same as desk.
 
-**Drive permissions:** `applySharedWithToDriveFiles` also grants reader access to `coverImageDriveId` files when an item is shared.
+---
 
 ## Desk backup and sync
 
-Desk records are serialized to JSON and uploaded to the owner's Drive folder as `<name>.desk.json`.
+Desk records are serialized as `<name>.desk.json` with `_type: 'infodepo-desk'` marker:
 
-File format:
 ```json
 {
   "_type": "infodepo-desk",
   "name": "My Desk",
-  "layout": { "notes:3": { "x": 120, "y": 80 }, "channel:1": { "x": 400, "y": 200 } },
+  "layout": { "notes:3": { "x": 120, "y": 80 } },
+  "connections": [],
   "tags": [],
   "sharedWith": [],
   "ownerEmail": "user@example.com"
 }
 ```
 
-The `DESK_JSON_MARKER = 'infodepo-desk'` constant is exported from `utils/driveSync.js`. During `syncDriveToLocal`, downloaded JSON with `_type === 'infodepo-desk'` is routed to `upsertDriveDesk` in `hooks/useIndexedDB.js`.
+### Per-edit auto-upload (debounced)
 
-### Local edits (IndexedDB)
+Every user edit on the Desk canvas calls one of three commit functions (`commitLayout`, `commitConnections`, `commitTextItems`). Each commit:
 
-Layout, connections, text items, rename, tags, and sharing updates are written to IndexedDB immediately (`setDeskLayout`, `setDeskConnections`, `setDeskTextItems`, etc.). Each save bumps **`localModifiedAt`**. Nothing is sent to Drive until the next **owner sync** runs.
+1. Writes the change to IDB (`setDeskLayout` / `setDeskConnections` / `setDeskTextItems`), bumping `localModifiedAt`.
+2. Calls `onDeskModified(desk.id)` → `itemBackupFnRef.current(id, 'desks')` in App.js → `triggerDeskBackup(id)` in Library.js.
+3. A **3-second debounce** per desk ID resets on each call. Only after 3 s of inactivity on that desk does the upload fire.
+4. At fire time, the latest desk is read from `desksRef.current` (a ref kept in sync with the `desks` prop), so rapid edits collapse to a single upload of the final state.
+5. `backupSingleDesk(desk, { accessToken, folderId, onSetDriveId })` uploads to Drive (PATCH or POST), then writes `modifiedTime` back to IDB.
+6. After a successful backup, `updateOwnerIndexEntry(driveId, { modifiedTime, name, type, sharedWith, tags }, ...)` patches the Drive index so the next sync on any device sees the updated timestamp immediately.
 
-### When the desk is uploaded to Drive
+The per-edit path is guarded: only `master` / `editor` roles trigger it; viewers never upload via this path.
 
-Uploads happen inside **`backupAllToGDrive`**, which runs as **step 1** of `runOwnerSyncPipeline` (before the pull). A desk is uploaded when `deskNeedsBackupUpload` in `utils/driveSync.js` is true: missing **`driveId`**, or **`localModifiedAt` > `modifiedTime`** (same idea as other library rows).
+### Full pipeline upload
 
-**Owner sync is triggered:**
+`backupChangedItems` now handles desks by delegating to `backupSingleDesk` (no code duplication). It runs as Step 3 of `runOwnerSyncPipeline` on manual Sync and on startup.
 
-1. **Once per browser page load** — After Drive credentials and folder id are available, `Library.js` schedules a single background `runOwnerSync` (`setTimeout(..., 0)`), guarded by a module-level flag so it does not double-fire under React Strict Mode.
-2. **Manual Sync** — The header Sync action runs the same `runOwnerSync` (function is registered from `Library` into `App.js`).
+### Pull from Drive
 
-There is **no** per-edit or debounced upload for the desk alone; rely on startup sync or Sync after editing.
+`pullChangedItems` Step 5 downloads desk JSON files and calls `upsertDriveDesk`. The record is updated only if `driveFile.modifiedTime > existing.modifiedTime`; otherwise `'skipped'` is returned.
 
-### When the desk file is pulled from Drive
+Because **backup runs before pull** in the pipeline, dirty local desks are normally uploaded first; the pull step then compares against the updated `modifiedTime` from the upload response.
 
-**`syncDriveToLocal`** (pipeline **step 2**) lists the folder, downloads each syncable file, and parses JSON. Desk files are applied via **`upsertDriveDesk`**.
+---
 
-- **Existing row** (matched by **`driveId`** on the desk store): the local row is updated only if the **Drive file `modifiedTime` is newer** than the desk row’s stored **`modifiedTime`**. Otherwise the upsert returns `skipped` (local already reflects that revision or newer).
-- **No local row** for that `driveId`: a **new** desk row is **added** from the JSON payload.
+## Initial desk sync gate
 
-Because **backup runs before pull** in the same sync, dirty local desks are normally uploaded first; the pull step then compares against the updated `modifiedTime` from the upload response.
+When the app first loads and auto-selects the most-recently-visited desk, a targeted Drive pull is performed **before the Desk component renders**, preventing a stale local copy from being accidentally edited before reconciliation:
 
-## Dirty detection
+1. `currentDesk` is set in state (invisible to user — `initialDeskSyncing = true` shows a loading spinner instead).
+2. `initialDeskSyncFnRef.current(desk)` is called (registered from Library.js via `onRegisterInitialDeskSync`).
+3. Library fetches `GET /drive/v3/files/{driveId}?fields=modifiedTime`. If Drive is newer, downloads the desk JSON and calls `upsertDriveDesk`.
+4. On completion (or any error), `initialDeskSyncing = false` — the Desk renders with fresh data.
 
-- `modifiedTime`: last known Drive revision time (per row).
-- `localModifiedAt`: local edit timestamp.
-- **Backup upload** (items, channels, desks): when `driveId` is missing or **`localModifiedAt` > `modifiedTime`** (`deskNeedsBackupUpload` for desks, analogous helpers for other kinds in `utils/driveSync.js`).
-- **Pull into an existing desk**: `upsertDriveDesk` uses **Drive `modifiedTime` vs stored `modifiedTime`** only (not `localModifiedAt`); see **Desk backup and sync** above.
+This gate fires **only once** per page load (`firstDeskDisplayedRef.current` flag). Subsequent desk switches are not gated. Desks with no `driveId` (local-only) and offline/no-credential cases skip the sync immediately and clear the spinner.
+
+---
+
+## Lazy book loading
+
+Binary book files (EPUB, PDF, TXT — anything with a non-JSON, non-Markdown MIME type) are synced in **metadata-only mode** during both owner pull and peer sync. The blob is not downloaded at sync time; only Drive metadata (name, driveId, mimeType, size, modifiedTime) is stored with `data: null`.
+
+**On click**, `App.js`'s `openItem` handler detects `data === null && driveId` and downloads the blob in the library tab before opening the reader tab. This keeps the user on the library page during the download so the progress overlay on the DataTile is visible.
+
+**Visual indicator**: `DataTile` renders a cloud-download icon on tiles with `data === null && driveId`. During download, the icon is replaced by a progress overlay driven by `itemDownloadProgress` — a per-blobKey progress map passed from `App.js` to both `Library` and `Desk`.
+
+**Exceptions — always downloaded eagerly:**
+- `application/json` (must be parsed to detect type)
+- `text/markdown` notes (small text files)
+- Cover image sidecars (needed for tile thumbnails)
+- PDF annotation sidecars (small JSON)
+
+---
+
+## Viewer shared-content sync
+
+For `viewer`, `Library.js` triggers `syncSharedFromPeers` once after role/config are ready. Two-phase approach:
+
+**Phase 1 — index gathering:**
+1. List peers from `config.users` that have `folderId`.
+2. Fetch each peer's `_infodepo_index.json`.
+3. Filter entries where `sharedWith` contains the viewer email.
+4. Accumulate `peerData[]` and compute `globalTotal`.
+
+**Phase 2 — prune + download:**
+5. For each peer: prune local rows whose `driveId` is no longer in the peer's shared set.
+6. For each shared entry: upsert — binary books as metadata-only (`lazyBooks: true`), JSON eagerly.
+7. For each entry with `coverImageDriveId`, download the cover sidecar.
+
+---
+
+## Viewer desk sync
+
+Viewers back up their own desks to a personal Drive folder (folder ID set by master in Manage Users). `runViewerDeskSyncPipeline` uses the same classification-based approach as the owner pipeline, but desks-only:
+
+1. **Fetch** — `fetchOwnerIndex` with viewer's `folderId` (may be null on first run).
+2. **Classify** — `classifyChanges(driveIndex, [], [], desks)` — only desks.
+3. **Backup** — `backupChangedItems(toBackup, ...)` — dirty desks only.
+4. **Write index** — if anything was backed up, write the viewer's `_infodepo_index.json`.
+5. **Pull** — `pullChangedItems(toPull, { upsertDriveDesk })` — desks only.
+
+No folder listing (`syncFolderAssetsAndSidecars`) is performed for the viewer folder, as it contains only desk JSON files.
+
+---
+
+## Cover image sidecar backup and sync
+
+**Filename:** `${item.name}.infodepo-cover.${ext}` (`isCoverSidecarFilename` detects these).
+
+**Backup:** `backupChangedItems` iterates all items looking for `coverImage.data && !coverImageDriveId` → POST blob → `onSetCoverImageDriveSync` persists Drive ID.
+
+**Pull (Phase 4 in `syncFolderAssetsAndSidecars`):** `upsertDriveCoverImage({ driveId, parentItemName, mimeType, modifiedTime }, blob)` — parent item found by stripping the sidecar suffix from the filename.
+
+**Peer sync:** if `entry.coverImageDriveId` is set, cover blob is fetched after the main item.
+
+---
 
 ## Sync progress display
 
-Both owner and viewer syncs show a unified **`X / N`** counter (e.g. `"5 / 68"`) in the Library's in-body progress banner and in the Header Sync button text while `isSyncing` is true.
+Both owner and viewer syncs show a unified `X / N` counter in the Library's in-body banner and Header Sync button text while `isSyncing` is true.
 
-**`syncDriveToLocal` (owner)** uses a pre-scan approach:
+`pullChangedItems` counts total entries (`toPull.length`) before any downloads start and emits `idx / total` per item. `syncFolderAssetsAndSidecars` emits progress per image. Cover sidecars are excluded from counting.
 
-- **Phase 0** — list Drive subfolders; identify note bundles by looking for a `.md` file inside each folder. Compute `globalTotal = noteBundles.length + contentFiles.length + userImageFiles.length`. Cover sidecars are excluded from the total.
-- **Phase 1** — download note bundles; emit `"${globalIdx} / ${globalTotal}"` at the start of each.
-- **Phase 2** — download content files (EPUB, PDF, JSON, etc.); same counter.
-- **Phase 3** — download user image files; same counter.
-- **Phase 4** — download cover sidecars silently (no counter, no progress message).
+Neither `pullChangedItems` nor `syncFolderAssetsAndSidecars` clears the progress message on completion — the `finally` block in `Library.js` is the sole clearer via `setSyncProgress('')`.
 
-Neither `syncDriveToLocal` nor `backupAllToGDrive` clears the progress message on completion — the `finally` block in `Library.js` is the sole clearer via `setSyncProgress('')`.
-
-**`syncSharedFromPeers` (viewer)** uses a two-phase approach (see **Viewer shared-content sync** above).
-
-**Viewer auto-sync** calls `setIsSyncing(true)` before entering the pipeline and `setIsSyncing(false)` unconditionally in `finally`, so the Header Sync button spinner appears for viewers the same as it does for owners.
-
-**Background sync guard** — the one-per-load background `useEffect` in `Library.js` checks `userType !== 'master' && userType !== 'editor'` before scheduling `runOwnerSync`. This prevents a viewer who previously held a master session (and still has a `driveFolderId` in `localStorage`) from accidentally running the owner backup pipeline alongside the viewer peer sync.
+---
 
 ## Rendering strategy during sync
 
-Sync paths use silent upserts and a final `loadAll()` flush:
+Sync paths use silent upserts (`{ silent: true }`) and a final `loadAll()` flush at the end of the pipeline. This avoids repeated re-renders during long sync runs. The per-edit desk debounce path does NOT use silent mode — each `backupSingleDesk` call writes `modifiedTime` back immediately so the item is marked clean.
 
-- pipeline writes pass `{ silent: true }`
-- at end, `loadAll()` refreshes `items`, `channels`, and `desks` in one batch
-
-This avoids repeated rerenders during long sync runs.
+---
 
 ## ACL + index refresh on sharing updates
 
-When owner changes an item's `sharedWith` in `Library.js`:
+When the owner changes an item's `sharedWith` — from either Library tiles or Desk tiles — the full three-step flow runs:
 
-1. local `setItemSharedWith`
-2. targeted ACL reconcile (`applySharedWithToDriveFiles`)
-3. owner index rewrite (`writeOwnerIndex`) so viewers can discover changes immediately
+1. Local `setItemSharedWith` (IDB write)
+2. Targeted ACL reconcile (`applySharedWithToDriveFiles`)
+3. Owner index rewrite (`writeOwnerIndex`) so viewers can discover changes immediately
+
+`handleSetSharedWith` in `Library.js` implements this flow. The Desk component receives it through a ref registration pattern (`setSharedWithFnRef` in `App.js`, registered via `onRegisterSetSharedWith`), identical to how `syncFnRef` and `itemBackupFnRef` are wired. This ensures Desk tiles never bypass ACL reconcile or index rewrite.
+
+When a desk's `sharedWith` is updated, newly added emails are also propagated to every item in the desk layout that already has a `driveId`. Removal does **not** revoke item-level access (items may be independently shared elsewhere).
+
+---
+
+## Index consistency
+
+The index lives only on Drive (`_infodepo_index.json`). After `pullChangedItems` downloads an item, the local IDB record's `modifiedTime` is updated to match the Drive file's timestamp. On the next sync cycle, `fetchOwnerIndex` re-reads the Drive index (unchanged since pull), compares against the now-updated local `modifiedTime` → item is clean. No additional write needed after pulling.
+
+After `backupChangedItems`, `syncItems/syncChannels/syncDesks` are patched with `updatedEntries` before the index is written, ensuring newly uploaded items (with freshly assigned driveIds) appear in the index immediately.
+
+---
 
 ## Related docs
 

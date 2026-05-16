@@ -708,8 +708,12 @@ export const useIndexedDB = () => {
         putRequest.onsuccess = () => {
           const trimmedDrive = String(driveId || '').trim();
           const notify = (remappedDesks) => {
-            if (remappedDesks) loadDesks('setItemDriveId/desksRemap');
-            if (!silent) {
+            if (remappedDesks) {
+              // Reload items + desks atomically so the Desk effect never sees a
+              // layout with drive: keys while items state is still stale.
+              if (!silent) loadAll('setItemDriveId/desksRemap');
+              else loadDesks('setItemDriveId/desksRemap');
+            } else if (!silent) {
               if (storeName === CHANNELS_STORE) loadChannels('setItemDriveId');
               else if (storeName === DESKS_STORE) loadDesks('setItemDriveId');
               else loadItems('setItemDriveId');
@@ -759,7 +763,7 @@ export const useIndexedDB = () => {
       };
       getRequest.onerror = () => reject(getRequest.error);
     });
-  }, [db, loadItems, loadChannels, loadDesks]);
+  }, [db, loadAll, loadItems, loadChannels, loadDesks]);
 
   // --- Drive sync operations (books + notes stores) ---
 
@@ -1100,7 +1104,7 @@ export const useIndexedDB = () => {
             : (Array.isArray(existing.tags) ? existing.tags : []),
           driveId: driveFile.driveId,
           modifiedTime: driveIsNewer ? mtCh : existing.modifiedTime,
-          localModifiedAt: driveIsNewer ? mtCh : new Date(),
+          localModifiedAt: driveIsNewer ? mtCh : existing.localModifiedAt,
           ...(driveFile.ownerEmail ? { ownerEmail: driveFile.ownerEmail } : {}),
           sharedWith: nextSharedWith ?? (Array.isArray(existing.sharedWith) ? existing.sharedWith : []),
         });
@@ -1185,6 +1189,32 @@ export const useIndexedDB = () => {
           localModifiedAt: new Date(),
         });
         putReq.onsuccess = () => { loadDesks('setDeskConnections'); resolve(); };
+        putReq.onerror = () => reject(putReq.error);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }, [db, loadDesks]);
+
+  // Rewrite layout keys and connections without bumping localModifiedAt.
+  // Used by the Desk component's key-migration effect so a format-only change
+  // on a freshly-synced device doesn't mark the desk as locally modified.
+  const migrateDeskLayout = useCallback((id, layout, connections) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
+      const os = tx.objectStore(DESKS_STORE);
+      const req = os.get(id);
+      req.onsuccess = () => {
+        const existing = req.result;
+        if (!existing) { reject(new Error('Desk not found')); return; }
+        const putReq = os.put({
+          ...existing,
+          layout,
+          connections: Array.isArray(connections) ? connections : existing.connections,
+          // localModifiedAt intentionally not updated — this is a format migration, not a user edit
+        });
+        putReq.onsuccess = () => { loadDesks('migrateDeskLayout'); resolve(); };
         putReq.onerror = () => reject(putReq.error);
       };
       req.onerror = () => reject(req.error);
@@ -1457,6 +1487,18 @@ export const useIndexedDB = () => {
       });
 
     return tryStore(0);
+  }, [db]);
+
+  const getAnnotationByDriveId = useCallback((annotationDriveId) => {
+    if (!db || !annotationDriveId) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      let tx;
+      try { tx = db.transaction(PDF_ANNOTATIONS_STORE, 'readonly'); }
+      catch { resolve(null); return; }
+      const req = tx.objectStore(PDF_ANNOTATIONS_STORE).index('annotationDriveId').get(annotationDriveId);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
   }, [db]);
 
   const getPdfAnnotationSidecar = useCallback((itemId, idbStore) => {
@@ -1784,7 +1826,7 @@ export const useIndexedDB = () => {
     getBookByDriveId, getBookByName, upsertDriveBook, updateBookBlob,
     deleteItemByDriveId, deleteChannelByDriveId,
     getLocalRecordsByOwnerEmail,
-    addDesk, deleteDesk, setDeskLayout, setDeskConnections, setDeskTextItems,
+    addDesk, deleteDesk, setDeskLayout, setDeskConnections, setDeskTextItems, migrateDeskLayout,
     getDeskByDriveId, upsertDriveDesk,
     setRecordTags,
     setItemSharedWith,
@@ -1794,6 +1836,7 @@ export const useIndexedDB = () => {
     deleteDeskByDriveId,
     renameItem,
     setItemReadingPosition,
+    getAnnotationByDriveId,
     getPdfAnnotationSidecar,
     putPdfAnnotationsForItem,
     setCoverImageDriveSync,

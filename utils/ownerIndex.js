@@ -10,6 +10,36 @@ const INDEX_FILENAME = '_infodepo_index.json';
  * Write (create or update) the owner's _infodepo_index.json in the linked folder.
  * Lists every item/channel that has a driveId, along with its sharedWith list.
  */
+async function uploadIndexPayload(payload, { accessToken, folderId }) {
+  const existingId = await findIndexFileId(accessToken, folderId);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const form = new FormData();
+  if (existingId) {
+    form.append('metadata', new Blob([JSON.stringify({ mimeType: 'application/json' })], { type: 'application/json' }));
+    form.append('file', blob);
+    const res = await fetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(existingId)}?uploadType=multipart&fields=id`,
+      { method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}` }, body: form }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Index PATCH failed: ${err.error?.message || res.statusText}`);
+    }
+  } else {
+    const metadata = { name: INDEX_FILENAME, mimeType: 'application/json', parents: [folderId] };
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', blob);
+    const res = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+      { method: 'POST', headers: { Authorization: `Bearer ${accessToken}` }, body: form }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Index POST failed: ${err.error?.message || res.statusText}`);
+    }
+  }
+}
+
 export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items, channels, desks }) {
   const entries = [];
   for (const item of items || []) {
@@ -23,6 +53,7 @@ export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items
       sharedWith: Array.isArray(item.sharedWith) ? item.sharedWith : [],
       tags: Array.isArray(item.tags) ? item.tags : [],
       ...(item.coverImageDriveId ? { coverImageDriveId: item.coverImageDriveId } : {}),
+      ...(item.driveFolderId ? { driveFolderId: item.driveFolderId } : {}),
     });
   }
   for (const ch of channels || []) {
@@ -49,46 +80,32 @@ export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items
       tags: Array.isArray(dk.tags) ? dk.tags : [],
     });
   }
+  await uploadIndexPayload(
+    { updatedAt: new Date().toISOString(), ownerEmail: ownerEmail || '', items: entries },
+    { accessToken, folderId }
+  );
+}
 
-  const payload = {
-    updatedAt: new Date().toISOString(),
-    ownerEmail: ownerEmail || '',
-    items: entries,
-  };
-
-  const existingId = await findIndexFileId(accessToken, folderId);
-
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const form = new FormData();
-
-  if (existingId) {
-    form.append('metadata', new Blob([JSON.stringify({ mimeType: 'application/json' })], { type: 'application/json' }));
-    form.append('file', blob);
-    const res = await fetch(
-      `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(existingId)}?uploadType=multipart&fields=id`,
-      { method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}` }, body: form }
-    );
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(`Index PATCH failed: ${err.error?.message || res.statusText}`);
-    }
+/**
+ * Patches a single entry in the Drive index without rewriting the full file.
+ * Fetches the current index, updates or inserts the entry, then re-uploads.
+ * Used after per-edit desk backup so the index stays current between full syncs.
+ */
+export async function updateOwnerIndexEntry(driveId, updatedFields, { accessToken, folderId, ownerEmail }) {
+  const current = await fetchOwnerIndex({ accessToken, folderId, expectedOwnerEmail: ownerEmail });
+  if (!current) return;
+  const did = String(driveId || '').trim();
+  const entries = Array.isArray(current.items) ? [...current.items] : [];
+  const idx = entries.findIndex(e => String(e.driveId || '').trim() === did);
+  if (idx >= 0) {
+    entries[idx] = { ...entries[idx], ...updatedFields };
   } else {
-    const metadata = {
-      name: INDEX_FILENAME,
-      mimeType: 'application/json',
-      parents: [folderId],
-    };
-    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-    form.append('file', blob);
-    const res = await fetch(
-      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
-      { method: 'POST', headers: { Authorization: `Bearer ${accessToken}` }, body: form }
-    );
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(`Index POST failed: ${err.error?.message || res.statusText}`);
-    }
+    entries.push({ driveId: did, ...updatedFields });
   }
+  await uploadIndexPayload(
+    { updatedAt: new Date().toISOString(), ownerEmail: ownerEmail || current.ownerEmail || '', items: entries },
+    { accessToken, folderId }
+  );
 }
 
 /**

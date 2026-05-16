@@ -2,7 +2,12 @@
  * Orchestrates Google Drive sync for the library UI: owner backup + folder pull + peer shared content.
  */
 
-import { syncDriveToLocal, backupAllToGDrive } from './driveSync.js';
+import {
+  classifyChanges,
+  backupChangedItems,
+  pullChangedItems,
+  syncFolderAssetsAndSidecars,
+} from './driveSync.js';
 import { writeOwnerIndex, fetchOwnerIndex } from './ownerIndex.js';
 import { syncSharedFromPeers } from './peerSync.js';
 
@@ -39,6 +44,7 @@ export async function runOwnerSyncPipeline({
   getPdfAnnotationSidecar,
   setPdfAnnotationDriveSync,
   upsertDrivePdfAnnotation,
+  getAnnotationByDriveId,
   setCoverImageDriveSync,
   upsertDriveCoverImage,
   mergeItemSharedWithByDriveId,
@@ -53,12 +59,13 @@ export async function runOwnerSyncPipeline({
   let syncItems = items;
   let syncChannels = channels;
   let syncDesks = desks;
-  // indexMetaByDriveId survives outside the try block so syncDriveToLocal can use it to
-  // restore sharedWith + tags for items that are first downloaded in step 4.
-  const indexMetaByDriveId = new Map();
+  let driveIndex = null;
+  const patchedItems    = new Map();
+  const patchedChannels = new Map();
+  const patchedDesks    = new Map();
   try {
     onProgress?.('Merging sharedWith from Drive index…');
-    const driveIndex = await fetchOwnerIndex({ accessToken, folderId, expectedOwnerEmail: ownerEmail });
+    driveIndex = await fetchOwnerIndex({ accessToken, folderId, expectedOwnerEmail: ownerEmail });
     if (driveIndex && Array.isArray(driveIndex.items)) {
       const normalizeList = (arr) =>
         (Array.isArray(arr) ? arr : []).map((e) => String(e || '').trim().toLowerCase()).filter(Boolean).sort();
@@ -72,10 +79,6 @@ export async function runOwnerSyncPipeline({
       const deskByDriveId = new Map(
         (desks || []).filter((d) => d.driveId).map((d) => [String(d.driveId).trim(), d])
       );
-
-      const patchedItems = new Map();
-      const patchedChannels = new Map();
-      const patchedDesks = new Map();
 
       for (const entry of driveIndex.items) {
         const driveId = String(entry.driveId || '').trim();
@@ -121,36 +124,19 @@ export async function runOwnerSyncPipeline({
           return patchedDesks.has(did) ? { ...dk, sharedWith: patchedDesks.get(did) } : dk;
         });
       }
-
-      // Populate the meta map for ALL index entries so that items first downloaded in
-      // step 4 (syncDriveToLocal) receive the correct sharedWith and tags instead of [].
-      for (const entry of driveIndex.items) {
-        const did = String(entry.driveId || '').trim();
-        if (!did) continue;
-        indexMetaByDriveId.set(did, {
-          sharedWith: Array.isArray(entry.sharedWith) ? entry.sharedWith : [],
-          tags: Array.isArray(entry.tags) ? entry.tags : [],
-        });
-      }
     }
   } catch (err) {
     console.warn('[libraryDriveSync] mergeOwnerIndex failed:', err);
   }
 
-  // Step 2: write the owner index with the merged sharedWith state.
-  try {
-    onProgress?.('Writing owner index…');
-    await writeOwnerIndex({ accessToken, folderId, ownerEmail, items: syncItems, channels: syncChannels, desks: syncDesks });
-  } catch (err) {
-    console.warn('[libraryDriveSync] writeOwnerIndex failed:', err);
-  }
+  // Step 2: classify changes by comparing index against local state.
+  const { toBackup, toPull } = classifyChanges(driveIndex, syncItems, syncChannels, syncDesks);
 
-  const backupResult = await backupAllToGDrive({
+  // Step 3: backup only the dirty items.
+  const backupResult = await backupChangedItems(toBackup, {
     accessToken,
     folderId,
     items: syncItems,
-    channels: syncChannels,
-    desks,
     onSetDriveId,
     onSetNoteFolderData,
     onProgress,
@@ -159,35 +145,71 @@ export async function runOwnerSyncPipeline({
     onSetCoverImageDriveSync: setCoverImageDriveSync,
   });
 
-  // Merge index meta (sharedWith + tags) into book driveFile objects so that items
-  // first downloaded here receive the correct values rather than [] defaults.
-  const withIndexMeta = (f) => {
-    const m = indexMetaByDriveId.get(String(f?.driveId || '').trim());
-    return m ? { ...f, ...m } : f;
-  };
+  // Patch syncItems/syncChannels/syncDesks with newly assigned driveIds + modifiedTimes
+  // so the index write reflects the results of this backup run.
+  if (backupResult.updatedEntries.length > 0) {
+    const patchById = new Map(backupResult.updatedEntries.map(e => [e.id, e]));
+    syncItems = syncItems.map(i => {
+      const p = patchById.get(i.id);
+      return p ? { ...i, driveId: p.driveId, modifiedTime: p.modifiedTime, ...(p.driveFolderId ? { driveFolderId: p.driveFolderId } : {}) } : i;
+    });
+    syncChannels = syncChannels.map(c => {
+      const p = patchById.get(c.id);
+      return p ? { ...c, driveId: p.driveId, modifiedTime: p.modifiedTime } : c;
+    });
+    syncDesks = syncDesks.map(d => {
+      const p = patchById.get(d.id);
+      return p ? { ...d, driveId: p.driveId, modifiedTime: p.modifiedTime } : d;
+    });
+  }
 
-  const syncResult = await syncDriveToLocal({
+  // Step 4: write the owner index when anything was backed up or sharedWith changed.
+  const sharedWithPatched = patchedItems.size > 0 || patchedChannels.size > 0 || patchedDesks.size > 0;
+  const hasLocalDriveContent =
+    (syncItems || []).some((i) => String(i.driveId || '').trim()) ||
+    (syncChannels || []).some((c) => String(c.driveId || '').trim()) ||
+    (syncDesks || []).some((d) => String(d.driveId || '').trim());
+
+  if (hasLocalDriveContent && (backupResult.updatedEntries.length > 0 || sharedWithPatched)) {
+    try {
+      onProgress?.('Writing owner index…');
+      await writeOwnerIndex({ accessToken, folderId, ownerEmail, items: syncItems, channels: syncChannels, desks: syncDesks });
+    } catch (err) {
+      console.warn('[libraryDriveSync] writeOwnerIndex failed:', err);
+    }
+  }
+
+  // Step 5: pull only the changed items identified by the index.
+  // upsertDriveBook wrapper adds sharedWith/tags from the index entry (built into pullChangedItems).
+  const syncResult = await pullChangedItems(toPull, {
+    accessToken,
+    upsertDriveBook: upsertDriveBook
+      ? (driveFile, blob, assets) => upsertDriveBook(driveFile, blob, assets)
+      : undefined,
+    upsertDriveChannel,
+    upsertDriveDesk,
+    lazyBooks: true,
+    onProgress,
+    onBatchComplete,
+  });
+
+  // Step 6: sync images and sidecars via a folder listing (not tracked by the index).
+  const assetResult = await syncFolderAssetsAndSidecars({
     accessToken,
     folderId,
-    books: (items || []).filter((i) => i.type !== 'application/x-youtube'),
-    getBookByDriveId,
-    getBookByName,
-    upsertDriveBook: (driveFile, blob, assets) => upsertDriveBook(withIndexMeta(driveFile), blob, assets),
     getImageByDriveId,
     getImageByName,
     upsertDriveImage,
     getNotes,
-    getChannelByDriveId,
-    upsertDriveChannel,
-    getDeskByDriveId,
-    upsertDriveDesk,
-    upsertDrivePdfAnnotation,
+    getBookByName,
     upsertDriveCoverImage,
+    upsertDrivePdfAnnotation,
+    getAnnotationByDriveId,
     onProgress,
-    lazyBooks: true,
     onBatchComplete,
   });
 
+  // Step 7: peer sync (unchanged).
   let peerResult = { added: 0, failed: 0 };
   if (config) {
     try {
@@ -214,15 +236,15 @@ export async function runOwnerSyncPipeline({
   }
 
   return {
-    backed: backupResult.backed,
+    backed:       backupResult.backed,
     backupFailed: backupResult.failed,
-    added: syncResult.added + peerResult.added,
-    updated: syncResult.updated,
-    skipped: syncResult.skipped,
-    removed: peerResult.removed || 0,
-    peerAdded: peerResult.added,
-    peerRemoved: peerResult.removed || 0,
-    peerFailed: peerResult.failed,
+    added:        syncResult.added + assetResult.added + peerResult.added,
+    updated:      syncResult.updated + assetResult.updated,
+    skipped:      syncResult.skipped + assetResult.skipped,
+    removed:      peerResult.removed || 0,
+    peerAdded:    peerResult.added,
+    peerRemoved:  peerResult.removed || 0,
+    peerFailed:   peerResult.failed,
   };
 }
 
@@ -234,36 +256,55 @@ export async function runViewerDeskSyncPipeline({
   accessToken,
   folderId,
   desks,
+  ownerEmail,
   onSetDriveId,
   onProgress,
-  getBookByDriveId,
-  getBookByName,
-  getDeskByDriveId,
   upsertDriveDesk,
   onBatchComplete,
 }) {
-  const noop = async () => 'skipped';
+  // Step 1: fetch viewer's Drive index (may be null on first run)
+  let driveIndex = null;
+  try {
+    driveIndex = await fetchOwnerIndex({ accessToken, folderId, expectedOwnerEmail: ownerEmail });
+  } catch (err) {
+    console.warn('[libraryDriveSync] viewer fetchOwnerIndex failed:', err);
+  }
 
-  const backupResult = await backupAllToGDrive({
+  // Step 2: classify — desks only
+  const { toBackup, toPull } = classifyChanges(driveIndex, [], [], desks);
+
+  // Step 3: backup dirty desks
+  let syncDesks = desks;
+  const backupResult = await backupChangedItems(toBackup, {
     accessToken,
     folderId,
     items: [],
-    channels: [],
-    desks,
     onSetDriveId,
     onProgress,
   });
 
-  // syncDriveToLocal requires getBookByDriveId/getBookByName for its routing logic.
-  // upsertDriveBook is a no-op: the viewer's folder contains only desk JSON files.
-  const syncResult = await syncDriveToLocal({
+  if (backupResult.updatedEntries.length > 0) {
+    const patchById = new Map(backupResult.updatedEntries.map(e => [e.id, e]));
+    syncDesks = syncDesks.map(d => {
+      const p = patchById.get(d.id);
+      return p ? { ...d, driveId: p.driveId, modifiedTime: p.modifiedTime } : d;
+    });
+  }
+
+  // Step 4: write viewer index if anything was backed up
+  if (backupResult.updatedEntries.length > 0) {
+    try {
+      await writeOwnerIndex({ accessToken, folderId, ownerEmail, items: [], channels: [], desks: syncDesks });
+    } catch (err) {
+      console.warn('[libraryDriveSync] viewer writeOwnerIndex failed:', err);
+    }
+  }
+
+  // Step 5: pull changed desks from Drive
+  const syncResult = await pullChangedItems(toPull, {
     accessToken,
-    folderId,
-    getBookByDriveId: getBookByDriveId || noop,
-    getBookByName:    getBookByName    || noop,
-    upsertDriveBook:  noop,
-    getDeskByDriveId,
     upsertDriveDesk,
+    lazyBooks: false,
     onProgress,
     onBatchComplete,
   });

@@ -8,6 +8,11 @@ import { CHANNEL_JSON_MARKER } from './driveSync.js';
 /**
  * For each peer user in config, fetch their index and download items shared with myEmail.
  * Two-phase: first fetch all indices to compute a global total, then download with X/N progress.
+ *
+ * Index modifiedTime is used directly for the freshness check — no per-item Drive metadata
+ * fetch is needed. The owner always writes the index after backup, so the index timestamps
+ * are at least as fresh as the Drive files.
+ *
  * @returns {{ added: number, updated: number, skipped: number, removed: number, failed: number }}
  */
 export async function syncSharedFromPeers({
@@ -170,34 +175,14 @@ export async function syncSharedFromPeers({
 
       try {
         progress(`${globalIdx} / ${globalTotal}`);
-        console.log(`[InfoDepo][peerSync] (${globalIdx}/${globalTotal}) fetching meta for "${entry.name}" driveId=${driveId} type=${entry.type || 'item'}`);
-        const metaRes = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?fields=id,name,mimeType,size,modifiedTime`,
-          { headers: { Authorization: `Bearer ${accessToken}` } }
-        );
-        if (!metaRes.ok) {
-          const errBody = await metaRes.json().catch(() => ({}));
-          console.warn(`[InfoDepo][peerSync] meta fetch FAILED (${metaRes.status}) for "${entry.name}" driveId=${driveId}`, errBody?.error?.message || metaRes.statusText);
-          counts.failed++;
-          batchTick(); continue;
-        }
-        const meta = await metaRes.json();
-        const driveFile = {
-          driveId: meta.id,
-          name: meta.name,
-          mimeType: meta.mimeType,
-          size: parseInt(meta.size) || 0,
-          modifiedTime: meta.modifiedTime,
-        };
+        console.log(`[InfoDepo][peerSync] (${globalIdx}/${globalTotal}) checking "${entry.name}" driveId=${driveId} type=${entry.type || 'item'}`);
 
         if (entry.type === 'infodepo-channel' && upsertDriveChannel) {
           const existing = await getChannelByDriveId(driveId);
-          const driveIsNewer = existing
-            ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
-            : true;
-          const sharedWithChanged = existing
-            ? !sameEmailSet(existing.sharedWith, normalizedSharedWith)
-            : true;
+          const driveIsNewer = !existing
+            ? true
+            : !existing.modifiedTime || new Date(entry.modifiedTime) > new Date(existing.modifiedTime);
+          const sharedWithChanged = !existing || !sameEmailSet(existing.sharedWith, normalizedSharedWith);
           if (existing && !driveIsNewer && !sharedWithChanged) {
             console.log(`[InfoDepo][peerSync] skipping channel "${entry.name}" (up to date)`);
             counts.skipped++; batchTick(); continue;
@@ -218,6 +203,7 @@ export async function syncSharedFromPeers({
               const { _type, ...channelData } = parsed;
               channelData.ownerEmail = peer.email;
               channelData.sharedWith = normalizedSharedWith;
+              const driveFile = { driveId, name: entry.name, mimeType: 'application/json', modifiedTime: entry.modifiedTime };
               const action = await upsertDriveChannel(driveFile, channelData, { silent: true });
               console.log(`[InfoDepo][peerSync] channel "${entry.name}" → ${action}`);
               if (action === 'added') counts.added++;
@@ -232,12 +218,10 @@ export async function syncSharedFromPeers({
 
         if (entry.type === 'infodepo-desk' && upsertDriveDesk) {
           const existing = getDeskByDriveId ? await getDeskByDriveId(driveId) : undefined;
-          const driveIsNewer = existing
-            ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
-            : true;
-          const sharedWithChanged = existing
-            ? !sameEmailSet(existing.sharedWith, normalizedSharedWith)
-            : true;
+          const driveIsNewer = !existing
+            ? true
+            : !existing.modifiedTime || new Date(entry.modifiedTime) > new Date(existing.modifiedTime);
+          const sharedWithChanged = !existing || !sameEmailSet(existing.sharedWith, normalizedSharedWith);
           if (existing && !driveIsNewer && !sharedWithChanged) { counts.skipped++; batchTick(); continue; }
 
           const blobRes = await fetch(
@@ -251,6 +235,7 @@ export async function syncSharedFromPeers({
               const { _type, ...deskData } = parsed;
               deskData.ownerEmail = peer.email;
               deskData.sharedWith = normalizedSharedWith;
+              const driveFile = { driveId, name: entry.name, mimeType: 'application/json', modifiedTime: entry.modifiedTime };
               const action = await upsertDriveDesk(driveFile, deskData, { silent: true });
               if (action === 'added') counts.added++;
               else if (action === 'updated') counts.updated++;
@@ -262,46 +247,55 @@ export async function syncSharedFromPeers({
           batchTick(); continue;
         }
 
+        // Books, notes, YouTube videos
         const existing = await getBookByDriveId(driveId);
-        const driveIsNewer = existing
-          ? !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime)
-          : true;
-        const sharedWithChanged = existing
-          ? !sameEmailSet(existing.sharedWith, normalizedSharedWith)
-          : true;
+        const driveIsNewer = !existing
+          ? true
+          : !existing.modifiedTime || new Date(entry.modifiedTime) > new Date(existing.modifiedTime);
+        const sharedWithChanged = !existing || !sameEmailSet(existing.sharedWith, normalizedSharedWith);
         if (existing && !driveIsNewer && !sharedWithChanged) {
           console.log(`[InfoDepo][peerSync] skipping "${entry.name}" (up to date, hasData=${!!existing.data})`);
           counts.skipped++; batchTick(); continue;
         }
 
-        // Binary books (EPUB, PDF, etc.): in lazy mode save metadata only and skip the
-        // blob download. JSON must still download so we can detect YouTube entries.
-        const isBookBinary = driveFile.mimeType !== 'application/json';
-        if (lazyBooks && isBookBinary) {
-          const effectiveFile = { ...driveFile, ownerEmail: peer.email, sharedWith: normalizedSharedWith, tags: Array.isArray(entry.tags) ? entry.tags : [] };
+        const isYoutube = entry.type === 'application/x-youtube';
+        const isMarkdown = entry.type === 'text/markdown';
+        const isJson = !isMarkdown && !isYoutube && entry.type === 'application/json';
+        const isBinary = !isMarkdown && !isYoutube && !isJson;
+
+        // Binary books: in lazy mode save metadata only and skip the blob download.
+        // JSON must still download so we can detect YouTube entries.
+        if (lazyBooks && isBinary) {
+          const effectiveFile = {
+            driveId,
+            name: entry.name,
+            mimeType: entry.type,
+            size: entry.size || 0,
+            modifiedTime: entry.modifiedTime,
+            ownerEmail: peer.email,
+            sharedWith: normalizedSharedWith,
+            tags: Array.isArray(entry.tags) ? entry.tags : [],
+          };
           const action = await upsertDriveBook(effectiveFile, null, undefined, { silent: true });
-          console.log(`[InfoDepo][peerSync] lazy book "${entry.name}" (${driveFile.mimeType}) → ${action}`);
+          console.log(`[InfoDepo][peerSync] lazy book "${entry.name}" (${entry.type}) → ${action}`);
           if (action === 'added') counts.added++;
           else if (action === 'updated') counts.updated++;
           else counts.skipped++;
           if (entry.coverImageDriveId && upsertDriveCoverImage) {
             try {
-              const coverMeta = await fetch(
-                `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(entry.coverImageDriveId)}?fields=id,name,mimeType,modifiedTime`,
+              const coverBlob = await fetch(
+                `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(entry.coverImageDriveId)}?alt=media`,
                 { headers: { Authorization: `Bearer ${accessToken}` } }
-              );
-              if (coverMeta.ok) {
-                const cm = await coverMeta.json();
-                const coverBlob = await fetch(
-                  `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(entry.coverImageDriveId)}?alt=media`,
+              ).then((r) => r.ok ? r.blob() : null);
+              if (coverBlob) {
+                const coverMetaRes = await fetch(
+                  `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(entry.coverImageDriveId)}?fields=id,name,mimeType,modifiedTime`,
                   { headers: { Authorization: `Bearer ${accessToken}` } }
-                ).then((r) => r.ok ? r.blob() : null);
-                if (coverBlob) {
+                );
+                if (coverMetaRes.ok) {
+                  const cm = await coverMetaRes.json();
                   await upsertDriveCoverImage({
-                    driveId: cm.id,
-                    parentItemName: entry.name,
-                    mimeType: cm.mimeType,
-                    modifiedTime: cm.modifiedTime,
+                    driveId: cm.id, parentItemName: entry.name, mimeType: cm.mimeType, modifiedTime: cm.modifiedTime,
                   }, coverBlob);
                 }
               }
@@ -321,23 +315,31 @@ export async function syncSharedFromPeers({
           counts.failed++; batchTick(); continue;
         }
         let blob = await blobRes.blob();
-        let effectiveFile = driveFile;
+        let effectiveFile = {
+          driveId,
+          name: entry.name,
+          mimeType: entry.type,
+          size: entry.size || 0,
+          modifiedTime: entry.modifiedTime,
+          ownerEmail: peer.email,
+          sharedWith: normalizedSharedWith,
+          tags: Array.isArray(entry.tags) ? entry.tags : [],
+        };
 
-        if (driveFile.mimeType === 'application/json') {
+        if (isYoutube || isJson) {
           try {
             const text = await blob.text();
             const parsed = JSON.parse(text);
             if (parsed.url && /youtube\.com|youtu\.be/.test(parsed.url)) {
               const safeTitle = (parsed.title || 'YouTube Video').replace(/[/\\?%*:|"<>]/g, '-');
-              effectiveFile = { ...driveFile, name: safeTitle + '.youtube', mimeType: 'application/x-youtube' };
+              effectiveFile = { ...effectiveFile, name: safeTitle + '.youtube', mimeType: 'application/x-youtube' };
               blob = new Blob([text], { type: 'application/x-youtube' });
+            } else if (isJson) {
+              blob = new Blob([text], { type: entry.type });
             }
-          } catch { /* not valid JSON */ }
+          } catch { /* not valid JSON — fall through */ }
         }
 
-        effectiveFile.ownerEmail = peer.email;
-        effectiveFile.sharedWith = normalizedSharedWith;
-        effectiveFile.tags = Array.isArray(entry.tags) ? entry.tags : [];
         const action = await upsertDriveBook(effectiveFile, blob, undefined, { silent: true });
         console.log(`[InfoDepo][peerSync] full download "${effectiveFile.name}" (${effectiveFile.mimeType}) → ${action}`);
         if (action === 'added') counts.added++;
@@ -346,22 +348,19 @@ export async function syncSharedFromPeers({
 
         if (entry.coverImageDriveId && upsertDriveCoverImage) {
           try {
-            const coverMeta = await fetch(
-              `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(entry.coverImageDriveId)}?fields=id,name,mimeType,modifiedTime`,
+            const coverBlob = await fetch(
+              `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(entry.coverImageDriveId)}?alt=media`,
               { headers: { Authorization: `Bearer ${accessToken}` } }
-            );
-            if (coverMeta.ok) {
-              const cm = await coverMeta.json();
-              const coverBlob = await fetch(
-                `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(entry.coverImageDriveId)}?alt=media`,
+            ).then((r) => r.ok ? r.blob() : null);
+            if (coverBlob) {
+              const coverMetaRes = await fetch(
+                `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(entry.coverImageDriveId)}?fields=id,name,mimeType,modifiedTime`,
                 { headers: { Authorization: `Bearer ${accessToken}` } }
-              ).then((r) => r.ok ? r.blob() : null);
-              if (coverBlob) {
+              );
+              if (coverMetaRes.ok) {
+                const cm = await coverMetaRes.json();
                 await upsertDriveCoverImage({
-                  driveId: cm.id,
-                  parentItemName: entry.name,
-                  mimeType: cm.mimeType,
-                  modifiedTime: cm.modifiedTime,
+                  driveId: cm.id, parentItemName: entry.name, mimeType: cm.mimeType, modifiedTime: cm.modifiedTime,
                 }, coverBlob);
               }
             }
