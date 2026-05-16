@@ -96,6 +96,7 @@ function isExpectedPdfCancellation(err) {
 
 export const PdfViewer = ({
   data,
+  itemDriveId,
   itemId,
   initialReadingPosition,
   initialAnnotations,
@@ -108,6 +109,7 @@ export const PdfViewer = ({
   readOnly,
   topOffset = 0,
 }) => {
+  const recordDriveId = itemDriveId ?? itemId;
   const containerRef = useRef(null);
   const loadingTaskRef = useRef(null);
   const pdfDocRef = useRef(null);
@@ -140,7 +142,7 @@ export const PdfViewer = ({
     const list = Array.isArray(initialAnnotations) ? initialAnnotations : [];
     setAnnotations(list);
     annotationsRef.current = list;
-  }, [itemId, initialAnnotations]);
+  }, [recordDriveId, initialAnnotations]);
   useEffect(() => {
     readingPositionRef.current = readingPositionWithoutPdfAnnotations(initialReadingPosition || {});
   }, [initialReadingPosition]);
@@ -690,7 +692,7 @@ export const PdfViewer = ({
     lastSavedPositionKeyRef.current = null;
     lastKnownPageRef.current = Number(initialReadingPosition?.pdfPage) || 1;
     lastUserScrollAtRef.current = 0;
-  }, [data, itemId]);
+  }, [data, recordDriveId]);
 
   useEffect(() => {
     if (status !== 'ready' || didRestoreScrollRef.current) return;
@@ -738,10 +740,10 @@ export const PdfViewer = ({
 
     if (!pageWrappers.length) return;
     didRestoreScrollRef.current = true;
-  }, [status, initialReadingPosition, itemId, pageWrappers]);
+  }, [status, initialReadingPosition, recordDriveId, pageWrappers]);
 
   useEffect(() => {
-    if (!onSaveReadingPosition || !storeName || !itemId) return undefined;
+    if (!onSaveReadingPosition || !storeName || !recordDriveId) return undefined;
     const mount = containerRef.current;
     if (!mount) return undefined;
     let pollId = null;
@@ -825,7 +827,7 @@ export const PdfViewer = ({
         pdfScrollTop: scrollTop,
       };
       readingPositionRef.current = payload;
-      onSaveReadingPosition(itemId, storeName, payload).catch(() => {});
+      onSaveReadingPosition(recordDriveId, storeName, payload).catch(() => {});
     };
 
     const onScroll = () => {
@@ -879,7 +881,7 @@ export const PdfViewer = ({
       }
       clearTimeout(postRestoreSaveTimer);
     };
-  }, [itemId, onSaveReadingPosition, storeName, pageWrappers]);
+  }, [recordDriveId, onSaveReadingPosition, storeName, pageWrappers]);
 
   useEffect(() => {
     const mount = containerRef.current;
@@ -893,19 +895,19 @@ export const PdfViewer = ({
 
   // Auto-save annotation sidecar every 60 seconds
   useEffect(() => {
-    if (readOnly || !onSavePdfAnnotations || !storeName || !itemId) return;
+    if (readOnly || !onSavePdfAnnotations || !storeName || !recordDriveId) return;
     const id = setInterval(() => {
       performSave(annotationsRef.current, true);
     }, 60_000);
     return () => clearInterval(id);
-  }, [data, itemId, onSavePdfAnnotations, storeName]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data, recordDriveId, onSavePdfAnnotations, storeName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function performSave(currentAnnotations, isAuto = false) {
-    if (!onSavePdfAnnotations || !storeName || !itemId) return;
+    if (!onSavePdfAnnotations || !storeName || !recordDriveId) return;
     setSaving(true);
     try {
       await onSavePdfAnnotations(
-        itemId,
+        recordDriveId,
         storeName,
         Array.isArray(currentAnnotations) ? currentAnnotations : [],
         pdfDriveId || ''

@@ -9,6 +9,7 @@ import { YoutubeChannelViewer } from './components/YoutubeChannelViewer.js';
 import { Explorer } from './components/Explorer.js';
 import { Desk } from './components/Desk.js';
 import { itemEntryKey, channelEntryKey } from './utils/deskEntryKeys.js';
+import { isTempDriveId } from './utils/driveRecordKey.js';
 import { useIndexedDB } from './hooks/useIndexedDB.js';
 import { libraryItemKey } from './utils/libraryItemKey.js';
 import { needsGoogleSignIn } from './utils/driveOAuthGateCheck.js';
@@ -212,14 +213,14 @@ const App = () => {
   // Keep currentChannel in sync with IndexedDB (so video list updates after a refresh).
   useEffect(() => {
     if (!currentChannel) return;
-    const updated = channels.find((c) => c.id === currentChannel.id);
+    const updated = channels.find((c) => c.driveId === currentChannel.driveId);
     if (updated) setCurrentChannel(updated);
   }, [channels]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep currentDesk in sync with IndexedDB (layout saves update the desks array).
   useEffect(() => {
     if (!currentDesk) return;
-    const updated = desks.find((d) => d.id === currentDesk.id);
+    const updated = desks.find((d) => d.driveId === currentDesk.driveId);
     if (updated) setCurrentDesk(updated);
     else setCurrentDesk(null);
   }, [desks]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -246,8 +247,8 @@ const App = () => {
   // Update lastVisitedAt when user opens an item.
   useEffect(() => {
     if (!currentVideo) return;
-    touchItemVisit(currentVideo.id, currentVideo.idbStore);
-  }, [currentVideo?.id, currentVideo?.idbStore]); // eslint-disable-line react-hooks/exhaustive-deps
+    touchItemVisit(currentVideo.driveId, currentVideo.idbStore);
+  }, [currentVideo?.driveId, currentVideo?.idbStore]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Run LRU eviction check once after initial data load.
   useEffect(() => {
@@ -270,11 +271,11 @@ const App = () => {
         .then((newVideos) => {
           if (!newVideos.length) {
             // No new videos — still update lastRefreshedAt so we don't recheck for an hour.
-            updateChannel(ch.id, { lastRefreshedAt: new Date() });
+            updateChannel(ch.driveId, { lastRefreshedAt: new Date() });
             return;
           }
           const merged = [...newVideos, ...(ch.videos || [])];
-          updateChannel(ch.id, { videos: merged, lastRefreshedAt: new Date() });
+          updateChannel(ch.driveId, { videos: merged, lastRefreshedAt: new Date() });
         })
         .catch((err) => {
           console.warn(`[InfoDepo] Channel refresh failed for "${ch.name}":`, err);
@@ -307,7 +308,7 @@ const App = () => {
   const openItem = async (video) => {
     const ext = video.name?.split('.').pop()?.toLowerCase() ?? '';
     const mime = video.type || '';
-    const blobKey = video.id ?? video.driveId;
+    const blobKey = video.driveId;
 
     // EPUB/MOBI/AZW files open in a dedicated tab (reader.html).
     // Strategy for lazy blobs (data == null):
@@ -321,9 +322,9 @@ const App = () => {
     const isEpub = ['epub', 'mobi', 'azw', 'azw3'].includes(ext)
       || ['application/epub+zip', 'application/x-mobipocket-ebook',
           'application/vnd.amazon.ebook', 'application/vnd.amazon.mobi8-ebook'].includes(mime);
-    if (isEpub && video.id != null) {
-      console.log('[InfoDepo][openItem] epub/mobi', { id: video.id, store: video.idbStore, hasData: !!video.data, driveId: video.driveId });
-      if (!video.data && video.driveId) {
+    if (isEpub && video.driveId) {
+      console.log('[InfoDepo][openItem] epub/mobi', { driveId: video.driveId, store: video.idbStore, hasData: !!video.data });
+      if (!video.data && video.driveId && !isTempDriveId(video.driveId)) {
         startProgress(blobKey, video.size);
         let fetchToken = null;
         try {
@@ -333,7 +334,7 @@ const App = () => {
           console.warn('[InfoDepo][openItem] epub token error:', tokenErr?.message);
           clearProgress(blobKey);
         }
-        window.open(`/reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+        window.open(`/reader.html?driveId=${encodeURIComponent(video.driveId)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
         if (fetchToken) {
           (async () => {
             try {
@@ -344,7 +345,7 @@ const App = () => {
                 (loaded, total) => updateProgress(blobKey, loaded, total),
               );
               if (blob) {
-                await updateBookBlob(video.id, blob, video.idbStore || 'books');
+                await updateBookBlob(video.driveId, blob, video.idbStore || 'books');
                 console.log('[InfoDepo][openItem] epub pre-download done:', video.name);
               }
             } catch (dlErr) {
@@ -356,16 +357,16 @@ const App = () => {
         }
       } else {
         console.log('[InfoDepo][openItem] epub has local data, opening reader tab directly');
-        window.open(`/reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+        window.open(`/reader.html?driveId=${encodeURIComponent(video.driveId)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
       }
       return;
     }
 
     // PDFs open in a dedicated tab (pdf-reader.html) — same token-first, open-before-download pattern.
     const isPdf = ext === 'pdf' || mime === 'application/pdf';
-    if (isPdf && video.id != null) {
-      console.log('[InfoDepo][openItem] pdf', { id: video.id, store: video.idbStore, hasData: !!video.data, driveId: video.driveId });
-      if (!video.data && video.driveId) {
+    if (isPdf && video.driveId) {
+      console.log('[InfoDepo][openItem] pdf', { driveId: video.driveId, store: video.idbStore, hasData: !!video.data });
+      if (!video.data && video.driveId && !isTempDriveId(video.driveId)) {
         startProgress(blobKey, video.size);
         let fetchToken = null;
         try {
@@ -375,7 +376,7 @@ const App = () => {
           console.warn('[InfoDepo][openItem] pdf token error:', tokenErr?.message);
           clearProgress(blobKey);
         }
-        window.open(`/pdf-reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+        window.open(`/pdf-reader.html?driveId=${encodeURIComponent(video.driveId)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
         if (fetchToken) {
           (async () => {
             try {
@@ -386,7 +387,7 @@ const App = () => {
                 (loaded, total) => updateProgress(blobKey, loaded, total),
               );
               if (blob) {
-                await updateBookBlob(video.id, blob, video.idbStore || 'books');
+                await updateBookBlob(video.driveId, blob, video.idbStore || 'books');
                 console.log('[InfoDepo][openItem] pdf pre-download done:', video.name);
               }
             } catch (dlErr) {
@@ -398,14 +399,14 @@ const App = () => {
         }
       } else {
         console.log('[InfoDepo][openItem] pdf has local data, opening reader tab directly');
-        window.open(`/pdf-reader.html?id=${encodeURIComponent(video.id)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
+        window.open(`/pdf-reader.html?driveId=${encodeURIComponent(video.driveId)}&store=${encodeURIComponent(video.idbStore || 'books')}`, '_blank');
       }
       return;
     }
 
     // For non-tab types (TXT, MD, YouTube, images), download blob on demand.
-    console.log('[InfoDepo][openItem] non-tab item', { ext, mime, id: video.id, hasData: !!video.data, driveId: video.driveId });
-    if (!video.data && video.driveId) {
+    console.log('[InfoDepo][openItem] non-tab item', { ext, mime, driveId: video.driveId, hasData: !!video.data });
+    if (!video.data && video.driveId && !isTempDriveId(video.driveId)) {
       startProgress(blobKey, video.size);
       try {
         const token = await getOwnerDriveAccessToken();
@@ -417,7 +418,7 @@ const App = () => {
           (loaded, total) => updateProgress(blobKey, loaded, total),
         );
         if (blob) {
-          await updateBookBlob(video.id, blob, video.idbStore || 'books');
+          await updateBookBlob(video.driveId, blob, video.idbStore || 'books');
           video = { ...video, data: blob };
           console.log('[InfoDepo][openItem] non-tab blob ready:', video.name);
         } else {
@@ -480,7 +481,7 @@ const App = () => {
     setCurrentDesk(desk);
     setMode('desk');
     setView('library');
-    touchItemVisit(desk.id, 'desks');
+    touchItemVisit(desk.driveId, 'desks');
   };
 
   const isEditor = userType === 'master' || userType === 'editor';
@@ -505,8 +506,8 @@ const App = () => {
   }, [isEditor, normalizedUserEmail]);
 
   const handleAddDesk = async (name) => {
-    const id = await addDesk(name, googleUserEmail);
-    const newDesk = { id, name, layout: {}, connections: [] };
+    const driveId = await addDesk(name, googleUserEmail);
+    const newDesk = { driveId, name, layout: {}, connections: [] };
     setCurrentDesk(newDesk);
     setMode('desk');
     setView('library');
@@ -525,30 +526,30 @@ const App = () => {
     return 'books';
   };
 
-  const addToDeskIfActive = useCallback((store, id) => {
-    if (mode !== 'desk' || !currentDesk || id == null) return;
+  const addToDeskIfActive = useCallback((store, driveId) => {
+    if (mode !== 'desk' || !currentDesk || !driveId) return;
     const key = store === 'channel'
-      ? channelEntryKey({ id, driveId: '' })
-      : itemEntryKey({ id, idbStore: store, driveId: '' });
+      ? channelEntryKey({ driveId })
+      : itemEntryKey({ driveId, idbStore: store });
     const currentLayout = currentDesk.layout || {};
     const count = Object.keys(currentLayout).length;
     const newLayout = { ...currentLayout, [key]: { x: 60 + (count * 20) % 200, y: 60 + (count * 20) % 100 } };
-    setDeskLayout(currentDesk.id, newLayout);
+    setDeskLayout(currentDesk.driveId, newLayout);
   }, [mode, currentDesk, setDeskLayout]);
 
   const handleFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    const id = await addItem(file.name, file.type, file, googleUserEmail);
-    addToDeskIfActive(inferStore(file.name, file.type), id);
+    const driveId = await addItem(file.name, file.type, file, googleUserEmail);
+    addToDeskIfActive(inferStore(file.name, file.type), driveId);
     e.target.value = '';
   };
 
   const handleImageFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    const id = await addItem(file.name, file.type, file, googleUserEmail);
-    addToDeskIfActive(inferStore(file.name, file.type), id);
+    const driveId = await addItem(file.name, file.type, file, googleUserEmail);
+    addToDeskIfActive(inferStore(file.name, file.type), driveId);
     e.target.value = '';
   };
 
@@ -564,12 +565,15 @@ const App = () => {
     userType === 'viewer'
   );
 
-  const recordHasDriveCopy = (rec) => !!(rec?.driveId && String(rec.driveId).trim());
+  const recordHasDriveCopy = (rec) => {
+    const d = String(rec?.driveId || '').trim();
+    return d && !isTempDriveId(d);
+  };
 
   const handleRequestDeleteChannel = (channel) => {
     if (!recordHasDriveCopy(channel) || !hasDriveLibrarySetup) {
       if (window.confirm(`Remove channel "${channel.name}" from your library?`)) {
-        deleteChannel(channel.id);
+        deleteChannel(channel.driveId);
         handleBackToLibrary();
       }
       return;
@@ -578,10 +582,10 @@ const App = () => {
   };
 
   const handleRequestDeleteItem = (video) => {
-    if (!video || video.id == null) return;
+    if (!video || !video.driveId) return;
     if (!recordHasDriveCopy(video) || !hasDriveLibrarySetup) {
       if (window.confirm(`Are you sure you want to delete "${video.name}"?`)) {
-        deleteItem(video.id, video.type);
+        deleteItem(video.driveId, video.type);
       }
       return;
     }
@@ -593,7 +597,7 @@ const App = () => {
   const runItemDeleteLocal = async () => {
     if (!pendingItemDelete) return;
     try {
-      await deleteItem(pendingItemDelete.id, pendingItemDelete.type);
+      await deleteItem(pendingItemDelete.driveId, pendingItemDelete.type);
       closeItemDeleteModal();
     } catch (e) {
       console.error(e);
@@ -606,7 +610,7 @@ const App = () => {
     try {
       const token = await getOwnerDriveAccessToken();
       await deleteDriveFilesForMergedItem(token, pendingItemDelete, getImagesForNote);
-      await deleteItem(pendingItemDelete.id, pendingItemDelete.type);
+      await deleteItem(pendingItemDelete.driveId, pendingItemDelete.type);
       closeItemDeleteModal();
     } catch (e) {
       console.error(e);
@@ -615,11 +619,11 @@ const App = () => {
   };
 
   const handleRequestDeleteDesk = (desk) => {
-    if (!desk || desk.id == null) return;
+    if (!desk || !desk.driveId) return;
     const label = desk.name || 'Untitled Desk';
     if (!recordHasDriveCopy(desk) || !hasDriveLibrarySetup) {
       if (window.confirm(`Remove desk "${label}"?`)) {
-        deleteDesk(desk.id);
+        deleteDesk(desk.driveId);
       }
       return;
     }
@@ -632,7 +636,7 @@ const App = () => {
   const runChannelDeleteLocal = async () => {
     if (!pendingChannelDelete) return;
     try {
-      await deleteChannel(pendingChannelDelete.id);
+      await deleteChannel(pendingChannelDelete.driveId);
       closeChannelDeleteModal();
       handleBackToLibrary();
     } catch (e) {
@@ -646,7 +650,7 @@ const App = () => {
     try {
       const token = await getOwnerDriveAccessToken();
       await deleteDriveFilesForChannel(token, pendingChannelDelete);
-      await deleteChannel(pendingChannelDelete.id);
+      await deleteChannel(pendingChannelDelete.driveId);
       closeChannelDeleteModal();
       handleBackToLibrary();
     } catch (e) {
@@ -658,7 +662,7 @@ const App = () => {
   const runDeskDeleteLocal = async () => {
     if (!pendingDeskDelete) return;
     try {
-      await deleteDesk(pendingDeskDelete.id);
+      await deleteDesk(pendingDeskDelete.driveId);
       closeDeskDeleteModal();
     } catch (e) {
       console.error(e);
@@ -671,7 +675,7 @@ const App = () => {
     try {
       const token = await getOwnerDriveAccessToken();
       await deleteDriveFilesForDesk(token, pendingDeskDelete);
-      await deleteDesk(pendingDeskDelete.id);
+      await deleteDesk(pendingDeskDelete.driveId);
       closeDeskDeleteModal();
     } catch (e) {
       console.error(e);
@@ -912,16 +916,16 @@ const App = () => {
               onUpdateTextItems: currentDeskReadOnly ? undefined : setDeskTextItems,
               onDeskModified: currentDeskReadOnly ? undefined : (id) => itemBackupFnRef.current?.(id, 'desks'),
               onRenameDesk: currentDeskReadOnly ? undefined : (id, name) => renameItem(id, 'desks', name),
-              onSetTags: isEditor ? (rec, storeName, tags) => setRecordTags(rec.id, storeName, tags) : undefined,
+              onSetTags: isEditor ? (rec, storeName, tags) => setRecordTags(rec.driveId, storeName, tags) : undefined,
               onSetSharedWith: (rec, storeName, emails) =>
                 setSharedWithFnRef.current
                   ? setSharedWithFnRef.current(rec, storeName, emails)
-                  : setItemSharedWith(rec.id, storeName, emails),
+                  : setItemSharedWith(rec.driveId, storeName, emails),
               canShareRecord: canEditShareForRecord,
               shareableEmails: shareableUserEmails,
-              onRenameItem: isEditor ? (rec, storeName, name) => renameItem(rec.id, storeName, name) : undefined,
-              onRenameChannel: isEditor ? (rec, storeName, name) => renameItem(rec.id, storeName, name) : undefined,
-              onSetNoteCoverImage: isEditor ? (v, file) => setNoteCoverImage(v.id, file, v.idbStore || 'books') : undefined,
+              onRenameItem: isEditor ? (rec, storeName, name) => renameItem(rec.driveId, storeName, name) : undefined,
+              onRenameChannel: isEditor ? (rec, storeName, name) => renameItem(rec.driveId, storeName, name) : undefined,
+              onSetNoteCoverImage: isEditor ? (v, file) => setNoteCoverImage(v.driveId, file, v.idbStore || 'books') : undefined,
               libraryImages: items.filter((i) => String(i.type || '').startsWith('image/')),
               readOnly: currentDeskReadOnly,
               role: userType,
@@ -1026,7 +1030,7 @@ const App = () => {
       filename: editingImageItem.name || 'image.png',
       onSave: async (blob) => {
         try {
-          await updateItem(editingImageItem.id, blob, 'image/png');
+          await updateItem(editingImageItem.driveId, blob, 'image/png');
         } catch (err) {
           console.error('ImageEditor save failed:', err);
           window.alert(err?.message || 'Could not save image.');

@@ -546,13 +546,13 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     reader.readAsText(video.data);
 
     if (onGetImages) {
-      onGetImages(video.id).then(assets => {
+      onGetImages(video.driveId).then(assets => {
         const urls = {};
         assets.forEach(a => { urls[a.name] = URL.createObjectURL(a.data); });
         setAssetUrls(urls);
       }).catch(() => {});
     }
-  }, [video.id]);
+  }, [video.driveId]);
 
   // Revoke object URLs on cleanup
   useEffect(() => {
@@ -1518,7 +1518,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
         setText(mdToSave);
       }
       const blob = new Blob([mdToSave], { type: 'text/markdown' });
-      await onUpdateItem(video.id, blob, video.type);
+      await onUpdateItem(video.driveId, blob, video.type);
       setIsDirty(false);
       setSaveMsg('saved');
       setTimeout(() => setSaveMsg(null), 2000);
@@ -1575,7 +1575,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
 
   const handleExport = async () => {
     const zip    = new JSZip();
-    const assets = await (onGetImages ? onGetImages(video.id) : Promise.resolve([]));
+    const assets = await (onGetImages ? onGetImages(video.driveId) : Promise.resolve([]));
 
     let exportText = text;
     if (editMode === 'html') {
@@ -1600,7 +1600,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   const insertImage = async (file) => {
     if (!file || !onAddImage) return;
     try {
-      await onAddImage(video.id, file.name, file, file.type);
+      await onAddImage(video.driveId, file.name, file, file.type);
       const url  = URL.createObjectURL(file);
       const size = pendingImageSize.current;
       pendingImageSize.current = undefined;
@@ -2110,7 +2110,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       backgroundColor: editingImg.backgroundColor || '#ffffff',
       onSave:   async (blob, fname) => {
         try {
-          await onAddImage(video.id, fname, blob, 'image/png');
+          await onAddImage(video.driveId, fname, blob, 'image/png');
           const newUrl = URL.createObjectURL(blob);
           setAssetUrls(prev => {
             if (prev[fname]) URL.revokeObjectURL(prev[fname]);

@@ -8,6 +8,7 @@ import { INFO_DEPO_DB_NAME, INFO_DEPO_DB_VERSION } from './utils/infodepoDb.js';
 import { getDriveCredentials } from './utils/driveCredentials.js';
 import { getStoredAccessToken } from './utils/driveOAuthStorage.js';
 import { OWNER_DRIVE_SCOPE } from './utils/driveScopes.js';
+import { isTempDriveId } from './utils/driveRecordKey.js';
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -22,20 +23,20 @@ function openDb() {
   });
 }
 
-async function getItem(db, id, storeName) {
+async function getItem(db, driveId, storeName) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readonly');
-    const req = tx.objectStore(storeName).get(id);
+    const req = tx.objectStore(storeName).get(driveId);
     req.onerror = () => reject(req.error);
     req.onsuccess = () => resolve(req.result ?? null);
   });
 }
 
-async function saveBlobToIdb(db, id, storeName, blob) {
+async function saveBlobToIdb(db, driveId, storeName, blob) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readwrite');
     const os = tx.objectStore(storeName);
-    const getReq = os.get(id);
+    const getReq = os.get(driveId);
     getReq.onsuccess = () => {
       const record = getReq.result;
       if (!record) { resolve(); return; }
@@ -47,11 +48,11 @@ async function saveBlobToIdb(db, id, storeName, blob) {
   });
 }
 
-async function saveReadingPosition(db, id, storeName, position) {
+async function saveReadingPosition(db, driveId, storeName, position) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readwrite');
     const store = tx.objectStore(storeName);
-    const getReq = store.get(id);
+    const getReq = store.get(driveId);
     getReq.onerror = () => reject(getReq.error);
     getReq.onsuccess = () => {
       const item = getReq.result;
@@ -145,27 +146,25 @@ function EpubReaderApp() {
   const [dlTotal, setDlTotal] = useState(0);
 
   const params = new URLSearchParams(window.location.search);
-  const rawId = params.get('id');
+  const driveId = String(params.get('driveId') || '').trim() || null;
   const storeName = params.get('store') || 'books';
-  // IndexedDB keys are auto-increment integers; parse accordingly.
-  const itemId = rawId != null ? (isNaN(Number(rawId)) ? rawId : Number(rawId)) : null;
 
   useEffect(() => {
-    if (itemId == null) { setError('No book ID in URL — open this page from the InfoDepo library.'); return; }
+    if (!driveId) { setError('No driveId in URL — open this page from the InfoDepo library.'); return; }
     let cancelled = false;
     (async () => {
       try {
-        console.log('[InfoDepo][epub-reader] opening DB', { itemId, storeName });
+        console.log('[InfoDepo][epub-reader] opening DB', { driveId, storeName });
         const database = await openDb();
         if (cancelled) { database.close(); return; }
         setDb(database);
-        const item = await getItem(database, itemId, storeName);
+        const item = await getItem(database, driveId, storeName);
         if (cancelled) return;
         if (!item) { setError('Book not found in library.'); return; }
         document.title = (item.name || 'EPUB Reader') + ' — InfoDepo';
         console.log('[InfoDepo][epub-reader] item loaded', { name: item.name, hasData: !!item.data, driveId: item.driveId, size: item.size });
 
-        if (!item.data && item.driveId) {
+        if (!item.data && item.driveId && !isTempDriveId(item.driveId)) {
           const { clientId } = getDriveCredentials();
           const token = clientId ? getStoredAccessToken(clientId, OWNER_DRIVE_SCOPE) : null;
           console.log('[InfoDepo][epub-reader] lazy blob — token check', { clientId: clientId?.slice(0, 10), hasToken: !!token });
@@ -192,7 +191,7 @@ function EpubReaderApp() {
           } finally {}
           if (cancelled || !blob) return;
           console.log('[InfoDepo][epub-reader] blob downloaded, saving to IDB', { size: blob.size });
-          await saveBlobToIdb(database, itemId, storeName, blob);
+          await saveBlobToIdb(database, driveId, storeName, blob);
           if (!cancelled) {
             setBook({ ...item, data: blob });
             setDownloading(false);
@@ -211,11 +210,11 @@ function EpubReaderApp() {
       }
     })();
     return () => { cancelled = true; };
-  }, [itemId, storeName]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [driveId, storeName]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSavePosition = useCallback((id, store, position) => {
+  const handleSavePosition = useCallback((recordDriveId, store, position) => {
     if (!db) return Promise.resolve();
-    return saveReadingPosition(db, id, store, position).catch(() => {});
+    return saveReadingPosition(db, recordDriveId, store, position).catch(() => {});
   }, [db]);
 
   if (error) {
@@ -246,7 +245,7 @@ function EpubReaderApp() {
     data: book.data,
     name: book.name,
     type: book.type,
-    itemId: book.id,
+    itemDriveId: book.driveId,
     initialReadingPosition: book.readingPosition,
     onSaveReadingPosition: handleSavePosition,
     storeName,

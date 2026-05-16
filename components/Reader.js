@@ -50,20 +50,20 @@ export const Reader = ({
     setPdfAnnotationsReady(false);
     (async () => {
       try {
-        const sc = await getPdfAnnotationSidecar(video.id, video.idbStore);
+        const sc = await getPdfAnnotationSidecar(video.driveId, video.driveIdbStore);
         let anns = Array.isArray(sc?.annotations) ? sc.annotations : [];
         const legacy = video.readingPosition?.pdfAnnotations;
         if (Array.isArray(legacy) && legacy.length > 0 && anns.length === 0) {
           anns = legacy;
           await putPdfAnnotationsForItem(
-            video.id,
-            video.idbStore,
+            video.driveId,
+            video.driveIdbStore,
             anns,
             String(video.driveId || '').trim()
           );
           const rp = video.readingPosition || {};
           const { pdfAnnotations: _drop, ...rest } = rp;
-          await onSaveReadingPosition(video.id, video.idbStore, {
+          await onSaveReadingPosition(video.driveId, video.driveIdbStore, {
             ...rest,
             kind: 'pdf',
           });
@@ -83,8 +83,8 @@ export const Reader = ({
     return () => { cancelled = true; };
   }, [
     fileExtension,
-    video.id,
-    video.idbStore,
+    video.driveId,
+    video.driveIdbStore,
     video.driveId,
     getPdfAnnotationSidecar,
     putPdfAnnotationsForItem,
@@ -101,10 +101,10 @@ export const Reader = ({
           data: video.data,
           name: video.name,
           type: video.type,
-          itemId: video.id,
+          itemDriveId: video.driveId,
           initialReadingPosition: video.readingPosition,
           onSaveReadingPosition,
-          storeName: video.idbStore,
+          storeName: video.driveIdbStore,
         });
       case 'pdf':
         if (!pdfAnnotationsReady) {
@@ -116,7 +116,7 @@ export const Reader = ({
         }
         return React.createElement(PdfViewer, {
           data: video.data,
-          itemId: video.id,
+          itemDriveId: video.driveId,
           initialReadingPosition: video.readingPosition,
           initialAnnotations: pdfAnnotations,
           pdfDriveId: String(video.driveId || '').trim(),
@@ -124,22 +124,22 @@ export const Reader = ({
           onUpdateItem,
           onSaveReadingPosition,
           onSavePdfAnnotations: putPdfAnnotationsForItem,
-          storeName: video.idbStore,
+          storeName: video.driveIdbStore,
           readOnly,
           topOffset: 70,
         });
       case 'txt':
         return React.createElement(TxtViewer, {
           data: video.data,
-          itemId: video.id,
+          itemDriveId: video.driveId,
           initialReadingPosition: video.readingPosition,
           onSaveReadingPosition,
-          storeName: video.idbStore,
+          storeName: video.driveIdbStore,
         });
       case 'md':
         return React.createElement(MarkdownEditor, {
           video, onUpdateItem, onAddImage, onGetImages, readOnly,
-          onRename: onRename && !readOnly ? (newName) => onRename(video.id, video.idbStore, newName) : null,
+          onRename: onRename && !readOnly ? (newName) => onRename(video.driveId, video.driveIdbStore, newName) : null,
         });
       case 'youtube':
         return React.createElement(YoutubeViewer, { video, onSelectChannel, onAddChannel });

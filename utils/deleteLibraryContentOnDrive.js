@@ -29,7 +29,7 @@ export async function deleteDriveFilesForMergedItem(accessToken, item, getImages
     // Legacy: notes without a folder — delete the .md file plus any individually-uploaded images.
     if (isMarkdownType(item?.type) && item?.id != null && typeof getImagesForNote === 'function') {
       try {
-        const imgs = await getImagesForNote(item.id);
+        const imgs = await getImagesForNote(item.driveId);
         for (const im of imgs || []) push(im?.driveId);
       } catch (e) {
         console.warn('[InfoDepo] getImagesForNote while deleting from Drive:', e);

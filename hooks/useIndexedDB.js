@@ -4,7 +4,12 @@ import { INFO_DEPO_DB_NAME as DB_NAME, INFO_DEPO_DB_VERSION as DB_VERSION } from
 import { normalizeTagsList } from '../utils/tagUtils.js';
 import { parsePdfAnnotationSidecarText, pdfAnnotationSidecarNeedsBackup, timeMs as sidecarTimeMs } from '../utils/pdfAnnotationSidecar.js';
 import { getSyncSettings } from '../utils/syncSettings.js';
-import { deskRecordRemapContentKeys, layoutKeysForLocalRecord } from '../utils/deskEntryKeys.js';
+import {
+  deskRecordRemapContentKeys,
+  layoutKeysForTempRecord,
+  migrateDeskLayoutKeysForV10,
+} from '../utils/deskEntryKeys.js';
+import { makeTempDriveId, migrationTempDriveId, deskLayoutKey } from '../utils/driveRecordKey.js';
 
 const BOOKS_STORE    = 'books';
 const NOTES_STORE    = 'notes';
@@ -14,7 +19,38 @@ const CHANNELS_STORE = 'channels';
 const DESKS_STORE    = 'desks';
 const PDF_ANNOTATIONS_STORE = 'pdfAnnotations';
 
-const pdfAnnotationSidecarKey = (itemId, idbStore) => `${idbStore}:${itemId}`;
+const pdfAnnotationSidecarKey = (driveId, idbStore) => `${idbStore}:${driveId}`;
+
+const migrateContentRow = (storeName, row) => {
+  const trimmed = String(row?.driveId || '').trim();
+  const driveId = trimmed || migrationTempDriveId(storeName, row.id);
+  const { id: _removed, ...rest } = row;
+  return { ...rest, driveId };
+};
+
+const rekeyPdfAnnotationSidecarOnPromote = (db, oldDriveId, newDriveId, idbStore) => {
+  if (!db || !oldDriveId || !newDriveId || oldDriveId === newDriveId) return;
+  try {
+    const tx = db.transaction(PDF_ANNOTATIONS_STORE, 'readwrite');
+    const os = tx.objectStore(PDF_ANNOTATIONS_STORE);
+    const oldKey = pdfAnnotationSidecarKey(oldDriveId, idbStore);
+    const g = os.get(oldKey);
+    g.onsuccess = () => {
+      const prev = g.result;
+      if (!prev) return;
+      os.delete(oldKey);
+      const newKey = pdfAnnotationSidecarKey(newDriveId, idbStore);
+      os.put({
+        ...prev,
+        sidecarKey: newKey,
+        itemDriveId: newDriveId,
+        pdfDriveId: String(newDriveId).trim() || prev.pdfDriveId,
+      });
+    };
+  } catch {
+    /* pdfAnnotations store may be missing */
+  }
+};
 
 
 const isYoutubeType = (type) =>
@@ -125,27 +161,123 @@ export const useIndexedDB = () => {
       const dbInstance = event.target.result;
       const tx = event.target.transaction;
       if (event.oldVersion < 1) {
-        const addStore = (name, indexSpec, opts = { keyPath: 'id', autoIncrement: true }) => {
+        const addStore = (name, indexSpec, opts = { keyPath: 'driveId' }) => {
           const s = dbInstance.createObjectStore(name, opts);
-          indexSpec.forEach(({ key, path, unique }) => s.createIndex(key, path, { unique }));
+          (indexSpec || []).forEach(({ key, path, unique }) => s.createIndex(key, path, { unique: !!unique }));
           return s;
         };
-        addStore(BOOKS_STORE,    [{ key: 'driveId',   path: 'driveId',   unique: false }]);
-        addStore(NOTES_STORE,    [{ key: 'driveId',   path: 'driveId',   unique: false }]);
-        addStore(VIDEOS_STORE,   [{ key: 'driveId',   path: 'driveId',   unique: false }]);
-        addStore(IMAGES_STORE,   [{ key: 'noteId',    path: 'noteId',    unique: false }]);
-        addStore(CHANNELS_STORE, [{ key: 'channelId', path: 'channelId', unique: true  }]);
+        addStore(BOOKS_STORE, []);
+        addStore(NOTES_STORE, []);
+        addStore(VIDEOS_STORE, []);
+        addStore(IMAGES_STORE, [{ key: 'noteDriveId', path: 'noteDriveId', unique: false }]);
+        addStore(CHANNELS_STORE, [{ key: 'channelId', path: 'channelId', unique: true }]);
+        addStore(DESKS_STORE, []);
       }
       if (!dbInstance.objectStoreNames.contains(PDF_ANNOTATIONS_STORE)) {
         const s = dbInstance.createObjectStore(PDF_ANNOTATIONS_STORE, { keyPath: 'sidecarKey' });
         s.createIndex('pdfDriveId', 'pdfDriveId', { unique: false });
         s.createIndex('annotationDriveId', 'annotationDriveId', { unique: false });
-        s.createIndex('itemId', 'itemId', { unique: false });
+        s.createIndex('itemDriveId', 'itemDriveId', { unique: false });
       }
-      // desks store (v8+; v9 bump repairs DBs that reached v8 before this existed)
       if (!dbInstance.objectStoreNames.contains(DESKS_STORE)) {
-        const s = dbInstance.createObjectStore(DESKS_STORE, { keyPath: 'id', autoIncrement: true });
-        s.createIndex('driveId', 'driveId', { unique: false });
+        dbInstance.createObjectStore(DESKS_STORE, { keyPath: 'driveId' });
+      }
+
+      if (event.oldVersion > 0 && event.oldVersion < 10) {
+        const contentStores = [BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, CHANNELS_STORE, DESKS_STORE];
+        const snapshot = {};
+        let readsPending = contentStores.filter((n) => dbInstance.objectStoreNames.contains(n)).length;
+        const noteOldIdToDriveId = new Map();
+
+        const afterReads = () => {
+          for (const storeName of contentStores) {
+            if (!dbInstance.objectStoreNames.contains(storeName)) continue;
+            dbInstance.deleteObjectStore(storeName);
+            const s = dbInstance.createObjectStore(storeName, { keyPath: 'driveId' });
+            if (storeName === CHANNELS_STORE) {
+              s.createIndex('channelId', 'channelId', { unique: true });
+            }
+            for (const row of snapshot[storeName] || []) {
+              const { _oldNumericId, ...toPut } = row;
+              if (storeName === DESKS_STORE) {
+                s.put({
+                  ...toPut,
+                  layout: migrateDeskLayoutKeysForV10(row.layout),
+                });
+              } else {
+                s.put(toPut);
+                if (storeName === NOTES_STORE && _oldNumericId != null) {
+                  noteOldIdToDriveId.set(_oldNumericId, toPut.driveId);
+                }
+              }
+            }
+          }
+
+          if (dbInstance.objectStoreNames.contains(IMAGES_STORE)) {
+            const imgOs = tx.objectStore(IMAGES_STORE);
+            const imgReq = imgOs.getAll();
+            imgReq.onsuccess = () => {
+              const images = imgReq.result || [];
+              dbInstance.deleteObjectStore(IMAGES_STORE);
+              const newImg = dbInstance.createObjectStore(IMAGES_STORE, { keyPath: 'driveId' });
+              newImg.createIndex('noteDriveId', 'noteDriveId', { unique: false });
+              for (const img of images) {
+                const { id: _i, noteId, ...imgRest } = img;
+                const noteDriveId = noteOldIdToDriveId.get(noteId)
+                  || (noteId != null ? migrationTempDriveId(NOTES_STORE, noteId) : '');
+                const driveId = String(img.driveId || '').trim() || migrationTempDriveId(IMAGES_STORE, img.id);
+                newImg.put({ ...imgRest, driveId, noteDriveId });
+              }
+              migratePdfAnnotationsStore();
+            };
+          } else {
+            migratePdfAnnotationsStore();
+          }
+        };
+
+        const migratePdfAnnotationsStore = () => {
+          if (!dbInstance.objectStoreNames.contains(PDF_ANNOTATIONS_STORE)) return;
+          const annOs = tx.objectStore(PDF_ANNOTATIONS_STORE);
+          const annReq = annOs.getAll();
+          annReq.onsuccess = () => {
+            const rows = annReq.result || [];
+            dbInstance.deleteObjectStore(PDF_ANNOTATIONS_STORE);
+            const newAnn = dbInstance.createObjectStore(PDF_ANNOTATIONS_STORE, { keyPath: 'sidecarKey' });
+            newAnn.createIndex('pdfDriveId', 'pdfDriveId', { unique: false });
+            newAnn.createIndex('annotationDriveId', 'annotationDriveId', { unique: false });
+            newAnn.createIndex('itemDriveId', 'itemDriveId', { unique: false });
+            for (const row of rows) {
+              const idbStore = row.idbStore || BOOKS_STORE;
+              let itemDriveId = row.itemDriveId;
+              if (!itemDriveId && row.itemId != null) {
+                const mapped = noteOldIdToDriveId.get(row.itemId)
+                  ?? snapshot[BOOKS_STORE]?.find((b) => b._oldNumericId === row.itemId)?.driveId
+                  ?? snapshot[NOTES_STORE]?.find((n) => n._oldNumericId === row.itemId)?.driveId;
+                itemDriveId = mapped || migrationTempDriveId(idbStore, row.itemId);
+              }
+              const pdfDriveId = String(row.pdfDriveId || '').trim() || itemDriveId;
+              const sidecarKey = pdfAnnotationSidecarKey(itemDriveId, idbStore);
+              const { itemId: _legacy, ...rest } = row;
+              newAnn.put({ ...rest, sidecarKey, itemDriveId, pdfDriveId });
+            }
+          };
+        };
+
+        const finishRead = (storeName, rows) => {
+          snapshot[storeName] = (rows || []).map((row) => {
+            const migrated = migrateContentRow(storeName, row);
+            return { ...migrated, _oldNumericId: row.id };
+          });
+          readsPending--;
+          if (readsPending === 0) afterReads();
+        };
+
+        for (const storeName of contentStores) {
+          if (!dbInstance.objectStoreNames.contains(storeName)) continue;
+          const req = tx.objectStore(storeName).getAll();
+          req.onsuccess = (e) => finishRead(storeName, e.target.result);
+          req.onerror = () => finishRead(storeName, []);
+        }
       }
       // v7: drop shares store, add sharedWith + ownerEmail to content stores
       if (event.oldVersion > 0 && event.oldVersion < 7) {
@@ -374,8 +506,10 @@ export const useIndexedDB = () => {
         return;
       }
       const now = new Date();
+      const driveId = makeTempDriveId(store);
       const record = {
-        name, type: storedType, data, size, driveId: '',
+        driveId,
+        name, type: storedType, data, size,
         modifiedTime: now,
         localModifiedAt: now,
         lastVisitedAt: now,
@@ -383,13 +517,13 @@ export const useIndexedDB = () => {
         sharedWith: [],
         ownerEmail: String(ownerEmail || '').trim().toLowerCase(),
       };
-      const addRequest = tx.objectStore(store).add(record);
-      addRequest.onsuccess = (e) => { loadItems('addItem'); resolve(e.target.result); };
-      addRequest.onerror   = (e) => { console.error('Error adding item:', store, e.target.error); reject(e.target.error); };
+      const putRequest = tx.objectStore(store).put(record);
+      putRequest.onsuccess = () => { loadItems('addItem'); resolve(driveId); };
+      putRequest.onerror   = (e) => { console.error('Error adding item:', store, e.target.error); reject(e.target.error); };
     });
   }, [db, loadItems]);
 
-  const updateItem = useCallback((id, content, type) => {
+  const updateItem = useCallback((driveId, content, type) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     const mime = type != null && String(type).trim() !== '' ? String(type).trim() : 'text/markdown';
     const preferred  = storeForType(mime);
@@ -401,7 +535,7 @@ export const useIndexedDB = () => {
         let tx;
         try { tx = db.transaction(store, 'readwrite'); } catch (err) { reject(err); return; }
         const os = tx.objectStore(store);
-        const getRequest = os.get(id);
+        const getRequest = os.get(driveId);
         getRequest.onsuccess = () => {
           const existing = getRequest.result;
           if (!existing) {
@@ -430,18 +564,18 @@ export const useIndexedDB = () => {
   }, [db, loadItems]);
 
   // Store image inside the parent note's `assets` array instead of a separate images record.
-  const addImage = useCallback((noteId, name, data, type) => {
+  const addImage = useCallback((noteDriveId, name, data, type) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
       const tx = db.transaction(NOTES_STORE, 'readwrite');
       const os = tx.objectStore(NOTES_STORE);
-      const req = os.get(noteId);
+      const req = os.get(noteDriveId);
       req.onsuccess = () => {
         const note = req.result;
         if (!note) { reject(new Error('Note not found')); return; }
         const assets = Array.isArray(note.assets) ? [...note.assets] : [];
         const idx = assets.findIndex(a => a.name === name);
-        const asset = { name, data, type, driveId: '' };
+        const asset = { name, data, type, driveId: makeTempDriveId('note-asset') };
         if (idx >= 0) assets[idx] = asset; else assets.push(asset);
         const putReq = os.put({ ...note, assets, localModifiedAt: new Date() });
         putReq.onsuccess = (e) => resolve(e.target.result);
@@ -451,7 +585,7 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
-  const setNoteCoverImage = useCallback((noteId, file, storeName) => {
+  const setNoteCoverImage = useCallback((noteDriveId, file, storeName) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     if (!file) return Promise.reject(new Error('No image selected'));
     if (!String(file.type || '').toLowerCase().startsWith('image/')) {
@@ -461,7 +595,7 @@ export const useIndexedDB = () => {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(store, 'readwrite');
       const os = tx.objectStore(store);
-      const req = os.get(noteId);
+      const req = os.get(noteDriveId);
       req.onsuccess = () => {
         const note = req.result;
         if (!note) {
@@ -491,7 +625,7 @@ export const useIndexedDB = () => {
   }, [db, loadItems, loadDesks]);
 
   // Read assets from note.assets; fall back to legacy images store for old records.
-  const getImagesForNote = useCallback((noteId) => {
+  const getImagesForNote = useCallback((noteDriveId) => {
     if (!db) return Promise.resolve([]);
     return new Promise((resolve) => {
       let noteAssets = [];
@@ -505,11 +639,21 @@ export const useIndexedDB = () => {
         resolve([...noteAssets, ...legacyAssets.filter(a => !names.has(a.name))]);
       };
       const noteTx = db.transaction(NOTES_STORE, 'readonly');
-      const noteReq = noteTx.objectStore(NOTES_STORE).get(noteId);
+      const noteReq = noteTx.objectStore(NOTES_STORE).get(noteDriveId);
       noteReq.onsuccess = (e) => { noteAssets = Array.isArray(e.target.result?.assets) ? e.target.result.assets : []; finish(); };
       noteReq.onerror   = () => finish();
       const imgTx = db.transaction(IMAGES_STORE, 'readonly');
-      const imgReq = imgTx.objectStore(IMAGES_STORE).index('noteId').getAll(IDBKeyRange.only(noteId));
+      let imgReq;
+      try {
+        imgReq = imgTx.objectStore(IMAGES_STORE).index('noteDriveId').getAll(IDBKeyRange.only(noteDriveId));
+      } catch {
+        try {
+          imgReq = imgTx.objectStore(IMAGES_STORE).index('noteId').getAll(IDBKeyRange.only(noteDriveId));
+        } catch {
+          finish();
+          return;
+        }
+      }
       imgReq.onsuccess = (e) => { legacyAssets = e.target.result || []; finish(); };
       imgReq.onerror   = () => finish();
     });
@@ -525,7 +669,7 @@ export const useIndexedDB = () => {
         const all = [];
         for (const note of e.target.result) {
           if (Array.isArray(note.assets)) {
-            all.push(...note.assets.map(a => ({ ...a, noteId: note.id })));
+            all.push(...note.assets.map(a => ({ ...a, noteDriveId: note.driveId })));
           }
         }
         resolve(all);
@@ -543,7 +687,7 @@ export const useIndexedDB = () => {
         for (const note of e.target.result) {
           if (Array.isArray(note.assets)) {
             const found = note.assets.find(a => a.driveId === driveId);
-            if (found) { resolve({ ...found, noteId: note.id }); return; }
+            if (found) { resolve({ ...found, noteDriveId: note.driveId }); return; }
           }
         }
         resolve(undefined);
@@ -561,7 +705,7 @@ export const useIndexedDB = () => {
         for (const note of e.target.result) {
           if (Array.isArray(note.assets)) {
             const found = note.assets.find(a => a.name === name);
-            if (found) { resolve({ ...found, noteId: note.id }); return; }
+            if (found) { resolve({ ...found, noteDriveId: note.driveId }); return; }
           }
         }
         resolve(undefined);
@@ -571,15 +715,15 @@ export const useIndexedDB = () => {
   }, [db]);
 
   // Update or insert an asset inside the parent note's assets array.
-  const upsertDriveImage = useCallback(async (driveFile, blob, noteId) => {
+  const upsertDriveImage = useCallback(async (driveFile, blob, noteDriveId) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     if (!blob) return Promise.resolve('skipped');
-    if (!noteId) return Promise.resolve('skipped');
+    if (!noteDriveId) return Promise.resolve('skipped');
 
     return new Promise((resolve, reject) => {
       const tx = db.transaction(NOTES_STORE, 'readwrite');
       const os = tx.objectStore(NOTES_STORE);
-      const req = os.get(noteId);
+      const req = os.get(noteDriveId);
       req.onsuccess = () => {
         const note = req.result;
         if (!note) { resolve('skipped'); return; }
@@ -604,12 +748,12 @@ export const useIndexedDB = () => {
   }, [db]);
 
   /** Persist the Drive folder ID and per-asset Drive file IDs back onto the note record. */
-  const setNoteFolderData = useCallback((noteId, folderId, assetDriveIds, { silent = false } = {}) => {
+  const setNoteFolderData = useCallback((noteDriveId, folderId, assetDriveIds, { silent = false } = {}) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
       const tx = db.transaction(NOTES_STORE, 'readwrite');
       const os = tx.objectStore(NOTES_STORE);
-      const req = os.get(noteId);
+      const req = os.get(noteDriveId);
       req.onsuccess = () => {
         const note = req.result;
         if (!note) { resolve(); return; }
@@ -635,12 +779,22 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
-  const deleteImagesForNote = useCallback((noteId) => {
+  const deleteImagesForNote = useCallback((noteDriveId) => {
     if (!db) return Promise.resolve();
     // Clear legacy images store records for this note.
     const clearLegacy = () => new Promise((resolve, reject) => {
       const tx = db.transaction(IMAGES_STORE, 'readwrite');
-      const request = tx.objectStore(IMAGES_STORE).index('noteId').openCursor(IDBKeyRange.only(noteId));
+      let request;
+      try {
+        request = tx.objectStore(IMAGES_STORE).index('noteDriveId').openCursor(IDBKeyRange.only(noteDriveId));
+      } catch {
+        try {
+          request = tx.objectStore(IMAGES_STORE).index('noteId').openCursor(IDBKeyRange.only(noteDriveId));
+        } catch {
+          resolve();
+          return;
+        }
+      }
       request.onsuccess = (event) => {
         const cursor = event.target.result;
         if (cursor) { cursor.delete(); cursor.continue(); } else resolve();
@@ -651,19 +805,19 @@ export const useIndexedDB = () => {
     return clearLegacy();
   }, [db]);
 
-  const deleteItem = useCallback((id, type) => {
+  const deleteItem = useCallback((driveId, type) => {
     if (!db) return Promise.resolve();
     const store = storeForType(type);
     const isPdf = String(type || '').trim() === 'application/pdf';
-    return deleteImagesForNote(id).then(() => new Promise((resolve, reject) => {
+    return deleteImagesForNote(driveId).then(() => new Promise((resolve, reject) => {
       const tx = db.transaction(store, 'readwrite');
-      const deleteRequest = tx.objectStore(store).delete(id);
+      const deleteRequest = tx.objectStore(store).delete(driveId);
       deleteRequest.onsuccess = () => {
         loadItems('deleteItem');
         if (isPdf) {
           try {
             const tx2 = db.transaction(PDF_ANNOTATIONS_STORE, 'readwrite');
-            tx2.objectStore(PDF_ANNOTATIONS_STORE).delete(pdfAnnotationSidecarKey(id, store));
+            tx2.objectStore(PDF_ANNOTATIONS_STORE).delete(pdfAnnotationSidecarKey(driveId, store));
           } catch {
             /* store may not exist on very old DB */
           }
@@ -685,83 +839,105 @@ export const useIndexedDB = () => {
   }, [db]);
 
   /**
-   * Update driveId and optional sync times after a successful Drive upload or PATCH.
+   * Promote temp driveId to real Google file id (or update sync metadata in place).
    * @param {object} [syncMeta] - If `modifiedTime` is set (ISO string from Drive), sets both modifiedTime and localModifiedAt to match Drive.
    */
-  const setItemDriveId = useCallback((id, storeName, driveId, syncMeta = null) => {
+  const setItemDriveId = useCallback((oldDriveId, storeName, newDriveId, syncMeta = null) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     const silent = syncMeta?.silent ?? false;
+    const trimmedOld = String(oldDriveId || '').trim();
+    const trimmedNew = String(newDriveId || '').trim();
+    if (!trimmedOld) return Promise.reject(new Error('Record driveId required'));
+
+    const mt = syncMeta?.modifiedTime != null ? new Date(syncMeta.modifiedTime) : undefined;
+    const metaPatch = mt ? { modifiedTime: mt, localModifiedAt: mt } : {};
+
+    const remapDesksAndFinish = (tempDriveId, realDriveId, onDone, onErr) => {
+      const driveKey = deskLayoutKey(realDriveId);
+      const oldKeys = layoutKeysForTempRecord(storeName, tempDriveId);
+      let tx2;
+      try { tx2 = db.transaction(DESKS_STORE, 'readwrite'); } catch {
+        onDone(false);
+        return;
+      }
+      const dos = tx2.objectStore(DESKS_STORE);
+      const ga = dos.getAll();
+      ga.onsuccess = () => {
+        const rows = ga.result || [];
+        const toPut = [];
+        for (const desk of rows) {
+          const next = deskRecordRemapContentKeys(desk, oldKeys, driveKey);
+          if (next) toPut.push(next);
+        }
+        if (!toPut.length) {
+          onDone(false);
+          return;
+        }
+        let left = toPut.length;
+        toPut.forEach((row) => {
+          const pr = dos.put(row);
+          pr.onsuccess = () => {
+            left -= 1;
+            if (left === 0) onDone(true);
+          };
+          pr.onerror = () => {
+            left -= 1;
+            if (left === 0) onErr(pr.error);
+          };
+        });
+      };
+      ga.onerror = () => onDone(false);
+    };
+
+    const notify = (remappedDesks) => {
+      if (remappedDesks) {
+        if (!silent) loadAll('setItemDriveId/desksRemap');
+        else loadDesks('setItemDriveId/desksRemap');
+      } else if (!silent) {
+        if (storeName === CHANNELS_STORE) loadChannels('setItemDriveId');
+        else if (storeName === DESKS_STORE) loadDesks('setItemDriveId');
+        else loadItems('setItemDriveId');
+      }
+    };
+
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(storeName, 'readwrite'); } catch (err) { reject(err); return; }
       const os = tx.objectStore(storeName);
-      const getRequest = os.get(id);
+      const getRequest = os.get(trimmedOld);
       getRequest.onsuccess = () => {
         const existing = getRequest.result;
         if (!existing) { reject(new Error('Record not found')); return; }
-        const mt = syncMeta?.modifiedTime != null ? new Date(syncMeta.modifiedTime) : undefined;
-        const putRequest = os.put({
-          ...existing,
-          driveId,
-          ...(mt
-            ? { modifiedTime: mt, localModifiedAt: mt }
-            : {}),
-        });
-        putRequest.onsuccess = () => {
-          const trimmedDrive = String(driveId || '').trim();
-          const notify = (remappedDesks) => {
-            if (remappedDesks) {
-              // Reload items + desks atomically so the Desk effect never sees a
-              // layout with drive: keys while items state is still stale.
-              if (!silent) loadAll('setItemDriveId/desksRemap');
-              else loadDesks('setItemDriveId/desksRemap');
-            } else if (!silent) {
-              if (storeName === CHANNELS_STORE) loadChannels('setItemDriveId');
-              else if (storeName === DESKS_STORE) loadDesks('setItemDriveId');
-              else loadItems('setItemDriveId');
+
+        const finishPromote = (remappedDesks) => {
+          if (trimmedNew && trimmedOld !== trimmedNew) {
+            const isPdf = String(existing.type || '').trim() === 'application/pdf';
+            if (isPdf && storeName !== CHANNELS_STORE && storeName !== DESKS_STORE) {
+              rekeyPdfAnnotationSidecarOnPromote(db, trimmedOld, trimmedNew, storeName);
             }
-            resolve();
-          };
-          if (!trimmedDrive) {
-            notify(false);
-            return;
           }
-          const driveKey = `drive:${trimmedDrive}`;
-          const oldKeys = layoutKeysForLocalRecord(storeName, id);
-          let tx2;
-          try { tx2 = db.transaction(DESKS_STORE, 'readwrite'); } catch {
-            notify(false);
-            return;
-          }
-          const dos = tx2.objectStore(DESKS_STORE);
-          const ga = dos.getAll();
-          ga.onsuccess = () => {
-            const rows = ga.result || [];
-            const toPut = [];
-            for (const desk of rows) {
-              const next = deskRecordRemapContentKeys(desk, oldKeys, driveKey);
-              if (next) toPut.push(next);
-            }
-            if (!toPut.length) {
-              notify(false);
-              return;
-            }
-            let left = toPut.length;
-            toPut.forEach((row) => {
-              const pr = dos.put(row);
-              pr.onsuccess = () => {
-                left -= 1;
-                if (left === 0) notify(true);
-              };
-              pr.onerror = () => {
-                left -= 1;
-                if (left === 0) reject(pr.error);
-              };
-            });
-          };
-          ga.onerror = () => notify(false);
+          notify(remappedDesks);
+          resolve();
         };
-        putRequest.onerror   = () => reject(putRequest.error);
+
+        if (!trimmedNew || trimmedOld === trimmedNew) {
+          const putRequest = os.put({ ...existing, driveId: trimmedNew || trimmedOld, ...metaPatch });
+          putRequest.onsuccess = () => finishPromote(false);
+          putRequest.onerror = () => reject(putRequest.error);
+          return;
+        }
+
+        const { driveId: _d, ...rest } = existing;
+        const promoted = { ...rest, driveId: trimmedNew, ...metaPatch };
+        const delReq = os.delete(trimmedOld);
+        delReq.onsuccess = () => {
+          const putReq = os.put(promoted);
+          putReq.onsuccess = () => {
+            remapDesksAndFinish(trimmedOld, trimmedNew, finishPromote, reject);
+          };
+          putReq.onerror = () => reject(putReq.error);
+        };
+        delReq.onerror = () => reject(delReq.error);
       };
       getRequest.onerror = () => reject(getRequest.error);
     });
@@ -778,13 +954,13 @@ export const useIndexedDB = () => {
       let pending = 3;
       let bHit, nHit, vHit;
       const finish = () => { pending--; if (pending === 0) resolve(bHit || nHit || vHit); };
-      const bReq = tx.objectStore(BOOKS_STORE).index('driveId').get(driveId);
+      const bReq = tx.objectStore(BOOKS_STORE).get(driveId);
       bReq.onsuccess = () => { bHit = bReq.result; finish(); };
       bReq.onerror   = (e) => reject(e.target.error);
-      const nReq = tx.objectStore(NOTES_STORE).index('driveId').get(driveId);
+      const nReq = tx.objectStore(NOTES_STORE).get(driveId);
       nReq.onsuccess = () => { nHit = nReq.result; finish(); };
       nReq.onerror   = (e) => reject(e.target.error);
-      const vReq = tx.objectStore(VIDEOS_STORE).index('driveId').get(driveId);
+      const vReq = tx.objectStore(VIDEOS_STORE).get(driveId);
       vReq.onsuccess = () => { vHit = vReq.result; finish(); };
       vReq.onerror   = (e) => reject(e.target.error);
     });
@@ -795,7 +971,7 @@ export const useIndexedDB = () => {
     if (!normalizedDriveId) return false;
     const existing = await getBookByDriveId(normalizedDriveId);
     if (!existing) return false;
-    await deleteItem(existing.id, existing.type);
+    await deleteItem(existing.driveId, existing.type);
     return true;
   }, [getBookByDriveId, deleteItem]);
 
@@ -814,7 +990,7 @@ export const useIndexedDB = () => {
           resolve(false);
           return;
         }
-        const delReq = os.delete(existing.id);
+        const delReq = os.delete(existing.driveId);
         delReq.onsuccess = () => {
           loadChannels('deleteChannelByDriveId');
           resolve(true);
@@ -936,9 +1112,20 @@ export const useIndexedDB = () => {
           ...(Array.isArray(assets) ? { assets } : {}),
           ...(driveFile.coverImageDriveId ? { coverImageDriveId: driveFile.coverImageDriveId } : {}),
         };
-        const putRequest = os.put(updated);
-        putRequest.onsuccess = () => { if (!silent) loadItems('upsertDriveBook/updated'); resolve('updated'); };
-        putRequest.onerror   = (e) => reject(e.target.error);
+        const oldKey = String(existing.driveId || '').trim();
+        const newKey = String(driveFile.driveId || '').trim();
+        const applyPut = () => {
+          const putRequest = os.put(updated);
+          putRequest.onsuccess = () => { if (!silent) loadItems('upsertDriveBook/updated'); resolve('updated'); };
+          putRequest.onerror   = (e) => reject(e.target.error);
+        };
+        if (oldKey && newKey && oldKey !== newKey) {
+          const delReq = os.delete(oldKey);
+          delReq.onsuccess = applyPut;
+          delReq.onerror = (e) => reject(e.target.error);
+        } else {
+          applyPut();
+        }
       } else {
         const mtNew = driveFile.modifiedTime ? new Date(driveFile.modifiedTime) : new Date();
         const nextSharedWith = Array.isArray(driveFile.sharedWith)
@@ -965,12 +1152,12 @@ export const useIndexedDB = () => {
     });
   }, [db, loadItems, getBookByDriveId, getBookByName]);
 
-  const updateBookBlob = useCallback(async (id, blob, storeName) => {
+  const updateBookBlob = useCallback(async (driveId, blob, storeName) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
       const tx = db.transaction(storeName, 'readwrite');
       const os = tx.objectStore(storeName);
-      const getReq = os.get(id);
+      const getReq = os.get(driveId);
       getReq.onsuccess = () => {
         const record = getReq.result;
         if (!record) { reject(new Error('Record not found')); return; }
@@ -1003,38 +1190,39 @@ export const useIndexedDB = () => {
             ...record,
             tags: normalizedTags.length ? normalizedTags : (Array.isArray(existing.tags) ? existing.tags : []),
             // Preserve existing Drive linkage when re-importing the same channel locally.
-            driveId: existing.driveId || '',
+            driveId: existing.driveId || makeTempDriveId(CHANNELS_STORE),
             modifiedTime: now,
             localModifiedAt: now,
             sharedWith: Array.isArray(existing.sharedWith) ? existing.sharedWith : [],
             ownerEmail: normOwner || existing.ownerEmail || '',
           });
-          putReq.onsuccess = () => { loadChannels('addChannel/updated'); resolve(existing.id); };
+          putReq.onsuccess = () => { loadChannels('addChannel/updated'); resolve(existing.driveId); };
           putReq.onerror = (e) => reject(e.target.error);
           return;
         }
 
-        const addReq = os.add({
+        const driveId = makeTempDriveId(CHANNELS_STORE);
+        const putReq = os.put({
           ...record,
           tags: normalizedTags,
-          driveId: '',
+          driveId,
           modifiedTime: now,
           localModifiedAt: now,
           sharedWith: Array.isArray(record.sharedWith) ? record.sharedWith : [],
           ownerEmail: normOwner,
         });
-        addReq.onsuccess = (e) => { loadChannels('addChannel/added'); resolve(e.target.result); };
+        putReq.onsuccess = () => { loadChannels('addChannel/added'); resolve(driveId); };
         addReq.onerror = (e) => reject(e.target.error);
       };
       existingByChannelReq.onerror = (e) => reject(e.target.error);
     });
   }, [db, loadChannels]);
 
-  const deleteChannel = useCallback((id) => {
+  const deleteChannel = useCallback((driveId) => {
     if (!db) return Promise.resolve();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(CHANNELS_STORE, 'readwrite');
-      const req = tx.objectStore(CHANNELS_STORE).delete(id);
+      const req = tx.objectStore(CHANNELS_STORE).delete(driveId);
       req.onsuccess = () => {
         loadChannels('deleteChannel');
         resolve();
@@ -1043,12 +1231,12 @@ export const useIndexedDB = () => {
     });
   }, [db, loadChannels]);
 
-  const updateChannel = useCallback((id, data) => {
+  const updateChannel = useCallback((driveId, data) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
       const tx = db.transaction(CHANNELS_STORE, 'readwrite');
       const os = tx.objectStore(CHANNELS_STORE);
-      const getReq = os.get(id);
+      const getReq = os.get(driveId);
       getReq.onsuccess = () => {
         const existing = getReq.result;
         if (!existing) { reject(new Error('Channel not found')); return; }
@@ -1066,8 +1254,8 @@ export const useIndexedDB = () => {
       let tx;
       try { tx = db.transaction(CHANNELS_STORE, 'readonly'); }
       catch { resolve(undefined); return; }
-      const req = tx.objectStore(CHANNELS_STORE).getAll();
-      req.onsuccess = (e) => resolve(e.target.result.find(c => c.driveId === driveId));
+      const req = tx.objectStore(CHANNELS_STORE).get(driveId);
+      req.onsuccess = (e) => resolve(e.target.result);
       req.onerror = (e) => reject(e.target.error);
     });
   }, [db]);
@@ -1103,7 +1291,7 @@ export const useIndexedDB = () => {
         const ownerEmailChanged = !!(driveFile.ownerEmail && driveFile.ownerEmail !== existing.ownerEmail);
         if (!driveIsNewer && !sharedWithChanged && !ownerEmailChanged) { resolve('skipped'); return; }
         const mtCh = new Date(driveFile.modifiedTime);
-        const putReq = os.put({
+        const updatedCh = {
           ...existing,
           ...channelData,
           tags: Array.isArray(channelData.tags)
@@ -1114,15 +1302,27 @@ export const useIndexedDB = () => {
           localModifiedAt: driveIsNewer ? mtCh : existing.localModifiedAt,
           ...(driveFile.ownerEmail ? { ownerEmail: driveFile.ownerEmail } : {}),
           sharedWith: nextSharedWith ?? (Array.isArray(existing.sharedWith) ? existing.sharedWith : []),
-        });
-        putReq.onsuccess = () => { if (!silent) loadChannels('upsertDriveChannel/updated'); resolve('updated'); };
-        putReq.onerror = (e) => reject(e.target.error);
+        };
+        const oldChKey = String(existing.driveId || '').trim();
+        const newChKey = String(driveFile.driveId || '').trim();
+        const applyChPut = () => {
+          const putReq = os.put(updatedCh);
+          putReq.onsuccess = () => { if (!silent) loadChannels('upsertDriveChannel/updated'); resolve('updated'); };
+          putReq.onerror = (e) => reject(e.target.error);
+        };
+        if (oldChKey && newChKey && oldChKey !== newChKey) {
+          const delCh = os.delete(oldChKey);
+          delCh.onsuccess = applyChPut;
+          delCh.onerror = (e) => reject(e.target.error);
+        } else {
+          applyChPut();
+        }
       } else {
         const mtAdd = new Date(driveFile.modifiedTime);
         const nextSharedWith = Array.isArray(channelData.sharedWith)
           ? channelData.sharedWith.map((e) => String(e || '').trim().toLowerCase()).filter(Boolean)
           : [];
-        const addReq = os.add({
+        const putReq = os.put({
           ...channelData,
           tags: normalizeTagsList(channelData.tags),
           driveId: driveFile.driveId,
@@ -1130,8 +1330,8 @@ export const useIndexedDB = () => {
           localModifiedAt: mtAdd,
           sharedWith: nextSharedWith,
         });
-        addReq.onsuccess = () => { if (!silent) loadChannels('upsertDriveChannel/added'); resolve('added'); };
-        addReq.onerror = (e) => reject(e.target.error);
+        putReq.onsuccess = () => { if (!silent) loadChannels('upsertDriveChannel/added'); resolve('added'); };
+        putReq.onerror = (e) => reject(e.target.error);
       }
     });
   }, [db, loadChannels, getChannelByDriveId]);
@@ -1145,30 +1345,31 @@ export const useIndexedDB = () => {
       let tx;
       try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
       const now = new Date();
-      const record = { name, layout: {}, connections: [], driveId: '', modifiedTime: now, localModifiedAt: now, tags: [], sharedWith: [], ownerEmail: String(ownerEmail || '').trim().toLowerCase() };
-      const req = tx.objectStore(DESKS_STORE).add(record);
-      req.onsuccess = (e) => { loadDesks('addDesk'); resolve(e.target.result); };
+      const driveId = makeTempDriveId(DESKS_STORE);
+      const record = { driveId, name, layout: {}, connections: [], modifiedTime: now, localModifiedAt: now, tags: [], sharedWith: [], ownerEmail: String(ownerEmail || '').trim().toLowerCase() };
+      const req = tx.objectStore(DESKS_STORE).put(record);
+      req.onsuccess = () => { loadDesks('addDesk'); resolve(driveId); };
       req.onerror = (e) => reject(e.target.error);
     });
   }, [db, loadDesks]);
 
-  const deleteDesk = useCallback((id) => {
+  const deleteDesk = useCallback((driveId) => {
     if (!db) return Promise.resolve();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(DESKS_STORE, 'readwrite');
-      const req = tx.objectStore(DESKS_STORE).delete(id);
+      const req = tx.objectStore(DESKS_STORE).delete(driveId);
       req.onsuccess = () => { loadDesks('deleteDesk'); resolve(); };
       req.onerror = (e) => reject(e.target.error);
     });
   }, [db, loadDesks]);
 
-  const setDeskLayout = useCallback((id, layout) => {
+  const setDeskLayout = useCallback((driveId, layout) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
       const os = tx.objectStore(DESKS_STORE);
-      const req = os.get(id);
+      const req = os.get(driveId);
       req.onsuccess = () => {
         const existing = req.result;
         if (!existing) { reject(new Error('Desk not found')); return; }
@@ -1180,13 +1381,13 @@ export const useIndexedDB = () => {
     });
   }, [db, loadDesks]);
 
-  const setDeskConnections = useCallback((id, connections) => {
+  const setDeskConnections = useCallback((driveId, connections) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
       const os = tx.objectStore(DESKS_STORE);
-      const req = os.get(id);
+      const req = os.get(driveId);
       req.onsuccess = () => {
         const existing = req.result;
         if (!existing) { reject(new Error('Desk not found')); return; }
@@ -1205,13 +1406,13 @@ export const useIndexedDB = () => {
   // Rewrite layout keys and connections without bumping localModifiedAt.
   // Used by the Desk component's key-migration effect so a format-only change
   // on a freshly-synced device doesn't mark the desk as locally modified.
-  const migrateDeskLayout = useCallback((id, layout, connections) => {
+  const migrateDeskLayout = useCallback((driveId, layout, connections) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
       const os = tx.objectStore(DESKS_STORE);
-      const req = os.get(id);
+      const req = os.get(driveId);
       req.onsuccess = () => {
         const existing = req.result;
         if (!existing) { reject(new Error('Desk not found')); return; }
@@ -1228,13 +1429,13 @@ export const useIndexedDB = () => {
     });
   }, [db, loadDesks]);
 
-  const setDeskTextItems = useCallback((id, textItems) => {
+  const setDeskTextItems = useCallback((driveId, textItems) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
       const os = tx.objectStore(DESKS_STORE);
-      const req = os.get(id);
+      const req = os.get(driveId);
       req.onsuccess = () => {
         const existing = req.result;
         if (!existing) { reject(new Error('Desk not found')); return; }
@@ -1255,7 +1456,7 @@ export const useIndexedDB = () => {
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(DESKS_STORE, 'readonly'); } catch { resolve(undefined); return; }
-      const req = tx.objectStore(DESKS_STORE).index('driveId').get(driveId);
+      const req = tx.objectStore(DESKS_STORE).get(driveId);
       req.onsuccess = () => resolve(req.result);
       req.onerror = (e) => reject(e.target.error);
     });
@@ -1287,7 +1488,7 @@ export const useIndexedDB = () => {
         putReq.onerror = (e) => reject(e.target.error);
       } else {
         const mt = new Date(driveFile.modifiedTime);
-        const addReq = os.add({
+        const putReq = os.put({
           ...deskData,
           driveId: driveFile.driveId,
           modifiedTime: mt,
@@ -1296,20 +1497,20 @@ export const useIndexedDB = () => {
           sharedWith: Array.isArray(deskData.sharedWith) ? deskData.sharedWith : [],
           ownerEmail: incomingOwnerEmail,
         });
-        addReq.onsuccess = () => { if (!silent) loadDesks('upsertDriveDesk/added'); resolve('added'); };
-        addReq.onerror = (e) => reject(e.target.error);
+        putReq.onsuccess = () => { if (!silent) loadDesks('upsertDriveDesk/added'); resolve('added'); };
+        putReq.onerror = (e) => reject(e.target.error);
       }
     });
   }, [db, loadDesks, getDeskByDriveId]);
 
-  const setRecordTags = useCallback((id, storeName, tags) => {
+  const setRecordTags = useCallback((driveId, storeName, tags) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     const normalized = normalizeTagsList(tags);
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(storeName, 'readwrite'); } catch (err) { reject(err); return; }
       const os = tx.objectStore(storeName);
-      const getReq = os.get(id);
+      const getReq = os.get(driveId);
       getReq.onsuccess = () => {
         const existing = getReq.result;
         if (!existing) { reject(new Error('Record not found')); return; }
@@ -1326,14 +1527,14 @@ export const useIndexedDB = () => {
     });
   }, [db, loadItems, loadChannels]);
 
-  const setItemSharedWith = useCallback((id, storeName, emails) => {
+  const setItemSharedWith = useCallback((driveId, storeName, emails) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     const sharedWith = (emails || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean);
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(storeName, 'readwrite'); } catch (err) { reject(err); return; }
       const os = tx.objectStore(storeName);
-      const getReq = os.get(id);
+      const getReq = os.get(driveId);
       getReq.onsuccess = () => {
         const existing = getReq.result;
         if (!existing) { reject(new Error('Record not found')); return; }
@@ -1362,7 +1563,7 @@ export const useIndexedDB = () => {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(storeName, 'readwrite');
       const os = tx.objectStore(storeName);
-      const getReq = os.get(existing.id);
+      const getReq = os.get(existing.driveId);
       getReq.onsuccess = () => {
         const rec = getReq.result;
         if (!rec) { resolve(false); return; }
@@ -1382,7 +1583,7 @@ export const useIndexedDB = () => {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(CHANNELS_STORE, 'readwrite');
       const os = tx.objectStore(CHANNELS_STORE);
-      const getReq = os.get(existing.id);
+      const getReq = os.get(existing.driveId);
       getReq.onsuccess = () => {
         const rec = getReq.result;
         if (!rec) { resolve(false); return; }
@@ -1402,7 +1603,7 @@ export const useIndexedDB = () => {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(DESKS_STORE, 'readwrite');
       const os = tx.objectStore(DESKS_STORE);
-      const getReq = os.get(existing.id);
+      const getReq = os.get(existing.driveId);
       getReq.onsuccess = () => {
         const rec = getReq.result;
         if (!rec) { resolve(false); return; }
@@ -1421,13 +1622,13 @@ export const useIndexedDB = () => {
     if (!existing) return false;
     return new Promise((resolve, reject) => {
       const tx = db.transaction(DESKS_STORE, 'readwrite');
-      const req = tx.objectStore(DESKS_STORE).delete(existing.id);
+      const req = tx.objectStore(DESKS_STORE).delete(existing.driveId);
       req.onsuccess = () => { loadDesks('deleteDeskByDriveId'); resolve(true); };
       req.onerror = (e) => reject(e.target.error);
     });
   }, [db, getDeskByDriveId, loadDesks]);
 
-  const renameItem = useCallback((id, storeName, nextName) => {
+  const renameItem = useCallback((driveId, storeName, nextName) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     const name = String(nextName || '').trim();
     if (!name) return Promise.reject(new Error('Name cannot be empty'));
@@ -1435,7 +1636,7 @@ export const useIndexedDB = () => {
       let tx;
       try { tx = db.transaction(storeName, 'readwrite'); } catch (err) { reject(err); return; }
       const os = tx.objectStore(storeName);
-      const getReq = os.get(id);
+      const getReq = os.get(driveId);
       getReq.onsuccess = () => {
         const existing = getReq.result;
         if (!existing) { reject(new Error('Record not found')); return; }
@@ -1452,9 +1653,9 @@ export const useIndexedDB = () => {
     });
   }, [db, loadItems, loadChannels]);
 
-  const setItemReadingPosition = useCallback((id, storeName, readingPosition) => {
+  const setItemReadingPosition = useCallback((driveId, storeName, readingPosition) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
-    if (!id) return Promise.reject(new Error('Record id is required'));
+    if (!driveId) return Promise.reject(new Error('Record driveId is required'));
 
     const candidates = [
       storeName,
@@ -1473,7 +1674,7 @@ export const useIndexedDB = () => {
         let tx;
         try { tx = db.transaction(targetStore, 'readwrite'); } catch (err) { reject(err); return; }
         const os = tx.objectStore(targetStore);
-        const getReq = os.get(id);
+        const getReq = os.get(driveId);
         getReq.onsuccess = () => {
           const existing = getReq.result;
           if (!existing) {
@@ -1489,11 +1690,11 @@ export const useIndexedDB = () => {
           putReq.onsuccess = () => {
             if (targetStore === CHANNELS_STORE) {
               setChannels((prev) =>
-                prev.map((rec) => (rec.id === id ? { ...rec, readingPosition: nextReadingPosition } : rec))
+                prev.map((rec) => (rec.driveId === driveId ? { ...rec, readingPosition: nextReadingPosition } : rec))
               );
             } else if (targetStore !== IMAGES_STORE) {
               setItems((prev) =>
-                prev.map((rec) => (rec.id === id ? { ...rec, readingPosition: nextReadingPosition } : rec))
+                prev.map((rec) => (rec.driveId === driveId ? { ...rec, readingPosition: nextReadingPosition } : rec))
               );
             }
             resolve();
@@ -1518,9 +1719,9 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
-  const getPdfAnnotationSidecar = useCallback((itemId, idbStore) => {
-    if (!db || itemId == null || !idbStore) return Promise.resolve(null);
-    const sidecarKey = pdfAnnotationSidecarKey(itemId, idbStore);
+  const getPdfAnnotationSidecar = useCallback((itemDriveId, idbStore) => {
+    if (!db || itemDriveId == null || !idbStore) return Promise.resolve(null);
+    const sidecarKey = pdfAnnotationSidecarKey(itemDriveId, idbStore);
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(PDF_ANNOTATIONS_STORE, 'readonly'); }
@@ -1531,9 +1732,9 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
-  const putPdfAnnotationsForItem = useCallback((itemId, idbStore, annotations, pdfDriveId = '') => {
-    if (!db || itemId == null || !idbStore) return Promise.reject(new Error('Database not initialized'));
-    const sidecarKey = pdfAnnotationSidecarKey(itemId, idbStore);
+  const putPdfAnnotationsForItem = useCallback((itemDriveId, idbStore, annotations, pdfDriveId = '') => {
+    if (!db || itemDriveId == null || !idbStore) return Promise.reject(new Error('Database not initialized'));
+    const sidecarKey = pdfAnnotationSidecarKey(itemDriveId, idbStore);
     const now = new Date();
     return new Promise((resolve, reject) => {
       let tx;
@@ -1546,7 +1747,7 @@ export const useIndexedDB = () => {
         const pdfD = String(pdfDriveId || '').trim() || (prev && String(prev.pdfDriveId || '').trim()) || '';
         const rec = {
           sidecarKey,
-          itemId,
+          itemDriveId,
           idbStore,
           pdfDriveId: pdfD,
           annotations: Array.isArray(annotations) ? annotations : [],
@@ -1563,14 +1764,14 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
-  const setCoverImageDriveSync = useCallback((itemId, storeName, { coverImageDriveId, modifiedTime } = {}) => {
-    if (!db || itemId == null || !storeName) return Promise.reject(new Error('Database not initialized'));
+  const setCoverImageDriveSync = useCallback((itemDriveId, storeName, { coverImageDriveId, modifiedTime } = {}) => {
+    if (!db || itemDriveId == null || !storeName) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(storeName, 'readwrite'); }
       catch (err) { reject(err); return; }
       const os = tx.objectStore(storeName);
-      const g = os.get(itemId);
+      const g = os.get(itemDriveId);
       g.onsuccess = () => {
         const rec = g.result;
         if (!rec) { resolve(); return; }
@@ -1600,7 +1801,7 @@ export const useIndexedDB = () => {
       try { tx = db.transaction(storeName, 'readwrite'); }
       catch (err) { resolve('skipped'); return; }
       const os = tx.objectStore(storeName);
-      const g = os.get(item.id);
+      const g = os.get(item.driveId);
       g.onsuccess = () => {
         const rec = g.result;
         if (!rec) { resolve('skipped'); return; }
@@ -1616,9 +1817,9 @@ export const useIndexedDB = () => {
     });
   }, [db, getBookByName, loadItems]);
 
-  const setPdfAnnotationDriveSync = useCallback((itemId, idbStore, { annotationDriveId, modifiedTime, pdfDriveId } = {}) => {
-    if (!db || itemId == null || !idbStore) return Promise.reject(new Error('Database not initialized'));
-    const sidecarKey = pdfAnnotationSidecarKey(itemId, idbStore);
+  const setPdfAnnotationDriveSync = useCallback((itemDriveId, idbStore, { annotationDriveId, modifiedTime, pdfDriveId } = {}) => {
+    if (!db || itemDriveId == null || !idbStore) return Promise.reject(new Error('Database not initialized'));
+    const sidecarKey = pdfAnnotationSidecarKey(itemDriveId, idbStore);
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(PDF_ANNOTATIONS_STORE, 'readwrite'); }
@@ -1628,7 +1829,7 @@ export const useIndexedDB = () => {
       g.onsuccess = () => {
         const prev = g.result || {
           sidecarKey,
-          itemId,
+          itemDriveId,
           idbStore,
           pdfDriveId: '',
           annotations: [],
@@ -1668,11 +1869,10 @@ export const useIndexedDB = () => {
 
       const findPdfRow = (storeName) =>
         new Promise((res, rej) => {
-          const ix = tx.objectStore(storeName).index('driveId');
-          const r = ix.getAll(payload.pdfDriveId);
+          const r = tx.objectStore(storeName).get(payload.pdfDriveId);
           r.onsuccess = () => {
-            const rows = r.result || [];
-            res(rows.find((row) => row && row.type === 'application/pdf') || null);
+            const row = r.result;
+            res(row && row.type === 'application/pdf' ? row : null);
           };
           r.onerror = () => rej(r.error);
         });
@@ -1685,7 +1885,7 @@ export const useIndexedDB = () => {
             resolve('skipped');
             return;
           }
-          const sk = pdfAnnotationSidecarKey(book.id, idbStore);
+          const sk = pdfAnnotationSidecarKey(book.driveId, idbStore);
           let tw;
           try { tw = db.transaction(PDF_ANNOTATIONS_STORE, 'readwrite'); }
           catch (e) { resolve('skipped'); return; }
@@ -1711,7 +1911,7 @@ export const useIndexedDB = () => {
             }
             const rec = {
               sidecarKey: sk,
-              itemId: book.id,
+              itemDriveId: book.driveId,
               idbStore,
               pdfDriveId: payload.pdfDriveId,
               annotations: Array.isArray(payload.annotations) ? payload.annotations : [],
@@ -1730,13 +1930,13 @@ export const useIndexedDB = () => {
     });
   }, [db]);
 
-  const touchItemVisit = useCallback((id, storeName) => {
-    if (!db || id == null || !storeName) return Promise.resolve();
+  const touchItemVisit = useCallback((driveId, storeName) => {
+    if (!db || driveId == null || !storeName) return Promise.resolve();
     return new Promise((resolve) => {
       let tx;
       try { tx = db.transaction(storeName, 'readwrite'); } catch { resolve(); return; }
       const os = tx.objectStore(storeName);
-      const req = os.get(id);
+      const req = os.get(driveId);
       req.onsuccess = () => {
         const existing = req.result;
         if (!existing) { resolve(); return; }

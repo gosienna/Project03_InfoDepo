@@ -188,11 +188,12 @@ async function shouldReopenAsFixedImageComic(view) {
   return imagePageCount >= Math.max(3, Math.ceil(checked * 0.7));
 }
 
-export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition, onSaveReadingPosition, storeName }) => {
+export const FoliateViewer = ({ data, name, type, itemDriveId, itemId, initialReadingPosition, onSaveReadingPosition, storeName }) => {
+  const recordDriveId = itemDriveId ?? itemId;
   const viewportRef = useRef(null);
   const containerRef = useRef(null);
   const viewRef = useRef(null);
-  const saveRef = useRef({ onSaveReadingPosition, itemId, storeName });
+  const saveRef = useRef({ onSaveReadingPosition, itemDriveId: recordDriveId, storeName });
   const sectionIndexRef = useRef(0);
   const isSpreadMangaRef = useRef(false);
   const flowModeRef = useRef('scrolled');
@@ -209,8 +210,8 @@ export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition
   spreadLayoutRef.current = spreadLayout;
 
   useEffect(() => {
-    saveRef.current = { onSaveReadingPosition, itemId, storeName };
-  }, [onSaveReadingPosition, itemId, storeName]);
+    saveRef.current = { onSaveReadingPosition, itemDriveId: recordDriveId, storeName };
+  }, [onSaveReadingPosition, recordDriveId, storeName]);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -329,8 +330,8 @@ export const FoliateViewer = ({ data, name, type, itemId, initialReadingPosition
         view.addEventListener('relocate', e => {
           const { cfi } = e.detail;
           if (!cfi) return;
-          const { onSaveReadingPosition: save, itemId: id, storeName: store } = saveRef.current;
-          if (save && id && store) save(id, store, { kind: 'foliate-cfi', cfi }).catch(() => {});
+          const { onSaveReadingPosition: save, itemDriveId: recordId, storeName: store } = saveRef.current;
+          if (save && recordId && store) save(recordId, store, { kind: 'foliate-cfi', cfi }).catch(() => {});
         });
 
         const savedCfi = initialReadingPosition?.cfi ?? null;

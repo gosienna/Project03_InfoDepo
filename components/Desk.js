@@ -140,7 +140,7 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const editingRef = useRef(false);
   const containerRef = useRef(null);
-  const current = desks.find((d) => d.id === currentDeskId);
+  const current = desks.find((d) => d.driveId === currentDeskId);
 
   useEffect(() => { if (!open) setSearchQuery(''); }, [open]);
 
@@ -156,7 +156,7 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
     e.preventDefault();
     e.stopPropagation();
     editingRef.current = true;
-    setEditingId(d.id);
+    setEditingId(d.driveId);
     setEditValue(d.name || '');
   };
 
@@ -329,15 +329,15 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
         React.createElement(
           'div',
           {
-            key: d.id,
+            key: d.driveId,
             style: {
               display: 'flex', alignItems: 'center', gap: 6,
-              background: d.id === currentDeskId ? '#374151' : 'none',
+              background: d.driveId === currentDeskId ? '#374151' : 'none',
               borderBottom: '1px solid #111827',
-              padding: editingId === d.id ? '4px 8px' : '0',
+              padding: editingId === d.driveId ? '4px 8px' : '0',
             },
           },
-          editingId === d.id
+          editingId === d.driveId
             // Inline edit mode
             ? React.createElement(
                 React.Fragment, null,
@@ -346,10 +346,10 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
                   value: editValue,
                   onChange: (e) => setEditValue(e.target.value),
                   onKeyDown: (e) => {
-                    if (e.key === 'Enter') { e.preventDefault(); commitEdit(d.id); }
+                    if (e.key === 'Enter') { e.preventDefault(); commitEdit(d.driveId); }
                     if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
                   },
-                  onBlur: () => commitEdit(d.id),
+                  onBlur: () => commitEdit(d.driveId),
                   style: {
                     flex: 1, background: '#111827', border: '1px solid #4f46e5',
                     borderRadius: 6, padding: '4px 8px', fontSize: 13, color: '#e5e7eb',
@@ -359,7 +359,7 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
                 React.createElement(
                   'button',
                   {
-                    onMouseDown: (e) => { e.preventDefault(); commitEdit(d.id); },
+                    onMouseDown: (e) => { e.preventDefault(); commitEdit(d.driveId); },
                     style: { background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#818cf8', flexShrink: 0 },
                     title: 'Save',
                   },
@@ -391,14 +391,14 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
                     style: {
                       flex: 1, textAlign: 'left', padding: '8px 10px 8px 12px',
                       background: 'none', border: 'none',
-                      color: d.id === currentDeskId ? '#a5b4fc' : '#e5e7eb',
+                      color: d.driveId === currentDeskId ? '#a5b4fc' : '#e5e7eb',
                       fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
                       minWidth: 0,
                     },
-                    onMouseEnter: (e) => { if (d.id !== currentDeskId) e.currentTarget.closest('div').style.background = '#2d3748'; },
-                    onMouseLeave: (e) => { if (d.id !== currentDeskId) e.currentTarget.closest('div').style.background = 'none'; },
+                    onMouseEnter: (e) => { if (d.driveId !== currentDeskId) e.currentTarget.closest('div').style.background = '#2d3748'; },
+                    onMouseLeave: (e) => { if (d.driveId !== currentDeskId) e.currentTarget.closest('div').style.background = 'none'; },
                   },
-                  d.id === currentDeskId && React.createElement('span', { style: { color: '#818cf8', fontSize: 8, lineHeight: 1, flexShrink: 0 } }, '●'),
+                  d.driveId === currentDeskId && React.createElement('span', { style: { color: '#818cf8', fontSize: 8, lineHeight: 1, flexShrink: 0 } }, '●'),
                   React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, d.name || 'Untitled Desk')
                 ),
                 onRename && React.createElement(
@@ -474,7 +474,7 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
       rows.push({ key, label: ch.name || ch.handle || '', sub: 'channel', tags: ch.tags || [], lastVisitedAt: ch.lastVisitedAt });
     }
     for (const d of (desks || [])) {
-      if (d.id === currentDeskId) continue;
+      if (d.driveId === currentDeskId) continue;
       const key = deskEntryKey(d);
       if (inLayout.has(key)) continue;
       const deskOwner = String(d.ownerEmail || '').trim().toLowerCase();
@@ -713,7 +713,7 @@ export const Desk = ({
   });
 
   const autoUploadTriggeredRef = useRef(new Set());
-  const previousDeskIdRef = useRef(desk?.id ?? null);
+  const previousDeskIdRef = useRef(desk?.driveId ?? null);
 
   const viewportRef = useRef(null);
   const historyRef = useRef({ past: [], future: [] });
@@ -749,7 +749,7 @@ export const Desk = ({
   useEffect(() => {
     // Reset undo/redo only when switching to a different desk.
     historyRef.current = { past: [], future: [] };
-  }, [desk?.id]);
+  }, [desk?.driveId]);
 
   // Text items on the canvas
   const textItemsRef = useRef(Array.isArray(desk?.textItems) ? desk.textItems : []);
@@ -757,13 +757,13 @@ export const Desk = ({
   useEffect(() => {
     // Sync refs when desk data changes; normalize layout keys in the same pass so
     // we never briefly apply a stale prop layout over a migrated ref.
-    const nextDeskId = desk?.id ?? null;
+    const nextDeskId = desk?.driveId ?? null;
     const deskChanged = previousDeskIdRef.current !== nextDeskId;
     previousDeskIdRef.current = nextDeskId;
     let layout = desk?.layout && typeof desk.layout === 'object' ? desk.layout : {};
     let connections = Array.isArray(desk?.connections) ? desk.connections : [];
     const migrated = migrateDeskDataKeys(layout, connections, items, channels, desks);
-    if (migrated.changed && !readOnly && desk?.id != null) {
+    if (migrated.changed && !readOnly && desk?.driveId != null) {
       layout = migrated.layout;
       connections = migrated.connections;
       layoutRef.current = layout;
@@ -771,10 +771,10 @@ export const Desk = ({
       // Use the migration path (no localModifiedAt bump) when available; fall back to
       // the regular update only if the migration callback isn't wired up.
       if (onMigrateDeskLayout) {
-        onMigrateDeskLayout(desk.id, layout, connections);
+        onMigrateDeskLayout(desk.driveId, layout, connections);
       } else {
-        if (onUpdateLayout) onUpdateLayout(desk.id, layout);
-        if (onUpdateConnections) onUpdateConnections(desk.id, connections);
+        if (onUpdateLayout) onUpdateLayout(desk.driveId, layout);
+        if (onUpdateConnections) onUpdateConnections(desk.driveId, connections);
       }
     } else {
       // Don't advance layoutRef to a desk.layout that has drive: keys which can't
@@ -791,7 +791,7 @@ export const Desk = ({
     }
     textItemsRef.current = Array.isArray(desk?.textItems) ? desk.textItems : [];
     rerender();
-  }, [desk?.layout, desk?.connections, desk?.textItems, items, channels, desks, readOnly, desk?.id, onUpdateLayout, onMigrateDeskLayout, onUpdateConnections, rerender]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [desk?.layout, desk?.connections, desk?.textItems, items, channels, desks, readOnly, desk?.driveId, onUpdateLayout, onMigrateDeskLayout, onUpdateConnections, rerender]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const commitLayout = useCallback((newLayout, options = {}) => {
     if (options.recordHistory !== false) {
@@ -799,10 +799,10 @@ export const Desk = ({
       historyRef.current.future = [];
     }
     layoutRef.current = newLayout;
-    if (onUpdateLayout && desk?.id != null) onUpdateLayout(desk.id, newLayout);
-    if (desk?.id != null) onDeskModified?.(desk.id);
+    if (onUpdateLayout && desk?.driveId != null) onUpdateLayout(desk.driveId, newLayout);
+    if (desk?.driveId != null) onDeskModified?.(desk.driveId);
     rerender();
-  }, [onUpdateLayout, onDeskModified, desk?.id, rerender, snapshotState]);
+  }, [onUpdateLayout, onDeskModified, desk?.driveId, rerender, snapshotState]);
 
   const commitConnections = useCallback((next, options = {}) => {
     if (options.recordHistory !== false) {
@@ -810,28 +810,28 @@ export const Desk = ({
       historyRef.current.future = [];
     }
     connectionsRef.current = Array.isArray(next) ? next : [];
-    if (onUpdateConnections && desk?.id != null) onUpdateConnections(desk.id, connectionsRef.current);
-    if (desk?.id != null) onDeskModified?.(desk.id);
+    if (onUpdateConnections && desk?.driveId != null) onUpdateConnections(desk.driveId, connectionsRef.current);
+    if (desk?.driveId != null) onDeskModified?.(desk.driveId);
     rerender();
-  }, [onUpdateConnections, onDeskModified, desk?.id, rerender, snapshotState]);
+  }, [onUpdateConnections, onDeskModified, desk?.driveId, rerender, snapshotState]);
 
   const commitTextItems = useCallback((next) => {
     textItemsRef.current = Array.isArray(next) ? next : [];
-    if (onUpdateTextItems && desk?.id != null) onUpdateTextItems(desk.id, textItemsRef.current);
-    if (desk?.id != null) onDeskModified?.(desk.id);
+    if (onUpdateTextItems && desk?.driveId != null) onUpdateTextItems(desk.driveId, textItemsRef.current);
+    if (desk?.driveId != null) onDeskModified?.(desk.driveId);
     rerender();
-  }, [onUpdateTextItems, onDeskModified, desk?.id, rerender]);
+  }, [onUpdateTextItems, onDeskModified, desk?.driveId, rerender]);
 
   const applyDeskState = useCallback((state) => {
     layoutRef.current = cloneLayout(state?.layout);
     connectionsRef.current = cloneConnections(state?.connections);
-    if (desk?.id != null) {
-      if (onUpdateLayout) onUpdateLayout(desk.id, layoutRef.current);
-      if (onUpdateConnections) onUpdateConnections(desk.id, connectionsRef.current);
-      onDeskModified?.(desk.id);
+    if (desk?.driveId != null) {
+      if (onUpdateLayout) onUpdateLayout(desk.driveId, layoutRef.current);
+      if (onUpdateConnections) onUpdateConnections(desk.driveId, connectionsRef.current);
+      onDeskModified?.(desk.driveId);
     }
     rerender();
-  }, [cloneConnections, cloneLayout, desk?.id, onUpdateConnections, onUpdateLayout, onDeskModified, rerender]);
+  }, [cloneConnections, cloneLayout, desk?.driveId, onUpdateConnections, onUpdateLayout, onDeskModified, rerender]);
 
   const undoDesk = useCallback(() => {
     const prev = historyRef.current.past.pop();
@@ -1088,7 +1088,7 @@ export const Desk = ({
         const b = estimateTextBounds(item);
         return b.left <= ex && b.right >= sx && b.top <= ey && b.bottom >= sy;
       })
-      .map((item) => item.id);
+      .map((item) => item.driveId);
     setSelectedTextIds(textIds);
 
     const connIds = (connectionsRef.current || [])
@@ -2109,7 +2109,7 @@ export const Desk = ({
       },
       React.createElement(DeskSelector, {
         desks: desks || [],
-        currentDeskId: desk?.id,
+        currentDeskId: desk?.driveId,
         onSelect: onSelectDesk,
         onRename: onRenameDesk,
       })
@@ -2128,7 +2128,7 @@ export const Desk = ({
         channels,
         desks,
         googleUserEmail,
-        currentDeskId: desk?.id,
+        currentDeskId: desk?.driveId,
         currentLayout: layoutRef.current,
         onAdd: addItemToDesk,
       }),

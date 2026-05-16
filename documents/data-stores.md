@@ -1,6 +1,6 @@
 # Data stores
 
-Current IndexedDB database: `InfoDepo`, schema version `8`.
+Current IndexedDB database: `InfoDepo`, schema version `10`.
 
 ## Stores
 
@@ -16,136 +16,72 @@ Current IndexedDB database: `InfoDepo`, schema version `8`.
 
 `shares` store was removed in v7.
 
-## Common fields (content records)
+## Primary key: `driveId`
 
-For `books`/`notes`/`videos`/`images` (and channel-compatible subset):
+All content stores (`books`, `notes`, `videos`, `channels`, `desks`) use **`driveId` as the IndexedDB keyPath** (no numeric `id`).
+
+| Kind | `driveId` value |
+|------|-----------------|
+| **Google Drive file** | Opaque file id from Drive API (never starts with `local:`) |
+| **Not uploaded yet** | Temp key `local:{store}:{uuid}` (e.g. `local:books:550e8400-e29b-…`) |
+
+Helpers: [`utils/driveRecordKey.js`](../utils/driveRecordKey.js) — `isTempDriveId()`, `makeTempDriveId(store)`, `deskLayoutKey(driveId)`.
+
+After upload, `promoteDriveId` (formerly “set drive id on row”) deletes the temp key and inserts the same record under the real Drive file id. Desk layout keys `drive:local:…` are remapped to `drive:{realId}` (eagerly on upload, lazily via `migrateDeskDataKeys` when a desk opens).
+
+## Common fields (content records)
 
 ```js
 {
-  id,
+  driveId,            // primary key (temp or Google)
   name,
-  data,               // Blob | null — null in two cases:
-                      //   1. Lazily synced from Drive (not yet downloaded; driveId is set)
-                      //   2. Evicted by LRU quota enforcement (driveId may or may not be set)
+  data,               // Blob | null
   type,
-  size,               // bytes; Drive file size when lazily synced; 0 after LRU eviction
-  driveId,
+  size,
   modifiedTime,
   localModifiedAt,
-  lastVisitedAt,      // Date | null — updated each time the item is opened in Reader
+  lastVisitedAt,
   tags,
-  sharedWith,         // string[]
-  ownerEmail,         // string
-  coverImage,         // { name, type, data: Blob } | undefined — custom cover blob
-  coverImageDriveId,  // string | undefined — Drive file ID of cover sidecar; null = needs re-upload
+  sharedWith,
+  ownerEmail,
+  coverImage,
+  coverImageDriveId,
 }
 ```
 
-**Standalone images** (`type.startsWith('image/')`) are stored in the `books` store with no special schema. They render their `data` blob as a tile thumbnail and show a teal "Image" badge. The Library filter key `'images'` matches them independently of the `'books'` filter.
-
-`lastVisitedAt` is set to the current time when an item is first imported (`addItem`) and updated each time the user opens it. Items that have never been opened have `lastVisitedAt: null`, which sorts them as oldest for LRU eviction purposes.
+**Standalone images** (`type.startsWith('image/')`) live in `books`. The Library filter key `'images'` matches them independently of `'books'`.
 
 Additional fields:
 
 - `notes`: `assets[]`, optional `driveFolderId`
-- `images`: `noteId`
-- `channels`: `channelId`, `handle`, `thumbnailUrl`, `videos[]`, etc.
-- `pdfAnnotations`: `sidecarKey`, `pdfDriveId`, `annotationDriveId`, `annotations[]`, `version`
+- `images` (legacy): `noteDriveId`
+- `channels`: `channelId` (unique index), `handle`, `videos[]`, etc.
+- `desks`: `layout`, `connections`, etc.
 
-## Desk record fields
+## Desk layout keys
 
-```js
-{
-  id,                   // auto-increment integer
-  name,                 // string
-  layout,               // { [key]: { x, y } } — positions of items on the canvas
-  connections,          // optional [{ id, fromKey, toKey, route: { mode, points[] } }]
-  tags,                 // string[]
-  driveId,              // string | undefined — Drive file ID of backup .desk.json
-  modifiedTime,         // string | undefined
-  localModifiedAt,      // number | undefined
-  sharedWith,           // string[]
-  ownerEmail            // string
-}
-```
+Canonical format: **`drive:{driveId}`** — see [`utils/deskEntryKeys.js`](../utils/deskEntryKeys.js).
 
-Layout key format (canonical, from `utils/deskEntryKeys.js`):
-
-| Prefix | Meaning |
-|--------|---------|
-| `drive:{driveId}` | Any item/channel/desk that has a Drive file ID — the primary stable key |
-| `local:{store}:{id}` | Item or channel without a Drive ID yet (pending upload) |
-| `channel:{id}` | Legacy channel key (still resolved for backward compatibility) |
-| `desk:{id}` | Nested desk without a Drive backup (local IndexedDB id only) |
-
-The helper `resolveLayoutEntry(key, items, channels, desks)` converts any key variant to the matching library record. `migrateDeskDataKeys` rewrites stale/legacy keys to canonical `drive:` keys when a record gains a Drive ID.
+`resolveLayoutEntry` and `migrateDeskDataKeys` rewrite stale temp keys when items gain a real Drive id.
 
 ## Key indexes
 
-- `driveId` index on `books`, `notes`, `videos`, `desks`
-- `noteId` index on `images`
-- unique `channelId` index on `channels`
+- `channelId` unique index on `channels`
+- `noteDriveId` index on legacy `images`
+- `pdfAnnotations`: keyPath `sidecarKey` = `` `${idbStore}:${itemDriveId}` ``
 
-## UI-facing collections
+## Readers
 
-`useIndexedDB` exposes:
+Standalone EPUB/PDF tabs use `?driveId=…&store=books` (no legacy `?id=`).
 
-- `items` = merged `books` + `notes` + `videos`
-- `channels`
-- `desks`
+## Schema history
 
-There is no `shares` collection anymore.
+- **v10:** `driveId` keyPath on content stores; removed numeric `id`; desk layout migration to `drive:{driveId}`.
+- **v9:** desks store repair.
+- **v7:** dropped `shares`; added `sharedWith` / `ownerEmail`.
 
-## Sharing-related persistence
-
-Item-level sharing state is persisted directly on records:
-
-- `sharedWith` controls who should have Drive reader access
-- `ownerEmail` tracks ownership origin for peer sync and prune logic
-
-Viewer prune helpers use these fields to remove revoked peer-owned items:
-
-- `getLocalRecordsByOwnerEmail`
-- `deleteItemByDriveId`
-- `deleteChannelByDriveId`
-
-## Schema history note
-
-v8 changes:
-
-- added `desks` object store with `driveId` index
-
-v7 changes:
-
-- dropped `shares` object store
-- added `sharedWith` and `ownerEmail` to content stores
-- retained `pdfAnnotations`
-
-For reset during development, use app "Clear All" or clear site storage in browser devtools.
+To reset: “Clear All” in settings or clear site data in DevTools.
 
 ## Storage quota and LRU eviction
 
-A configurable storage limit (default **500 GB**, stored in `localStorage` under `infodepo_sync_settings`) is enforced automatically. The limit is managed via `utils/syncSettings.js`:
-
-```js
-getSyncSettings()  // → { maxStorageGB: number }
-saveSyncSettings({ maxStorageGB })
-```
-
-**When eviction runs:**
-- Once on startup after `dataReady` becomes true.
-- After each new item is imported via `addItem`.
-
-**Eviction algorithm (`evictLeastRecentlyVisited` in `useIndexedDB.js`):**
-1. Sum `size` across `books`, `notes`, and `videos`.
-2. If total ≤ limit, stop.
-3. Collect candidates from `books` and `notes` where `size > 1024` (1 KB) and `data != null`.
-4. Sort by `lastVisitedAt` ascending (`null` = epoch = evicted first).
-5. Null out `data` and set `size = 0` one record at a time until total drops below the limit.
-6. Call `loadAll()` to refresh the UI.
-
-Evicted items remain visible in the library grid (metadata preserved) but cannot be opened — their blob data has been cleared. Re-syncing from Drive (or clicking the tile to trigger lazy download) restores the content.
-
-**Distinguishing lazy vs. evicted**: both states have `data: null`. A lazily-synced item has `size > 0` (Drive file size was stored at sync time); an evicted item has `size = 0`. `DataTile` shows a cloud icon for any item with `data === null && driveId`, regardless of which cause.
-
-**User-facing controls:** System Settings → **Storage** section shows a progress bar and allows adjusting the GB limit.
+Unchanged from prior versions — eviction nulls `data` but keeps metadata and `driveId`. See [`hooks/useIndexedDB.js`](../hooks/useIndexedDB.js) `evictLeastRecentlyVisited`.

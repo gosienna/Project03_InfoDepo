@@ -6,6 +6,7 @@ import {
   pdfAnnotationSidecarNeedsBackup,
 } from './pdfAnnotationSidecar.js';
 import { cloneBlobForNetwork } from './cloneBlobForNetwork.js';
+import { isTempDriveId } from './driveRecordKey.js';
 
 function coverSidecarExt(mimeType) {
   const m = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
@@ -100,12 +101,12 @@ export async function syncDriveToLocal({
 
   for (const b of books || []) {
     const d = String(b.driveId || '').trim();
-    const slim = { id: b.id, driveId: b.driveId, modifiedTime: b.modifiedTime, coverImageDriveId: b.coverImageDriveId };
+    const slim = { driveId: b.driveId, modifiedTime: b.modifiedTime, coverImageDriveId: b.coverImageDriveId };
     if (d) bookDriveMap.set(d, slim);
     if (b.name) bookNameMap.set(b.name, slim);
     for (const asset of b.assets || []) {
       const ad = String(asset.driveId || '').trim();
-      const slimAsset = { driveId: asset.driveId, modifiedTime: asset.modifiedTime, noteId: b.id };
+      const slimAsset = { driveId: asset.driveId, modifiedTime: asset.modifiedTime, noteDriveId: b.driveId };
       if (ad) imageDriveMap.set(ad, slimAsset);
       if (asset.name) imageNameMap.set(asset.name, slimAsset);
     }
@@ -372,7 +373,7 @@ export async function syncDriveToLocal({
 
   // Phase 3: note-attached image files (counted in progress)
   if (userImageFiles.length > 0 && upsertDriveImage) {
-    const noteIdByImageName = new Map();
+    const noteDriveIdByImageName = new Map();
     if (getNotes) {
       try {
         const notes = await getNotes();
@@ -382,7 +383,7 @@ export async function syncDriveToLocal({
           const imgRefs = text.match(/!\[[^\]]*\]\(([^)]+)\)/g) || [];
           for (const ref of imgRefs) {
             const m = ref.match(/!\[[^\]]*\]\(([^)]+)\)/);
-            if (m) noteIdByImageName.set(m[1], note.id);
+            if (m) noteDriveIdByImageName.set(m[1], note.driveId);
           }
         }
       } catch (err) {
@@ -412,8 +413,8 @@ export async function syncDriveToLocal({
         continue;
       }
       const blob = await blobRes.blob();
-      const noteId = noteIdByImageName.get(driveFile.name) || (existing ? existing.noteId : 0);
-      const action = await upsertDriveImage(driveFile, blob, noteId);
+      const noteDriveId = noteDriveIdByImageName.get(driveFile.name) || (existing ? existing.noteDriveId : '');
+      const action = await upsertDriveImage(driveFile, blob, noteDriveId);
       if (action === 'added') counts.added++;
       else if (action === 'updated') counts.updated++;
       else counts.skipped++;
@@ -588,8 +589,8 @@ export async function syncSingleDeskFromDrive(desk, { accessToken, upsertDriveDe
  */
 export async function backupSingleDesk(desk, { accessToken, folderId, onSetDriveId }) {
   if (!deskNeedsBackupUpload(desk)) return 'skipped';
-  const label = desk.name || `desk-${desk.id}`;
-  const { id, driveId: _d, ...rest } = desk;
+  const label = desk.name || `desk-${desk.driveId}`;
+  const { id: _legacyId, ...rest } = desk;
   const payload = JSON.stringify({ _type: DESK_JSON_MARKER, ...rest });
   const blob = new Blob([payload], { type: 'application/json' });
   const fileName = `${String(label).replace(/[/\\?%*:|"<>]/g, '-')}.desk.json`;
@@ -606,7 +607,7 @@ export async function backupSingleDesk(desk, { accessToken, folderId, onSetDrive
   } else {
     driveFile = await drivePostMultipart(accessToken, blob, fileName, 'application/json', folderId);
   }
-  await onSetDriveId(id, 'desks', driveFile.id, { modifiedTime: driveFile.modifiedTime });
+  await onSetDriveId(desk.driveId, 'desks', driveFile.id, { modifiedTime: driveFile.modifiedTime });
   return 'backed';
 }
 
@@ -667,7 +668,7 @@ export async function backupAllToGDrive({
         if (!existingFolderId || !existingMdId) {
           const folder = await createFolder(folderName, folderId);
           const driveFile = await postMultipart(item.data, item.name, item.type, folder.id);
-          await onSetDriveId(item.id, item.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
+          await onSetDriveId(item.driveId, item.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
 
           const assetDriveIds = [];
           for (const asset of item.assets) {
@@ -680,14 +681,14 @@ export async function backupAllToGDrive({
             assetDriveIds.push({ name: asset.name, driveId: af.id });
             backed++;
           }
-          if (onSetNoteFolderData) await onSetNoteFolderData(item.id, folder.id, assetDriveIds);
+          if (onSetNoteFolderData) await onSetNoteFolderData(item.driveId, folder.id, assetDriveIds);
           backed++;
         } else {
           let lastMdTime = item.modifiedTime;
           if (itemNeedsBackupUpload(item)) {
             const mdRes = await patchMultipart(existingMdId, item.data, item.name, item.type);
             lastMdTime = mdRes.modifiedTime;
-            await onSetDriveId(item.id, item.idbStore, existingMdId, { modifiedTime: mdRes.modifiedTime });
+            await onSetDriveId(item.driveId, item.idbStore, existingMdId, { modifiedTime: mdRes.modifiedTime });
             backed++;
           }
           const assetDriveIds = [];
@@ -704,9 +705,9 @@ export async function backupAllToGDrive({
             backed++;
           }
           if (anyNewAsset && onSetNoteFolderData) {
-            await onSetNoteFolderData(item.id, existingFolderId, assetDriveIds);
+            await onSetNoteFolderData(item.driveId, existingFolderId, assetDriveIds);
             const mdMeta = lastMdTime;
-            await onSetDriveId(item.id, item.idbStore, existingMdId, {
+            await onSetDriveId(item.driveId, item.idbStore, existingMdId, {
               modifiedTime: typeof mdMeta === 'string' ? mdMeta : (mdMeta?.toISOString?.() || new Date().toISOString()),
             });
           }
@@ -735,11 +736,11 @@ export async function backupAllToGDrive({
         } else {
           driveFile = await postMultipart(item.data, driveName, driveMime);
         }
-        await onSetDriveId(item.id, item.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
+        await onSetDriveId(item.driveId, item.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
         backed++;
         if (item.type === 'application/pdf' && setPdfAnnotationDriveSync) {
           try {
-            await setPdfAnnotationDriveSync(item.id, item.idbStore, {
+            await setPdfAnnotationDriveSync(item.driveId, item.idbStore, {
               pdfDriveId: driveFile.id,
             });
           } catch (e) {
@@ -761,7 +762,7 @@ export async function backupAllToGDrive({
       if (!pdfDid) continue;
       let sc;
       try {
-        sc = await getPdfAnnotationSidecar(item.id, item.idbStore);
+        sc = await getPdfAnnotationSidecar(item.driveId, item.idbStore);
       } catch {
         continue;
       }
@@ -769,7 +770,7 @@ export async function backupAllToGDrive({
       const annName = pdfAnnotationSidecarFileName(item.name);
       const payload = serializePdfAnnotationSidecar({
         pdfDriveId: pdfDid,
-        itemId: item.id,
+        itemDriveId: item.driveId,
         idbStore: item.idbStore,
         annotations: sc.annotations || [],
       });
@@ -792,7 +793,7 @@ export async function backupAllToGDrive({
         } else {
           annDriveFile = await postMultipart(blob, annName, 'application/json');
         }
-        await setPdfAnnotationDriveSync(item.id, item.idbStore, {
+        await setPdfAnnotationDriveSync(item.driveId, item.idbStore, {
           annotationDriveId: annDriveFile.id,
           modifiedTime: annDriveFile.modifiedTime,
           pdfDriveId: pdfDid,
@@ -815,7 +816,7 @@ export async function backupAllToGDrive({
       progress(`Backing up cover for "${item.name}"...`);
       try {
         const driveFile = await postMultipart(coverBlob, sidecarName, coverMime);
-        await onSetCoverImageDriveSync(item.id, item.idbStore, {
+        await onSetCoverImageDriveSync(item.driveId, item.idbStore, {
           coverImageDriveId: driveFile.id,
           modifiedTime: driveFile.modifiedTime,
         });
@@ -829,12 +830,12 @@ export async function backupAllToGDrive({
 
   for (const desk of desks || []) {
     if (!deskNeedsBackupUpload(desk)) continue;
-    progress(`Backing up desk "${desk.name || `desk-${desk.id}`}"...`);
+    progress(`Backing up desk "${desk.name || `desk-${desk.driveId}`}"...`);
     try {
       await backupSingleDesk(desk, { accessToken, folderId, onSetDriveId });
       backed++;
     } catch (err) {
-      console.warn(`Backup failed for desk "${desk.name || desk.id}":`, err.message);
+      console.warn(`Backup failed for desk "${desk.name || desk.driveId}":`, err.message);
       failed++;
     }
   }
@@ -844,7 +845,7 @@ export async function backupAllToGDrive({
     const label = ch.name || ch.handle || ch.channelId;
     progress(`Backing up channel "${label}"...`);
     try {
-      const { id, driveId: _d, ...rest } = ch;
+      const { id: _legacyId, ...rest } = ch;
       const payload = JSON.stringify({ _type: CHANNEL_JSON_MARKER, ...rest });
       const blob = new Blob([payload], { type: 'application/json' });
       const safeName = String(label).replace(/[/\\?%*:|"<>]/g, '-');
@@ -865,7 +866,7 @@ export async function backupAllToGDrive({
       } else {
         driveFile = await postMultipart(blob, fileName, 'application/json');
       }
-      await onSetDriveId(id, 'channels', driveFile.id, { modifiedTime: driveFile.modifiedTime });
+      await onSetDriveId(ch.driveId, 'channels', driveFile.id, { modifiedTime: driveFile.modifiedTime });
       backed++;
     } catch (err) {
       console.warn(`Backup failed for channel "${label}":`, err.message);
@@ -926,8 +927,8 @@ export function classifyChanges(driveIndex, items, channels, desks) {
 
   const checkRecord = (record, storeName) => {
     const did = String(record.driveId || '').trim();
-    if (did) localDriveIds.add(did);
-    if (!did) { toBackup.push({ record, storeName }); return; }
+    if (did && !isTempDriveId(did)) localDriveIds.add(did);
+    if (!did || isTempDriveId(did)) { toBackup.push({ record, storeName }); return; }
     const entry = indexByDriveId.get(did);
     if (!entry) { toBackup.push({ record, storeName }); return; }
     const lm = timeMs(record.localModifiedAt);
@@ -987,7 +988,7 @@ export async function backupChangedItems(toBackup, {
   const progress = onProgress || (() => {});
   let backed = 0;
   let failed = 0;
-  const updatedEntries = []; // { id, storeName, driveId, modifiedTime, driveFolderId? }
+  const updatedEntries = []; // { oldDriveId, storeName, driveId, modifiedTime, driveFolderId? }
 
   const postMultipart = (blob, name, mimeType, targetParentId) =>
     drivePostMultipart(accessToken, blob, name, mimeType, targetParentId || folderId);
@@ -1017,7 +1018,7 @@ export async function backupChangedItems(toBackup, {
       const label = record.name || record.handle || record.channelId;
       progress(`Backing up channel "${label}"...`);
       try {
-        const { id, driveId: _d, ...rest } = record;
+        const { id: _legacyId, ...rest } = record;
         const payload = JSON.stringify({ _type: CHANNEL_JSON_MARKER, ...rest });
         const blob = new Blob([payload], { type: 'application/json' });
         const safeName = String(label).replace(/[/\\?%*:|"<>]/g, '-');
@@ -1035,8 +1036,8 @@ export async function backupChangedItems(toBackup, {
         } else {
           driveFile = await postMultipart(blob, fileName, 'application/json');
         }
-        await onSetDriveId(id, 'channels', driveFile.id, { modifiedTime: driveFile.modifiedTime });
-        updatedEntries.push({ id: record.id, storeName: 'channels', driveId: driveFile.id, modifiedTime: driveFile.modifiedTime });
+        await onSetDriveId(record.driveId, 'channels', driveFile.id, { modifiedTime: driveFile.modifiedTime });
+        updatedEntries.push({ oldDriveId: record.driveId, storeName: 'channels', driveId: driveFile.id, modifiedTime: driveFile.modifiedTime });
         backed++;
       } catch (err) {
         console.warn(`Backup failed for channel "${record.name || record.channelId}":`, err.message);
@@ -1047,7 +1048,7 @@ export async function backupChangedItems(toBackup, {
 
     if (storeName === 'desks') {
       if (!deskNeedsBackupUpload(record)) continue;
-      progress(`Backing up desk "${record.name || `desk-${record.id}`}"...`);
+      progress(`Backing up desk "${record.name || `desk-${record.driveId}`}"...`);
       try {
         let capturedDriveId, capturedModifiedTime;
         const wrappedSetDriveId = async (id, sn, driveId, meta) => {
@@ -1057,11 +1058,11 @@ export async function backupChangedItems(toBackup, {
         };
         await backupSingleDesk(record, { accessToken, folderId, onSetDriveId: wrappedSetDriveId });
         if (capturedDriveId) {
-          updatedEntries.push({ id: record.id, storeName: 'desks', driveId: capturedDriveId, modifiedTime: capturedModifiedTime });
+          updatedEntries.push({ oldDriveId: record.driveId, storeName: 'desks', driveId: capturedDriveId, modifiedTime: capturedModifiedTime });
         }
         backed++;
       } catch (err) {
-        console.warn(`Backup failed for desk "${record.name || record.id}":`, err.message);
+        console.warn(`Backup failed for desk "${record.name || record.driveId}":`, err.message);
         failed++;
       }
       continue;
@@ -1084,8 +1085,8 @@ export async function backupChangedItems(toBackup, {
           const folder = await createFolder(folderName, folderId);
           newFolderId = folder.id;
           const driveFile = await postMultipart(record.data, record.name, record.type, folder.id);
-          await onSetDriveId(record.id, record.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
-          updatedEntries.push({ id: record.id, storeName: record.idbStore, driveId: driveFile.id, modifiedTime: driveFile.modifiedTime, driveFolderId: folder.id });
+          await onSetDriveId(record.driveId, record.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
+          updatedEntries.push({ oldDriveId: record.driveId, storeName: record.idbStore, driveId: driveFile.id, modifiedTime: driveFile.modifiedTime, driveFolderId: folder.id });
 
           const assetDriveIds = [];
           for (const asset of record.assets) {
@@ -1095,15 +1096,15 @@ export async function backupChangedItems(toBackup, {
             assetDriveIds.push({ name: asset.name, driveId: af.id });
             backed++;
           }
-          if (onSetNoteFolderData) await onSetNoteFolderData(record.id, folder.id, assetDriveIds);
+          if (onSetNoteFolderData) await onSetNoteFolderData(record.driveId, folder.id, assetDriveIds);
           backed++;
         } else {
           let lastMdTime = record.modifiedTime;
           if (itemNeedsBackupUpload(record)) {
             const mdRes = await patchMultipart(existingMdId, record.data, record.name, record.type);
             lastMdTime = mdRes.modifiedTime;
-            await onSetDriveId(record.id, record.idbStore, existingMdId, { modifiedTime: mdRes.modifiedTime });
-            updatedEntries.push({ id: record.id, storeName: record.idbStore, driveId: existingMdId, modifiedTime: mdRes.modifiedTime, driveFolderId: existingFolderId });
+            await onSetDriveId(record.driveId, record.idbStore, existingMdId, { modifiedTime: mdRes.modifiedTime });
+            updatedEntries.push({ oldDriveId: record.driveId, storeName: record.idbStore, driveId: existingMdId, modifiedTime: mdRes.modifiedTime, driveFolderId: existingFolderId });
             backed++;
           }
           const assetDriveIds = [];
@@ -1117,9 +1118,9 @@ export async function backupChangedItems(toBackup, {
             backed++;
           }
           if (anyNewAsset && onSetNoteFolderData) {
-            await onSetNoteFolderData(record.id, existingFolderId, assetDriveIds);
+            await onSetNoteFolderData(record.driveId, existingFolderId, assetDriveIds);
             const mdMeta = lastMdTime;
-            await onSetDriveId(record.id, record.idbStore, existingMdId, {
+            await onSetDriveId(record.driveId, record.idbStore, existingMdId, {
               modifiedTime: typeof mdMeta === 'string' ? mdMeta : (mdMeta?.toISOString?.() || new Date().toISOString()),
             });
           }
@@ -1142,12 +1143,12 @@ export async function backupChangedItems(toBackup, {
         } else {
           driveFile = await postMultipart(record.data, driveName, driveMime);
         }
-        await onSetDriveId(record.id, record.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
-        updatedEntries.push({ id: record.id, storeName: record.idbStore, driveId: driveFile.id, modifiedTime: driveFile.modifiedTime });
+        await onSetDriveId(record.driveId, record.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
+        updatedEntries.push({ oldDriveId: record.driveId, storeName: record.idbStore, driveId: driveFile.id, modifiedTime: driveFile.modifiedTime });
         backed++;
         if (record.type === 'application/pdf' && setPdfAnnotationDriveSync) {
           try {
-            await setPdfAnnotationDriveSync(record.id, record.idbStore, { pdfDriveId: driveFile.id });
+            await setPdfAnnotationDriveSync(record.driveId, record.idbStore, { pdfDriveId: driveFile.id });
           } catch (e) {
             console.warn(`[backup] pdf sidecar pdfDriveId link failed for "${record.name}":`, e?.message);
           }
@@ -1166,11 +1167,11 @@ export async function backupChangedItems(toBackup, {
       const pdfDid = String(item.driveId || '').trim();
       if (!pdfDid) continue;
       let sc;
-      try { sc = await getPdfAnnotationSidecar(item.id, item.idbStore); } catch { continue; }
+      try { sc = await getPdfAnnotationSidecar(item.driveId, item.idbStore); } catch { continue; }
       if (!sc || !pdfAnnotationSidecarNeedsBackup(sc)) continue;
       const annName = pdfAnnotationSidecarFileName(item.name);
       const payload = serializePdfAnnotationSidecar({
-        pdfDriveId: pdfDid, itemId: item.id, idbStore: item.idbStore, annotations: sc.annotations || [],
+        pdfDriveId: pdfDid, itemDriveId: item.driveId, idbStore: item.idbStore, annotations: sc.annotations || [],
       });
       const blob = new Blob([payload], { type: 'application/json' });
       const annDid = String(sc.annotationDriveId || '').trim();
@@ -1188,7 +1189,7 @@ export async function backupChangedItems(toBackup, {
         } else {
           annDriveFile = await postMultipart(blob, annName, 'application/json');
         }
-        await setPdfAnnotationDriveSync(item.id, item.idbStore, {
+        await setPdfAnnotationDriveSync(item.driveId, item.idbStore, {
           annotationDriveId: annDriveFile.id, modifiedTime: annDriveFile.modifiedTime, pdfDriveId: pdfDid,
         });
         backed++;
@@ -1209,7 +1210,7 @@ export async function backupChangedItems(toBackup, {
       progress(`Backing up cover for "${item.name}"...`);
       try {
         const driveFile = await postMultipart(coverBlob, sidecarName, coverMime);
-        await onSetCoverImageDriveSync(item.id, item.idbStore, {
+        await onSetCoverImageDriveSync(item.driveId, item.idbStore, {
           coverImageDriveId: driveFile.id, modifiedTime: driveFile.modifiedTime,
         });
         backed++;
@@ -1468,7 +1469,7 @@ export async function syncFolderAssetsAndSidecars({
 
   // Note-attached images (Phase 3)
   if (userImageFiles.length > 0 && upsertDriveImage) {
-    const noteIdByImageName = new Map();
+    const noteDriveIdByImageName = new Map();
     if (getNotes) {
       try {
         const notes = await getNotes();
@@ -1478,7 +1479,7 @@ export async function syncFolderAssetsAndSidecars({
           const imgRefs = text.match(/!\[[^\]]*\]\(([^)]+)\)/g) || [];
           for (const ref of imgRefs) {
             const m = ref.match(/!\[[^\]]*\]\(([^)]+)\)/);
-            if (m) noteIdByImageName.set(m[1], note.id);
+            if (m) noteDriveIdByImageName.set(m[1], note.driveId);
           }
         }
       } catch (err) {
@@ -1503,8 +1504,8 @@ export async function syncFolderAssetsAndSidecars({
       );
       if (!blobRes.ok) { counts.skipped++; continue; }
       const blob = await blobRes.blob();
-      const noteId = noteIdByImageName.get(driveFile.name) || (existing ? existing.noteId : 0);
-      const action = await upsertDriveImage(driveFile, blob, noteId);
+      const noteDriveId = noteDriveIdByImageName.get(driveFile.name) || (existing ? existing.noteDriveId : '');
+      const action = await upsertDriveImage(driveFile, blob, noteDriveId);
       if (action === 'added') counts.added++;
       else if (action === 'updated') counts.updated++;
       else counts.skipped++;

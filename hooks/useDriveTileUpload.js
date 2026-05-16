@@ -89,7 +89,7 @@ export function useDriveTileUpload({ onSetDriveId, scheduleShareAclReconcile }) 
         }
 
         const driveFile = await res.json();
-        await onSetDriveId(video.id, video.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
+        await onSetDriveId(video.driveId, video.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
         setStatus(uKey, 'success');
         if (typeof scheduleShareAclReconcile === 'function') scheduleShareAclReconcile();
       } catch (err) {
@@ -141,7 +141,7 @@ export function useDriveTileUpload({ onSetDriveId, scheduleShareAclReconcile }) 
         }
 
         const driveFile = await res.json();
-        await onSetDriveId(ch.id, 'channels', driveFile.id, { modifiedTime: driveFile.modifiedTime });
+        await onSetDriveId(ch.driveId, 'channels', driveFile.id, { modifiedTime: driveFile.modifiedTime });
         setStatus(uKey, 'success');
         if (typeof scheduleShareAclReconcile === 'function') scheduleShareAclReconcile();
       } catch (err) {

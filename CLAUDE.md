@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A client-side media library and reader. Content (books, notes, YouTube links, channels) is imported from local files or Google Drive, stored as blobs in IndexedDB (`InfoDepo` database, schema version 6). Owners can share subsets of their library with other Google accounts via Drive-backed share configs. No backend; everything runs in the browser.
+A client-side media library and reader. Content (books, notes, YouTube links, channels) is imported from local files or Google Drive, stored as blobs in IndexedDB (`InfoDepo` database, schema version 10). Records are keyed by `driveId` (Google file id or temp `local:{store}:{uuid}`); see [`documents/data-stores.md`](documents/data-stores.md). Owners can share subsets of their library with other Google accounts via Drive-backed share configs. No backend; everything runs in the browser.
 
 > For detailed documentation see [`documents/`](documents/):
 > - [Architecture](documents/architecture.md)
@@ -19,7 +19,7 @@ A client-side media library and reader. Content (books, notes, YouTube links, ch
 - **React 18.3.1** — functional components, hooks only, no JSX (uses `React.createElement()` throughout)
 - **Vite 6.2.0** — dev server on port 3001
 - **Tailwind CSS** — loaded via CDN in `index.html`
-- **IndexedDB** (`InfoDepo`, version 6) — seven stores: `books`, `notes`, `videos`, `images`, `channels`, `shares`, `pdfAnnotations`
+- **IndexedDB** (`InfoDepo`, version 10) — stores: `books`, `notes`, `videos`, `images`, `channels`, `desks`, `pdfAnnotations`; primary key `driveId` on content stores
 - **YouTube Data API v3** — channel video listing (reuses `VITE_API_KEY`)
 - **Google OAuth 2.0 + Drive API v3** — folder sync/backup, share permissions, OAuth gate
 - **EPUB.js** — EPUB rendering (CDN)

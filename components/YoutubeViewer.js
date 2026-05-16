@@ -77,7 +77,7 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
     };
     reader.onerror = () => { setError('Failed to read file.'); setIsLoading(false); };
     reader.readAsText(video.data);
-  }, [video.id, video.type, video.size]);
+  }, [video.driveId, video.type, video.size]);
 
   const url     = parsed?.url || '';
   const title   = parsed?.title || 'YouTube Video';

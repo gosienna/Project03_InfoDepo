@@ -1,2 +1,2 @@
-/** DB `id` is only unique per object store — pair with MIME type for stable React keys and maps. */
-export const libraryItemKey = (item) => `${item?.type || 'item'}-${item?.id}`;
+/** Stable React keys / upload status maps — driveId is unique across stores. */
+export const libraryItemKey = (item) => `${item?.type || 'item'}-${item?.driveId || ''}`;

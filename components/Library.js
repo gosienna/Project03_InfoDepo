@@ -142,7 +142,7 @@ export const Library = ({
   const handleDeleteItemRequest = (video) => {
     if (!recordHasDriveCopy(video) || !hasCredentials) {
       if (window.confirm(`Are you sure you want to delete "${video.name}"?`)) {
-        onDeleteItem(video.id, video.type);
+        onDeleteItem(video.driveId, video.type);
       }
       return;
     }
@@ -152,7 +152,7 @@ export const Library = ({
   const handleDeleteChannelRequest = (ch) => {
     if (!recordHasDriveCopy(ch) || !hasCredentials) {
       if (window.confirm(`Remove channel "${ch.name}" from your library?`)) {
-        onDeleteChannel(ch.id);
+        onDeleteChannel(ch.driveId);
       }
       return;
     }
@@ -170,9 +170,9 @@ export const Library = ({
     if (!pendingDelete) return;
     try {
       if (pendingDelete.kind === 'item') {
-        await onDeleteItem(pendingDelete.item.id, pendingDelete.item.type);
+        await onDeleteItem(pendingDelete.item.driveId, pendingDelete.item.type);
       } else {
-        await onDeleteChannel(pendingDelete.channel.id);
+        await onDeleteChannel(pendingDelete.channel.driveId);
       }
       closePendingDelete();
     } catch (e) {
@@ -187,10 +187,10 @@ export const Library = ({
       const token = await getOwnerDriveAccessToken();
       if (pendingDelete.kind === 'item') {
         await deleteDriveFilesForMergedItem(token, pendingDelete.item, getImagesForNote);
-        await onDeleteItem(pendingDelete.item.id, pendingDelete.item.type);
+        await onDeleteItem(pendingDelete.item.driveId, pendingDelete.item.type);
       } else {
         await deleteDriveFilesForChannel(token, pendingDelete.channel);
-        await onDeleteChannel(pendingDelete.channel.id);
+        await onDeleteChannel(pendingDelete.channel.driveId);
       }
       closePendingDelete();
     } catch (e) {
@@ -278,7 +278,7 @@ export const Library = ({
       itemsForAcl =
         overrideRecord && overrideStore !== 'channels' && overrideStore !== 'desks'
           ? mergedItems.map((it) =>
-              it.id === overrideRecord.id && it.idbStore === overrideStore
+              it.driveId === overrideRecord.driveId && it.idbStore === overrideStore
                 ? { ...it, sharedWith: overrideEmails || [] }
                 : it
             )
@@ -286,13 +286,13 @@ export const Library = ({
       channelsForAcl =
         overrideRecord && overrideStore === 'channels'
           ? (channels || []).map((ch) =>
-              ch.id === overrideRecord.id ? { ...ch, sharedWith: overrideEmails || [] } : ch
+              ch.driveId === overrideRecord.driveId ? { ...ch, sharedWith: overrideEmails || [] } : ch
             )
           : (channels || []);
       desksForAcl =
         overrideRecord && overrideStore === 'desks'
           ? (desks || []).map((dk) =>
-              dk.id === overrideRecord.id ? { ...dk, sharedWith: overrideEmails || [] } : dk
+              dk.driveId === overrideRecord.driveId ? { ...dk, sharedWith: overrideEmails || [] } : dk
             )
           : (desks || []);
     }
@@ -346,7 +346,7 @@ export const Library = ({
 
   const handleSetSharedWith = async (record, storeName, emails) => {
     const previousSharedWith = Array.isArray(record?.sharedWith) ? [...record.sharedWith] : [];
-    await setItemSharedWith(record.id, storeName, emails);
+    await setItemSharedWith(record.driveId, storeName, emails);
 
     // Track channel mutations so we can patch stale React state when writing the index.
     // loadChannels/loadDesks are async — state won't have caught up by the time writeOwnerIndex runs.
@@ -367,14 +367,14 @@ export const Library = ({
           const item = items.find((i) => String(i.driveId || '').trim() === driveId);
           if (item) {
             const merged = [...new Set([...(item.sharedWith || []), ...addedEmails])];
-            await setItemSharedWith(item.id, item.idbStore, merged);
+            await setItemSharedWith(item.driveId, item.idbStore, merged);
             continue;
           }
           const ch = (channels || []).find((c) => String(c.driveId || '').trim() === driveId);
           if (ch) {
             const merged = [...new Set([...(ch.sharedWith || []), ...addedEmails])];
-            await setItemSharedWith(ch.id, 'channels', merged);
-            propagatedChannelUpdates.set(ch.id, merged);
+            await setItemSharedWith(ch.driveId, 'channels', merged);
+            propagatedChannelUpdates.set(ch.driveId, merged);
           }
         }
       }
@@ -383,7 +383,7 @@ export const Library = ({
     const recordDriveId = String(record?.driveId || '').trim();
     if (!recordDriveId) {
       console.warn('[InfoDepo] Share updated locally, but Drive authorization skipped because this record has no driveId yet. Upload it to Google Drive first.', {
-        recordId: record?.id,
+        recordId: record?.driveId,
         storeName,
         sharedWith: emails,
       });
@@ -395,7 +395,7 @@ export const Library = ({
     }
     try {
       console.log('[InfoDepo] Starting Drive authorization reconcile for sharedWith change...', {
-        recordId: record.id,
+        recordId: record.driveId,
         storeName,
         driveId: recordDriveId,
         sharedWith: emails,
@@ -409,7 +409,7 @@ export const Library = ({
       });
       if (aclResult) {
         console.log('[InfoDepo] Drive authorization reconcile result:', {
-          recordId: record.id,
+          recordId: record.driveId,
           storeName,
           sharedWith: emails,
           granted: aclResult.granted,
@@ -431,12 +431,12 @@ export const Library = ({
           // setItemSharedWith are async and likely haven't resolved yet. Patch the
           // changed record and any channels updated by desk propagation directly.
           const channelsForIndex = (channels || []).map((c) => {
-            if (storeName === 'channels' && c.id === record.id) return { ...c, sharedWith: emails };
-            if (propagatedChannelUpdates.has(c.id)) return { ...c, sharedWith: propagatedChannelUpdates.get(c.id) };
+            if (storeName === 'channels' && c.driveId === record.driveId) return { ...c, sharedWith: emails };
+            if (propagatedChannelUpdates.has(c.driveId)) return { ...c, sharedWith: propagatedChannelUpdates.get(c.driveId) };
             return c;
           });
           const desksForIndex = storeName === 'desks'
-            ? (desks || []).map((d) => d.id === record.id ? { ...d, sharedWith: emails } : d)
+            ? (desks || []).map((d) => d.driveId === record.driveId ? { ...d, sharedWith: emails } : d)
             : (desks || []);
           await writeOwnerIndex({
             accessToken: token,
@@ -458,7 +458,7 @@ export const Library = ({
       window.alert(e?.message || 'Failed to update Google Drive permissions for this share change.');
     } finally {
       console.log('[InfoDepo] Drive authorization reconcile finished for sharedWith change.', {
-        recordId: record.id,
+        recordId: record.driveId,
         storeName,
       });
     }
@@ -563,8 +563,8 @@ export const Library = ({
             folderId: viewerFolderId,
             desks,
             ownerEmail: normalizedUserEmail,
-            onSetDriveId: (id, storeName, driveId, syncMeta = null) =>
-              onSetDriveId(id, storeName, driveId, { ...(syncMeta || {}), silent: true }),
+            onSetDriveId: (oldDriveId, storeName, newDriveId, syncMeta = null) =>
+              onSetDriveId(oldDriveId, storeName, newDriveId, { ...(syncMeta || {}), silent: true }),
             onProgress: setSyncProgress,
             upsertDriveDesk: (driveFile, deskData) =>
               upsertDriveDesk(driveFile, deskData, { silent: true }),
@@ -748,10 +748,10 @@ export const Library = ({
         desks,
         ownerEmail: googleUserEmail,
         config: userConfig,
-        onSetDriveId: (id, storeName, driveId, syncMeta = null) =>
-          onSetDriveId(id, storeName, driveId, { ...(syncMeta || {}), silent: true }),
-        onSetNoteFolderData: (noteId, folderId, assetDriveIds) =>
-          onSetNoteFolderData(noteId, folderId, assetDriveIds, { silent: true }),
+        onSetDriveId: (oldDriveId, storeName, newDriveId, syncMeta = null) =>
+          onSetDriveId(oldDriveId, storeName, newDriveId, { ...(syncMeta || {}), silent: true }),
+        onSetNoteFolderData: (noteDriveId, folderId, assetDriveIds) =>
+          onSetNoteFolderData(noteDriveId, folderId, assetDriveIds, { silent: true }),
         onProgress: setSyncProgress,
         getBookByDriveId,
         getBookByName,
@@ -822,8 +822,8 @@ export const Library = ({
           folderId: viewerFolderId,
           desks,
           ownerEmail: normalizedUserEmail,
-          onSetDriveId: (id, storeName, driveId, syncMeta = null) =>
-            onSetDriveId(id, storeName, driveId, { ...(syncMeta || {}), silent: true }),
+          onSetDriveId: (oldDriveId, storeName, newDriveId, syncMeta = null) =>
+            onSetDriveId(oldDriveId, storeName, newDriveId, { ...(syncMeta || {}), silent: true }),
           onProgress: setSyncProgress,
           upsertDriveDesk: (driveFile, deskData) =>
             upsertDriveDesk(driveFile, deskData, { silent: true }),
@@ -905,16 +905,16 @@ export const Library = ({
     clearTimeout(deskBackupTimersRef.current.get(deskId));
     deskBackupTimersRef.current.set(deskId, setTimeout(async () => {
       deskBackupTimersRef.current.delete(deskId);
-      const desk = desksRef.current.find((d) => d.id === deskId);
+      const desk = desksRef.current.find((d) => d.driveId === deskId);
       if (!desk) return;
       try {
         const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
         if (!token) return;
         let capturedDriveId = null;
         let capturedModifiedTime = null;
-        const wrappedOnSetDriveId = async (id, storeName, driveId, meta) => {
-          await onSetDriveId(id, storeName, driveId, meta);
-          capturedDriveId = driveId;
+        const wrappedOnSetDriveId = async (oldDriveId, storeName, newDriveId, meta) => {
+          await onSetDriveId(oldDriveId, storeName, newDriveId, meta);
+          capturedDriveId = newDriveId;
           capturedModifiedTime = meta?.modifiedTime;
         };
         const result = await backupSingleDesk(desk, { accessToken: token, folderId: driveFolderId, onSetDriveId: wrappedOnSetDriveId });
@@ -1415,16 +1415,16 @@ export const Library = ({
                   onDelete: handleDeleteItemRequest,
                   onUpload: handleUpload,
                   onSetNoteCoverImage: onSetNoteCoverImage
-                    ? (v, file) => onSetNoteCoverImage(v.id, file, v.idbStore)
+                    ? (v, file) => onSetNoteCoverImage(v.driveId, file, v.idbStore)
                     : undefined,
                   onSetCoverFromLibrary: isEditor ? (v) => setCoverPickerTarget(v) : undefined,
                   uploadStatus: uploadStatuses[libraryItemKey(video)] ?? null,
                   readOnly: !isEditor,
-                  onSetTags: (v, tags) => setRecordTags(v.id, v.idbStore, tags),
+                  onSetTags: (v, tags) => setRecordTags(v.driveId, v.idbStore, tags),
                   onSetSharedWith: (v, emails) => handleSetSharedWith(v, v.idbStore, emails),
                   canShare: canEditShareForRecord(video),
                   shareableEmails: shareableUserEmails,
-                  onRename: (v, name) => renameItem(v.id, v.idbStore, name),
+                  onRename: (v, name) => renameItem(v.driveId, v.idbStore, name),
                   availableTags,
                   itemDownloadProgress,
                 });
@@ -1432,7 +1432,7 @@ export const Library = ({
               if (row.kind === 'channel') {
                 const ch = row.data;
                 return React.createElement(DataTile, {
-                  key: `ch-${ch.id}`,
+                  key: `ch-${ch.driveId}`,
                   tileType: 'channel',
                   channel: ch,
                   onSelect: onSelectChannel,
@@ -1440,11 +1440,11 @@ export const Library = ({
                   onUpload: handleChannelUpload,
                   uploadStatus: uploadStatuses[channelUploadKey(ch)] ?? null,
                   readOnly: !isEditor,
-                  onSetTags: (c, tags) => setRecordTags(c.id, 'channels', tags),
+                  onSetTags: (c, tags) => setRecordTags(c.driveId, 'channels', tags),
                   onSetSharedWith: (c, emails) => handleSetSharedWith(c, 'channels', emails),
                   canShare: canEditShareForRecord(ch),
                   shareableEmails: shareableUserEmails,
-                  onRename: (c, name) => renameItem(c.id, 'channels', name),
+                  onRename: (c, name) => renameItem(c.driveId, 'channels', name),
                   availableTags,
                 });
               }
@@ -1456,18 +1456,18 @@ export const Library = ({
                   ? !!onRequestDeleteDesk
                   : (userType === 'viewer' && deskIsViewerOwned && !!onRequestDeleteDesk);
                 return React.createElement(DataTile, {
-                  key: `desk-${d.id}`,
+                  key: `desk-${d.driveId}`,
                   tileType: 'desk',
                   desk: d,
                   onSelect: onSelectDesk,
                   onDelete: canDeleteDesk ? handleDeleteDeskRequest : undefined,
-                  onRename: isEditor ? (desk, name) => renameItem(desk.id, 'desks', name) : undefined,
+                  onRename: isEditor ? (desk, name) => renameItem(desk.driveId, 'desks', name) : undefined,
                   readOnly: !isEditor && !deskIsViewerOwned,
                   canShare: isEditor && canEditShareForRecord(d),
                   shareableEmails: shareableUserEmails,
                   onSetSharedWith: isEditor ? (desk, emails) => handleSetSharedWith(desk, 'desks', emails) : undefined,
                   onSetCoverImage: isEditor && onSetNoteCoverImage
-                    ? (desk, file) => onSetNoteCoverImage(desk.id, file, 'desks')
+                    ? (desk, file) => onSetNoteCoverImage(desk.driveId, file, 'desks')
                     : undefined,
                   onSetCoverFromLibrary: isEditor ? (dk) => setCoverPickerTarget({ ...dk, _storeName: 'desks' }) : undefined,
                 });
@@ -1847,7 +1847,7 @@ export const Library = ({
         try {
           const file = new File([imageItem.data], imageItem.name, { type: imageItem.type });
           const storeName = target._storeName || target.idbStore || 'notes';
-          await onSetNoteCoverImage(target.id, file, storeName);
+          await onSetNoteCoverImage(target.driveId, file, storeName);
         } catch (err) {
           window.alert(err?.message || 'Could not set cover image.');
         }

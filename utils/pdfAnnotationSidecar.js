@@ -17,17 +17,18 @@ export function isPdfAnnotationSidecarFilename(name) {
 /**
  * @param {object} opts
  * @param {string} opts.pdfDriveId
- * @param {number} opts.itemId
+ * @param {string} opts.itemDriveId
  * @param {string} opts.idbStore
  * @param {Array} opts.annotations
  * @returns {string}
  */
-export function serializePdfAnnotationSidecar({ pdfDriveId, itemId, idbStore, annotations }) {
+export function serializePdfAnnotationSidecar({ pdfDriveId, itemDriveId, itemId, idbStore, annotations }) {
+  const driveId = String(itemDriveId || itemId || '');
   return JSON.stringify({
     _type: PDF_ANNOTATION_JSON_MARKER,
     version: 1,
     pdfDriveId: String(pdfDriveId || ''),
-    itemId: Number(itemId) || 0,
+    itemDriveId: driveId,
     idbStore: String(idbStore || 'books'),
     updatedAt: new Date().toISOString(),
     annotations: Array.isArray(annotations) ? annotations : [],
@@ -37,7 +38,12 @@ export function serializePdfAnnotationSidecar({ pdfDriveId, itemId, idbStore, an
 export function parsePdfAnnotationSidecarText(text) {
   try {
     const o = JSON.parse(text);
-    if (o && o._type === PDF_ANNOTATION_JSON_MARKER && o.pdfDriveId) return o;
+    if (o && o._type === PDF_ANNOTATION_JSON_MARKER && o.pdfDriveId) {
+      const itemDriveId = o.itemDriveId != null
+        ? String(o.itemDriveId)
+        : (o.itemId != null ? String(o.itemId) : '');
+      return { ...o, itemDriveId };
+    }
   } catch {
     /* ignore */
   }

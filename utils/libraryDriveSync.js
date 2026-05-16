@@ -159,17 +159,17 @@ export async function runOwnerSyncPipeline({
   // Patch syncItems/syncChannels/syncDesks with newly assigned driveIds + modifiedTimes
   // so the index write reflects the results of this backup run.
   if (backupResult.updatedEntries.length > 0) {
-    const patchById = new Map(backupResult.updatedEntries.map(e => [e.id, e]));
-    syncItems = syncItems.map(i => {
-      const p = patchById.get(i.id);
+    const patchByOldDriveId = new Map(backupResult.updatedEntries.map((e) => [e.oldDriveId, e]));
+    syncItems = syncItems.map((i) => {
+      const p = patchByOldDriveId.get(i.driveId);
       return p ? { ...i, driveId: p.driveId, modifiedTime: p.modifiedTime, ...(p.driveFolderId ? { driveFolderId: p.driveFolderId } : {}) } : i;
     });
-    syncChannels = syncChannels.map(c => {
-      const p = patchById.get(c.id);
+    syncChannels = syncChannels.map((c) => {
+      const p = patchByOldDriveId.get(c.driveId);
       return p ? { ...c, driveId: p.driveId, modifiedTime: p.modifiedTime } : c;
     });
-    syncDesks = syncDesks.map(d => {
-      const p = patchById.get(d.id);
+    syncDesks = syncDesks.map((d) => {
+      const p = patchByOldDriveId.get(d.driveId);
       return p ? { ...d, driveId: p.driveId, modifiedTime: p.modifiedTime } : d;
     });
   }

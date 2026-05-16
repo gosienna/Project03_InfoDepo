@@ -1,118 +1,114 @@
 /**
- * Desk canvas layout keys: use Google Drive file IDs exclusively so layouts
- * are stable across devices. Items without a driveId have no layout key and
- * render as pending tiles on the canvas.
- *
- * Canonical formats:
- * - `drive:{driveId}` — books, notes, videos, channels, or nested desks with a Drive file
- * - `desk:{id}` — nested desk without Drive backup (local IndexedDB id only)
- *
- * Legacy `local:{idbStore}:{id}` and `local:channel:{id}` keys may still exist
- * in saved layouts; they resolve to pending tiles until a driveId is assigned.
+ * Desk canvas layout keys: always `drive:{driveId}` where driveId is temp (local:…) or real Google file id.
  */
+import { deskLayoutKey, parseDeskLayoutKey, migrationTempDriveId } from './driveRecordKey.js';
 
 const trimDrive = (d) => String(d || '').trim();
 
-export const itemEntryKey = (item) => {
-  const d = trimDrive(item?.driveId);
-  if (d) return `drive:${d}`;
-  const store = item?.idbStore || 'books';
-  const id = item?.id;
-  if (id == null) return `local:${store}:0`;
-  return `local:${store}:${id}`;
-};
+export { deskLayoutKey, parseDeskLayoutKey };
 
-export const channelEntryKey = (ch) => {
-  const d = trimDrive(ch?.driveId);
-  if (d) return `drive:${d}`;
-  const id = ch?.id;
-  if (id == null) return 'local:channel:0';
-  return `local:channel:${id}`;
-};
+export const itemEntryKey = (item) => deskLayoutKey(trimDrive(item?.driveId));
 
-export const deskEntryKey = (d) => {
-  const id = d?.driveId != null ? trimDrive(d.driveId) : '';
-  if (id) return `drive:${id}`;
-  if (d?.id == null) return 'desk:0';
-  return `desk:${d.id}`;
-};
+export const channelEntryKey = (ch) => deskLayoutKey(trimDrive(ch?.driveId));
 
-function parseLocalKey(key) {
-  if (!key.startsWith('local:')) return null;
-  const rest = key.slice(6);
-  if (rest.startsWith('channel:')) {
-    const id = Number(rest.slice(8));
-    return Number.isFinite(id) ? { kind: 'channel', id } : null;
-  }
-  const sep = rest.indexOf(':');
-  if (sep <= 0) return null;
-  const store = rest.slice(0, sep);
-  const id = Number(rest.slice(sep + 1));
-  if (!Number.isFinite(id)) return null;
-  if (store !== 'books' && store !== 'notes' && store !== 'videos') return null;
-  return { kind: 'item', idbStore: store, id };
-}
+export const deskEntryKey = (d) => deskLayoutKey(trimDrive(d?.driveId));
 
 const PENDING = { _entryType: 'pending' };
 
+function findByDriveId(driveId, items, channels, desks) {
+  const d = trimDrive(driveId);
+  if (!d) return null;
+  const item = (items || []).find((i) => trimDrive(i?.driveId) === d);
+  if (item) return { ...item, _entryType: 'item' };
+  const ch = (channels || []).find((c) => trimDrive(c?.driveId) === d);
+  if (ch) return { ...ch, _entryType: 'channel' };
+  const desk = (desks || []).find((x) => trimDrive(x?.driveId) === d);
+  if (desk) return { ...desk, _entryType: 'desk' };
+  return null;
+}
+
+/** Legacy v9 layout keys → canonical drive:… (upgrade / one-time load only). */
+function resolveLegacyLayoutKey(key, items, channels, desks) {
+  if (!key || typeof key !== 'string') return PENDING;
+
+  if (key.startsWith('local:')) {
+    const rest = key.slice(6);
+    if (rest.startsWith('channel:')) {
+      const numId = Number(rest.slice(8));
+      if (!Number.isFinite(numId)) return PENDING;
+      const ch = (channels || []).find((c) => c.driveId === migrationTempDriveId('channels', numId));
+      if (ch) return { ...ch, _entryType: 'channel' };
+      const chLegacy = (channels || []).find((c) => {
+        const legacy = migrationTempDriveId('channels', numId);
+        return trimDrive(c.driveId) === legacy;
+      });
+      return chLegacy ? { ...chLegacy, _entryType: 'channel' } : PENDING;
+    }
+    const sep = rest.indexOf(':');
+    if (sep <= 0) return PENDING;
+    const store = rest.slice(0, sep);
+    const suffix = rest.slice(sep + 1);
+    if (store === 'channels') {
+      const numId = Number(suffix);
+      if (Number.isFinite(numId)) {
+        const tempId = migrationTempDriveId('channels', numId);
+        const ch = (channels || []).find((c) => trimDrive(c.driveId) === tempId);
+        if (ch) return { ...ch, _entryType: 'channel' };
+      }
+    }
+    if (store !== 'books' && store !== 'notes' && store !== 'videos') return PENDING;
+    const tempId = `local:${store}:${suffix}`;
+    const item = (items || []).find((i) => i.idbStore === store && trimDrive(i.driveId) === tempId);
+    if (item) return { ...item, _entryType: 'item' };
+    const numId = Number(suffix);
+    if (Number.isFinite(numId)) {
+      const migrated = migrationTempDriveId(store, numId);
+      const item2 = (items || []).find((i) => i.idbStore === store && trimDrive(i.driveId) === migrated);
+      if (item2) return { ...item2, _entryType: 'item' };
+    }
+    return PENDING;
+  }
+
+  if (key.startsWith('channel:')) {
+    const numId = Number(key.slice(8));
+    if (!Number.isFinite(numId)) return PENDING;
+    const tempId = migrationTempDriveId('channels', numId);
+    const ch = (channels || []).find((c) => trimDrive(c.driveId) === tempId);
+    return ch ? { ...ch, _entryType: 'channel' } : PENDING;
+  }
+
+  if (key.startsWith('desk:')) {
+    const numId = Number(key.slice(5));
+    if (!Number.isFinite(numId)) return PENDING;
+    const tempId = migrationTempDriveId('desks', numId);
+    const d = (desks || []).find((x) => trimDrive(x.driveId) === tempId);
+    return d ? { ...d, _entryType: 'desk' } : PENDING;
+  }
+
+  const sep = key.lastIndexOf(':');
+  if (sep <= 0) return PENDING;
+  const store = key.slice(0, sep);
+  const numId = Number(key.slice(sep + 1));
+  if (!Number.isFinite(numId)) return PENDING;
+  if (store !== 'books' && store !== 'notes' && store !== 'videos') return PENDING;
+  const tempId = migrationTempDriveId(store, numId);
+  const item = (items || []).find((i) => i.idbStore === store && trimDrive(i.driveId) === tempId);
+  return item ? { ...item, _entryType: 'item' } : PENDING;
+}
+
 /**
  * Resolve a layout key to a library record (+ _entryType).
- * Returns { _entryType: 'pending' } for any key that cannot be resolved to a
- * record with a stable driveId — either because the item is local-only on
- * another device or because it was deleted.
  */
 export function resolveLayoutEntry(key, items, channels, desks) {
   if (!key || typeof key !== 'string') return PENDING;
 
   if (key.startsWith('drive:')) {
-    const driveId = trimDrive(key.slice(6));
-    if (!driveId) return PENDING;
-    const item = (items || []).find((i) => trimDrive(i?.driveId) === driveId);
-    if (item) return { ...item, _entryType: 'item' };
-    const ch = (channels || []).find((c) => trimDrive(c?.driveId) === driveId);
-    if (ch) return { ...ch, _entryType: 'channel' };
-    const d = (desks || []).find((x) => trimDrive(x?.driveId) === driveId);
-    return d ? { ...d, _entryType: 'desk' } : PENDING;
+    const parsedId = parseDeskLayoutKey(key);
+    if (!parsedId) return PENDING;
+    return findByDriveId(parsedId, items, channels, desks) || PENDING;
   }
 
-  // local: keys — item found without driveId gets _pendingUpload so the desk
-  // auto-triggers the upload. Not found means this is a different device.
-  const local = parseLocalKey(key);
-  if (local?.kind === 'channel') {
-    const ch = (channels || []).find((c) => c.id === local.id);
-    if (!ch) return PENDING;
-    return ch.driveId ? { ...ch, _entryType: 'channel' } : { ...ch, _entryType: 'channel', _pendingUpload: true };
-  }
-  if (local?.kind === 'item') {
-    const item = (items || []).find((i) => i.idbStore === local.idbStore && i.id === local.id);
-    if (!item) return PENDING;
-    return item.driveId ? { ...item, _entryType: 'item' } : { ...item, _entryType: 'item', _pendingUpload: true };
-  }
-
-  if (key.startsWith('channel:')) {
-    const id = Number(key.slice(8));
-    if (!Number.isFinite(id)) return PENDING;
-    const ch = (channels || []).find((c) => c.id === id);
-    if (!ch) return PENDING;
-    return ch.driveId ? { ...ch, _entryType: 'channel' } : { ...ch, _entryType: 'channel', _pendingUpload: true };
-  }
-  if (key.startsWith('desk:')) {
-    const id = Number(key.slice(5));
-    if (!Number.isFinite(id)) return PENDING;
-    const d = (desks || []).find((x) => x.id === id);
-    return d ? { ...d, _entryType: 'desk' } : PENDING;
-  }
-
-  // Legacy bare `{store}:{id}` keys
-  const sep = key.lastIndexOf(':');
-  if (sep <= 0) return PENDING;
-  const store = key.slice(0, sep);
-  const id = Number(key.slice(sep + 1));
-  if (!Number.isFinite(id)) return PENDING;
-  if (store !== 'books' && store !== 'notes' && store !== 'videos') return PENDING;
-  const item = (items || []).find((i) => i.idbStore === store && i.id === id);
-  if (!item) return PENDING;
-  return item.driveId ? { ...item, _entryType: 'item' } : { ...item, _entryType: 'item', _pendingUpload: true };
+  return resolveLegacyLayoutKey(key, items, channels, desks);
 }
 
 export function canonicalKeyForEntry(entry) {
@@ -124,8 +120,7 @@ export function canonicalKeyForEntry(entry) {
 }
 
 /**
- * Remap layout + connection keys from legacy or stale forms to canonical keys.
- * @returns {{ layout: object, connections: array, changed: boolean }}
+ * Remap layout + connection keys to canonical drive:{driveId} (temp → real promotion on desk load).
  */
 export function migrateDeskDataKeys(layout, connections, items, channels, desks) {
   const srcLayout = layout && typeof layout === 'object' ? layout : {};
@@ -155,10 +150,7 @@ export function migrateDeskDataKeys(layout, connections, items, channels, desks)
 }
 
 /**
- * When a record receives a Drive id, rewrite layout keys on one desk row.
- * @param {object} desk - full desk record from IndexedDB
- * @param {string[]} oldKeys - keys that should become `drive:${driveId}`
- * @param {string} driveKey - `drive:${driveId}`
+ * When a record receives a real Drive id, rewrite layout keys on one desk row.
  */
 export function deskRecordRemapContentKeys(desk, oldKeys, driveKey) {
   if (!desk || !driveKey || oldKeys.length === 0) return null;
@@ -180,11 +172,46 @@ export function deskRecordRemapContentKeys(desk, oldKeys, driveKey) {
   return { ...desk, layout, connections };
 }
 
-/** Keys that may refer to a library row before it has a stable drive: key */
-export function layoutKeysForLocalRecord(storeName, numericId) {
-  if (numericId == null || Number.isNaN(Number(numericId))) return [];
-  const id = Number(numericId);
-  if (storeName === 'channels') return [`channel:${id}`, `local:channel:${id}`];
-  if (storeName === 'desks') return [`desk:${id}`];
-  return [`${storeName}:${id}`, `local:${storeName}:${id}`];
+/** Keys that refer to a row before promote (eager remap). */
+export function layoutKeysForTempRecord(_storeName, tempDriveId) {
+  const d = trimDrive(tempDriveId);
+  if (!d) return [];
+  return [deskLayoutKey(d)];
+}
+
+/** Rewrite legacy layout keys to drive:… during v10 DB upgrade. */
+export function migrateDeskLayoutKeysForV10(layout) {
+  if (!layout || typeof layout !== 'object') return layout;
+  const out = {};
+  for (const [k, pos] of Object.entries(layout)) {
+    if (k.startsWith('drive:')) {
+      out[k] = pos;
+      continue;
+    }
+    if (k.startsWith('local:')) {
+      out[`drive:${k.slice(6)}`] = pos;
+      continue;
+    }
+    if (k.startsWith('channel:')) {
+      const numId = k.slice(8);
+      out[`drive:local:channels:${numId}`] = pos;
+      continue;
+    }
+    if (k.startsWith('desk:')) {
+      const numId = k.slice(5);
+      out[`drive:local:desks:${numId}`] = pos;
+      continue;
+    }
+    const sep = k.lastIndexOf(':');
+    if (sep > 0) {
+      const store = k.slice(0, sep);
+      const numId = k.slice(sep + 1);
+      if (store === 'books' || store === 'notes' || store === 'videos') {
+        out[`drive:local:${store}:${numId}`] = pos;
+        continue;
+      }
+    }
+    out[k] = pos;
+  }
+  return out;
 }
