@@ -45,7 +45,11 @@ export async function syncSharedFromPeers({
   if (!me) return counts;
 
   const peers = listPeerUsers(me, config);
-  if (!peers.length) return counts;
+  console.log('[InfoDepo][peerSync] peers with folderId:', peers.map(p => ({ email: p.email, folderId: p.folderId })));
+  if (!peers.length) {
+    console.warn('[InfoDepo][peerSync] no peers found — owner folderId not set in config');
+    return counts;
+  }
 
   const truncate = (str, max = 28) => {
     const s = String(str || '');

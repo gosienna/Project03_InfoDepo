@@ -349,7 +349,7 @@ export const useIndexedDB = () => {
   }, [db]);
 
 
-  const addItem = useCallback(async (name, type, data) => {
+  const addItem = useCallback(async (name, type, data, ownerEmail = '') => {
     if (!db) { console.error('Database not initialized'); return Promise.reject(new Error('Database not initialized')); }
     const mime = typeof type === 'string' ? type.trim() : type;
     const size = blobLikeSize(data);
@@ -380,6 +380,8 @@ export const useIndexedDB = () => {
         localModifiedAt: now,
         lastVisitedAt: now,
         tags: [],
+        sharedWith: [],
+        ownerEmail: String(ownerEmail || '').trim().toLowerCase(),
       };
       const addRequest = tx.objectStore(store).add(record);
       addRequest.onsuccess = (e) => { loadItems('addItem'); resolve(e.target.result); };
@@ -992,6 +994,7 @@ export const useIndexedDB = () => {
       const normalizedTags = normalizeTagsList(record.tags);
       const existingByChannelReq = os.index('channelId').get(record.channelId);
 
+      const normOwner = String(record.ownerEmail || '').trim().toLowerCase();
       existingByChannelReq.onsuccess = () => {
         const existing = existingByChannelReq.result;
         if (existing) {
@@ -1003,6 +1006,8 @@ export const useIndexedDB = () => {
             driveId: existing.driveId || '',
             modifiedTime: now,
             localModifiedAt: now,
+            sharedWith: Array.isArray(existing.sharedWith) ? existing.sharedWith : [],
+            ownerEmail: normOwner || existing.ownerEmail || '',
           });
           putReq.onsuccess = () => { loadChannels('addChannel/updated'); resolve(existing.id); };
           putReq.onerror = (e) => reject(e.target.error);
@@ -1015,6 +1020,8 @@ export const useIndexedDB = () => {
           driveId: '',
           modifiedTime: now,
           localModifiedAt: now,
+          sharedWith: Array.isArray(record.sharedWith) ? record.sharedWith : [],
+          ownerEmail: normOwner,
         });
         addReq.onsuccess = (e) => { loadChannels('addChannel/added'); resolve(e.target.result); };
         addReq.onerror = (e) => reject(e.target.error);
@@ -1132,13 +1139,13 @@ export const useIndexedDB = () => {
 
   // --- Desk operations ---
 
-  const addDesk = useCallback((name) => {
+  const addDesk = useCallback((name, ownerEmail = '') => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
       const now = new Date();
-      const record = { name, layout: {}, connections: [], driveId: '', modifiedTime: now, localModifiedAt: now, tags: [], sharedWith: [], ownerEmail: '' };
+      const record = { name, layout: {}, connections: [], driveId: '', modifiedTime: now, localModifiedAt: now, tags: [], sharedWith: [], ownerEmail: String(ownerEmail || '').trim().toLowerCase() };
       const req = tx.objectStore(DESKS_STORE).add(record);
       req.onsuccess = (e) => { loadDesks('addDesk'); resolve(e.target.result); };
       req.onerror = (e) => reject(e.target.error);
@@ -1261,11 +1268,21 @@ export const useIndexedDB = () => {
       let tx;
       try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
       const os = tx.objectStore(DESKS_STORE);
+      const incomingOwnerEmail = driveFile.ownerEmail || deskData.ownerEmail || '';
       if (existing) {
         const driveIsNewer = !existing.modifiedTime || new Date(driveFile.modifiedTime) > new Date(existing.modifiedTime);
-        if (!driveIsNewer) { resolve('skipped'); return; }
-        const mt = new Date(driveFile.modifiedTime);
-        const putReq = os.put({ ...existing, ...deskData, driveId: driveFile.driveId, modifiedTime: mt, localModifiedAt: mt });
+        const norm = (arr) => [...new Set((arr || []).map((e) => String(e || '').trim().toLowerCase()).filter(Boolean))].sort().join(',');
+        const sharedWithChanged = norm(existing.sharedWith) !== norm(deskData.sharedWith);
+        const ownerEmailChanged = !!(incomingOwnerEmail && incomingOwnerEmail !== existing.ownerEmail);
+        if (!driveIsNewer && !sharedWithChanged && !ownerEmailChanged) { resolve('skipped'); return; }
+        const mt = driveIsNewer ? new Date(driveFile.modifiedTime) : new Date(existing.modifiedTime);
+        const putReq = os.put({
+          ...existing, ...deskData,
+          driveId: driveFile.driveId,
+          modifiedTime: mt,
+          localModifiedAt: mt,
+          ownerEmail: incomingOwnerEmail || existing.ownerEmail || '',
+        });
         putReq.onsuccess = () => { if (!silent) loadDesks('upsertDriveDesk/updated'); resolve('updated'); };
         putReq.onerror = (e) => reject(e.target.error);
       } else {
@@ -1277,7 +1294,7 @@ export const useIndexedDB = () => {
           localModifiedAt: mt,
           tags: Array.isArray(deskData.tags) ? deskData.tags : [],
           sharedWith: Array.isArray(deskData.sharedWith) ? deskData.sharedWith : [],
-          ownerEmail: driveFile.ownerEmail || '',
+          ownerEmail: incomingOwnerEmail,
         });
         addReq.onsuccess = () => { if (!silent) loadDesks('upsertDriveDesk/added'); resolve('added'); };
         addReq.onerror = (e) => reject(e.target.error);

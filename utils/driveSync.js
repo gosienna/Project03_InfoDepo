@@ -1297,7 +1297,7 @@ export async function pullChangedItems(toPull, {
         const isBinary = !isMarkdown && !isYoutube && !isJson;
 
         if (lazyBooks && isBinary) {
-          const driveFile = { driveId, name: entry.name, mimeType: entry.type, size: entry.size || 0, modifiedTime: entry.modifiedTime, sharedWith: entry.sharedWith || [], tags: entry.tags || [] };
+          const driveFile = { driveId, name: entry.name, mimeType: entry.type, size: entry.size || 0, modifiedTime: entry.modifiedTime, sharedWith: entry.sharedWith || [], tags: entry.tags || [], ...(entry.ownerEmail ? { ownerEmail: entry.ownerEmail } : {}) };
           const action = await upsertDriveBook(driveFile, null);
           if (action === 'added') counts.added++;
           else if (action === 'updated') counts.updated++;
@@ -1337,7 +1337,7 @@ export async function pullChangedItems(toPull, {
         );
         if (!blobRes.ok) { counts.skipped++; batchTick(); continue; }
         let blob = await blobRes.blob();
-        let effectiveFile = { driveId, name: entry.name, mimeType: entry.type, modifiedTime: entry.modifiedTime, sharedWith: entry.sharedWith || [], tags: entry.tags || [] };
+        let effectiveFile = { driveId, name: entry.name, mimeType: entry.type, modifiedTime: entry.modifiedTime, sharedWith: entry.sharedWith || [], tags: entry.tags || [], ...(entry.ownerEmail ? { ownerEmail: entry.ownerEmail } : {}) };
 
         if (isYoutube || isJson) {
           const text = await blob.text();
@@ -1388,6 +1388,18 @@ export async function syncFolderAssetsAndSidecars({
   getAnnotationByDriveId,
   onProgress,
   onBatchComplete,
+  // Optional: fallback scan for content files not tracked by the owner index.
+  // When provided, any EPUB/PDF/TXT/Markdown/Channel/Desk file in the Drive folder
+  // whose driveId is not in indexTrackedDriveIds will be pulled if locally absent
+  // or if the Drive copy is newer.
+  indexTrackedDriveIds,
+  getBookByDriveId,
+  upsertDriveBook,
+  getChannelByDriveId,
+  upsertDriveChannel,
+  getDeskByDriveId,
+  upsertDriveDesk,
+  lazyBooks = false,
 }) {
   const progress = onProgress || (() => {});
   const counts = { added: 0, updated: 0, skipped: 0 };
@@ -1517,6 +1529,114 @@ export async function syncFolderAssetsAndSidecars({
           blob
         ).catch(() => {});
       }
+    }
+  }
+
+  // Phase 5: fallback scan for content files (books, channels, desks) in the Drive
+  // folder that are NOT tracked by the owner index. Catches files backed up before
+  // the index system existed, or manually placed in the folder.
+  if (upsertDriveBook || upsertDriveChannel || upsertDriveDesk) {
+    const tracked = indexTrackedDriveIds instanceof Set ? indexTrackedDriveIds : new Set();
+    const unindexedContent = allDriveFiles.filter(f => {
+      if (!SUPPORTED_MIME_TYPES.includes(f.mimeType)) return false;
+      if (f.name === OWNER_INDEX_FILENAME) return false;
+      if (IMAGE_MIME_TYPES.includes(f.mimeType)) return false;
+      if (isPdfAnnotationSidecarFilename(f.name)) return false;
+      if (isCoverSidecarFilename(f.name)) return false;
+      return !tracked.has(String(f.driveId || '').trim());
+    });
+    console.log('[InfoDepo][Phase5] folder listing:', {
+      allDriveFiles: allDriveFiles.length,
+      trackedByIndex: tracked.size,
+      unindexedContent: unindexedContent.length,
+      fileNames: allDriveFiles.map(f => `${f.name} (${f.mimeType})`),
+    });
+
+    for (const driveFile of unindexedContent) {
+      try {
+        if (driveFile.mimeType === 'application/json') {
+          // Must download to detect type (channel / desk / YouTube / other)
+          const blobRes = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveFile.driveId)}?alt=media`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+          if (!blobRes.ok) { counts.skipped++; batchTick(); continue; }
+          let parsed;
+          try { parsed = JSON.parse(await blobRes.text()); } catch { counts.skipped++; batchTick(); continue; }
+
+          if (parsed._type === CHANNEL_JSON_MARKER && parsed.channelId && upsertDriveChannel) {
+            const existingCh = getChannelByDriveId ? await getChannelByDriveId(driveFile.driveId) : null;
+            const chNewer = !existingCh || !existingCh.modifiedTime
+              || new Date(driveFile.modifiedTime) > new Date(existingCh.modifiedTime);
+            if (!chNewer) { counts.skipped++; batchTick(); continue; }
+            const { _type, ...channelData } = parsed;
+            const action = await upsertDriveChannel(driveFile, channelData);
+            if (action === 'added') counts.added++;
+            else if (action === 'updated') counts.updated++;
+            else counts.skipped++;
+          } else if (parsed._type === DESK_JSON_MARKER && upsertDriveDesk) {
+            const existingDk = getDeskByDriveId ? await getDeskByDriveId(driveFile.driveId) : null;
+            const dkNewer = !existingDk || !existingDk.modifiedTime
+              || new Date(driveFile.modifiedTime) > new Date(existingDk.modifiedTime);
+            if (!dkNewer) { counts.skipped++; batchTick(); continue; }
+            const { _type, ...deskData } = parsed;
+            const action = await upsertDriveDesk(driveFile, deskData);
+            if (action === 'added') counts.added++;
+            else if (action === 'updated') counts.updated++;
+            else counts.skipped++;
+          } else if (parsed.url && /youtube\.com|youtu\.be/.test(parsed.url) && upsertDriveBook) {
+            const existingBook = getBookByDriveId ? await getBookByDriveId(driveFile.driveId) : null;
+            const bookNewer = !existingBook || !existingBook.modifiedTime
+              || new Date(driveFile.modifiedTime) > new Date(existingBook.modifiedTime);
+            if (!bookNewer) { counts.skipped++; batchTick(); continue; }
+            const safeTitle = (parsed.title || 'YouTube Video').replace(/[/\\?%*:|"<>]/g, '-');
+            const ytBlob = new Blob([JSON.stringify(parsed)], { type: 'application/x-youtube' });
+            const effectiveFile = { ...driveFile, name: safeTitle + '.youtube', mimeType: 'application/x-youtube' };
+            const action = await upsertDriveBook(effectiveFile, ytBlob);
+            if (action === 'added') counts.added++;
+            else if (action === 'updated') counts.updated++;
+            else counts.skipped++;
+          } else {
+            counts.skipped++;
+          }
+        } else if (upsertDriveBook) {
+          // Binary or text content file (EPUB, PDF, TXT, Markdown)
+          const existingBook = getBookByDriveId
+            ? await getBookByDriveId(driveFile.driveId)
+            : null;
+          const bookNewer = !existingBook || !existingBook.modifiedTime
+            || new Date(driveFile.modifiedTime) > new Date(existingBook.modifiedTime);
+          if (!bookNewer) { counts.skipped++; batchTick(); continue; }
+
+          const isMarkdown = driveFile.mimeType === 'text/markdown'
+            || /\.(md|markdown|mdown|mkd)$/i.test(driveFile.name);
+          const isBinary = !isMarkdown;
+
+          if (lazyBooks && isBinary) {
+            const action = await upsertDriveBook(driveFile, null);
+            if (action === 'added') counts.added++;
+            else if (action === 'updated') counts.updated++;
+            else counts.skipped++;
+          } else {
+            const blobRes = await fetch(
+              `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveFile.driveId)}?alt=media`,
+              { headers: { Authorization: `Bearer ${accessToken}` } }
+            );
+            if (!blobRes.ok) { counts.skipped++; batchTick(); continue; }
+            const blob = await blobRes.blob();
+            const action = await upsertDriveBook(driveFile, blob);
+            if (action === 'added') counts.added++;
+            else if (action === 'updated') counts.updated++;
+            else counts.skipped++;
+          }
+        } else {
+          counts.skipped++;
+        }
+      } catch (err) {
+        console.warn(`[syncFolderAssetsAndSidecars] non-indexed content failed for "${driveFile.name}":`, err?.message);
+        counts.skipped++;
+      }
+      batchTick();
     }
   }
 

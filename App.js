@@ -485,6 +485,12 @@ const App = () => {
 
   const isEditor = userType === 'master' || userType === 'editor';
   const normalizedUserEmail = String(googleUserEmail || '').trim().toLowerCase();
+  // Desks with ownerEmail set to another user were shared from the owner;
+  // viewers must not mutate them. Empty ownerEmail means viewer-created desk.
+  const currentDeskReadOnly = userType === 'viewer' && !!(
+    currentDesk?.ownerEmail &&
+    String(currentDesk.ownerEmail).trim().toLowerCase() !== normalizedUserEmail
+  );
   const shareableUserEmails = useMemo(() => {
     const all = listAllUserEmails(userConfig).map((email) => String(email || '').trim().toLowerCase()).filter(Boolean);
     if (!all.length) return [];
@@ -499,7 +505,7 @@ const App = () => {
   }, [isEditor, normalizedUserEmail]);
 
   const handleAddDesk = async (name) => {
-    const id = await addDesk(name);
+    const id = await addDesk(name, googleUserEmail);
     const newDesk = { id, name, layout: {}, connections: [] };
     setCurrentDesk(newDesk);
     setMode('desk');
@@ -507,7 +513,7 @@ const App = () => {
   };
 
   const handleCreateDeskForLayout = async (name) => {
-    return await addDesk(name);
+    return await addDesk(name, googleUserEmail);
   };
 
   const inferStore = (name, type) => {
@@ -533,7 +539,7 @@ const App = () => {
   const handleFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    const id = await addItem(file.name, file.type, file);
+    const id = await addItem(file.name, file.type, file, googleUserEmail);
     addToDeskIfActive(inferStore(file.name, file.type), id);
     e.target.value = '';
   };
@@ -541,7 +547,7 @@ const App = () => {
   const handleImageFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    const id = await addItem(file.name, file.type, file);
+    const id = await addItem(file.name, file.type, file, googleUserEmail);
     addToDeskIfActive(inferStore(file.name, file.type), id);
     e.target.value = '';
   };
@@ -771,19 +777,19 @@ const App = () => {
       className: 'hidden',
     }),
     isNewNoteOpen && React.createElement(NewNoteModal, {
-      onSave: async (name, type, data) => { const id = await addItem(name, type, data); addToDeskIfActive('notes', id); },
+      onSave: async (name, type, data) => { const id = await addItem(name, type, data, googleUserEmail); addToDeskIfActive('notes', id); },
       onClose: () => setIsNewNoteOpen(false),
     }),
     isYoutubeOpen && React.createElement(NewYoutubeModal, {
-      onSave: async (name, type, data) => { const id = await addItem(name, type, data); addToDeskIfActive('videos', id); },
+      onSave: async (name, type, data) => { const id = await addItem(name, type, data, googleUserEmail); addToDeskIfActive('videos', id); },
       onClose: () => setIsYoutubeOpen(false),
     }),
     isChannelOpen && React.createElement(NewChannelModal, {
-      onSave: async (channelData) => { const id = await addChannel(channelData); addToDeskIfActive('channel', id); },
+      onSave: async (channelData) => { const id = await addChannel({ ...channelData, ownerEmail: normalizedUserEmail }); addToDeskIfActive('channel', id); },
       onClose: () => setIsChannelOpen(false),
     }),
     isUrlOpen && React.createElement(NewUrlModal, {
-      onSave: async (name, type, data) => { const id = await addItem(name, type, data); addToDeskIfActive('books', id); },
+      onSave: async (name, type, data) => { const id = await addItem(name, type, data, googleUserEmail); addToDeskIfActive('books', id); },
       onClose: () => setIsUrlOpen(false),
     }),
     React.createElement(
@@ -876,7 +882,7 @@ const App = () => {
 
       // Explorer
       mode === 'explorer' && React.createElement(Explorer, {
-        addItem,
+        addItem: (name, type, data) => addItem(name, type, data, googleUserEmail),
         addImage,
         onSaved: () => setMode('library'),
       }),
@@ -900,24 +906,24 @@ const App = () => {
               onSelectItem: handleSelectVideo,
               onSelectChannel: handleSelectChannel,
               onSelectDesk: handleSelectDesk,
-              onUpdateLayout: setDeskLayout,
-              onMigrateDeskLayout: migrateDeskLayout,
-              onUpdateConnections: setDeskConnections,
-              onUpdateTextItems: setDeskTextItems,
-              onDeskModified: (id) => itemBackupFnRef.current?.(id, 'desks'),
-              onRenameDesk: (id, name) => renameItem(id, 'desks', name),
-              onSetTags: (rec, storeName, tags) => setRecordTags(rec.id, storeName, tags),
+              onUpdateLayout: currentDeskReadOnly ? undefined : setDeskLayout,
+              onMigrateDeskLayout: currentDeskReadOnly ? undefined : migrateDeskLayout,
+              onUpdateConnections: currentDeskReadOnly ? undefined : setDeskConnections,
+              onUpdateTextItems: currentDeskReadOnly ? undefined : setDeskTextItems,
+              onDeskModified: currentDeskReadOnly ? undefined : (id) => itemBackupFnRef.current?.(id, 'desks'),
+              onRenameDesk: currentDeskReadOnly ? undefined : (id, name) => renameItem(id, 'desks', name),
+              onSetTags: isEditor ? (rec, storeName, tags) => setRecordTags(rec.id, storeName, tags) : undefined,
               onSetSharedWith: (rec, storeName, emails) =>
                 setSharedWithFnRef.current
                   ? setSharedWithFnRef.current(rec, storeName, emails)
                   : setItemSharedWith(rec.id, storeName, emails),
               canShareRecord: canEditShareForRecord,
               shareableEmails: shareableUserEmails,
-              onRenameItem: (rec, storeName, name) => renameItem(rec.id, storeName, name),
-              onRenameChannel: (rec, storeName, name) => renameItem(rec.id, storeName, name),
-              onSetNoteCoverImage: (v, file) => setNoteCoverImage(v.id, file, v.idbStore || 'books'),
+              onRenameItem: isEditor ? (rec, storeName, name) => renameItem(rec.id, storeName, name) : undefined,
+              onRenameChannel: isEditor ? (rec, storeName, name) => renameItem(rec.id, storeName, name) : undefined,
+              onSetNoteCoverImage: isEditor ? (v, file) => setNoteCoverImage(v.id, file, v.idbStore || 'books') : undefined,
               libraryImages: items.filter((i) => String(i.type || '').startsWith('image/')),
-              readOnly: false,
+              readOnly: currentDeskReadOnly,
               role: userType,
               onOpenNewNote: isEditor ? () => setIsNewNoteOpen(true) : undefined,
               onOpenYoutube: isEditor ? () => setIsYoutubeOpen(true) : undefined,

@@ -8,7 +8,7 @@ import {
   pullChangedItems,
   syncFolderAssetsAndSidecars,
 } from './driveSync.js';
-import { writeOwnerIndex, fetchOwnerIndex } from './ownerIndex.js';
+import { writeOwnerIndex, fetchOwnerIndex, shareIndexWithRecipients } from './ownerIndex.js';
 import { syncSharedFromPeers } from './peerSync.js';
 
 /**
@@ -129,8 +129,19 @@ export async function runOwnerSyncPipeline({
     console.warn('[libraryDriveSync] mergeOwnerIndex failed:', err);
   }
 
+  console.log('[InfoDepo][ownerSync] driveIndex:', driveIndex
+    ? { indexItems: driveIndex.items?.length, ownerEmail: driveIndex.ownerEmail }
+    : null);
+  console.log('[InfoDepo][ownerSync] local state:', {
+    items: (syncItems || []).length,
+    channels: (syncChannels || []).length,
+    desks: (syncDesks || []).length,
+    itemsWithDriveId: (syncItems || []).filter(i => i.driveId).length,
+  });
+
   // Step 2: classify changes by comparing index against local state.
   const { toBackup, toPull } = classifyChanges(driveIndex, syncItems, syncChannels, syncDesks);
+  console.log('[InfoDepo][ownerSync] classify:', { toBackup: toBackup.length, toPull: toPull.length });
 
   // Step 3: backup only the dirty items.
   const backupResult = await backupChangedItems(toBackup, {
@@ -179,6 +190,23 @@ export async function runOwnerSyncPipeline({
     }
   }
 
+  // Always share the index with every current recipient so viewers can discover
+  // it via the sharedWithMe fallback even without folder-level access.
+  // This is idempotent: already-granted permissions are skipped silently.
+  const allRecipients = new Set([
+    ...(syncItems || []).flatMap(i => Array.isArray(i.sharedWith) ? i.sharedWith : []),
+    ...(syncChannels || []).flatMap(c => Array.isArray(c.sharedWith) ? c.sharedWith : []),
+    ...(syncDesks || []).flatMap(d => Array.isArray(d.sharedWith) ? d.sharedWith : []),
+  ].map(e => String(e || '').trim().toLowerCase()).filter(Boolean));
+  if (allRecipients.size > 0) {
+    try {
+      onProgress?.('Sharing index with viewers…');
+      await shareIndexWithRecipients(accessToken, folderId, [...allRecipients]);
+    } catch (err) {
+      console.warn('[libraryDriveSync] shareIndexWithRecipients failed:', err);
+    }
+  }
+
   // Step 5: pull only the changed items identified by the index.
   // upsertDriveBook wrapper adds sharedWith/tags from the index entry (built into pullChangedItems).
   const syncResult = await pullChangedItems(toPull, {
@@ -193,7 +221,13 @@ export async function runOwnerSyncPipeline({
     onBatchComplete,
   });
 
-  // Step 6: sync images and sidecars via a folder listing (not tracked by the index).
+  console.log('[InfoDepo][ownerSync] pullChangedItems result:', syncResult);
+
+  // Step 6: sync images, sidecars, and any content files not tracked by the index
+  // (e.g., files backed up before the index system, or manually placed in Drive).
+  const indexTrackedDriveIds = new Set(
+    (driveIndex?.items || []).map(e => String(e.driveId || '').trim()).filter(Boolean)
+  );
   const assetResult = await syncFolderAssetsAndSidecars({
     accessToken,
     folderId,
@@ -207,6 +241,15 @@ export async function runOwnerSyncPipeline({
     getAnnotationByDriveId,
     onProgress,
     onBatchComplete,
+    // Fallback content sync: picks up files not in the index.
+    indexTrackedDriveIds,
+    getBookByDriveId,
+    upsertDriveBook,
+    getChannelByDriveId,
+    upsertDriveChannel,
+    getDeskByDriveId,
+    upsertDriveDesk,
+    lazyBooks: true,
   });
 
   // Step 7: peer sync (unchanged).
@@ -262,6 +305,15 @@ export async function runViewerDeskSyncPipeline({
   upsertDriveDesk,
   onBatchComplete,
 }) {
+  // Only operate on desks the viewer created themselves. Desks shared from another
+  // owner have ownerEmail set to that owner's email and must not appear in the
+  // viewer's own index or be backed up to the viewer's folder.
+  const viewerEmail = String(ownerEmail || '').trim().toLowerCase();
+  const ownDesks = (desks || []).filter((d) => {
+    const dOwner = String(d.ownerEmail || '').trim().toLowerCase();
+    return !dOwner || dOwner === viewerEmail;
+  });
+
   // Step 1: fetch viewer's Drive index (may be null on first run)
   let driveIndex = null;
   try {
@@ -270,11 +322,11 @@ export async function runViewerDeskSyncPipeline({
     console.warn('[libraryDriveSync] viewer fetchOwnerIndex failed:', err);
   }
 
-  // Step 2: classify — desks only
-  const { toBackup, toPull } = classifyChanges(driveIndex, [], [], desks);
+  // Step 2: classify — viewer's own desks only
+  const { toBackup, toPull } = classifyChanges(driveIndex, [], [], ownDesks);
 
-  // Step 3: backup dirty desks
-  let syncDesks = desks;
+  // Step 3: backup dirty viewer-owned desks
+  let syncDesks = ownDesks;
   const backupResult = await backupChangedItems(toBackup, {
     accessToken,
     folderId,
@@ -291,8 +343,18 @@ export async function runViewerDeskSyncPipeline({
     });
   }
 
-  // Step 4: write viewer index if anything was backed up
-  if (backupResult.updatedEntries.length > 0) {
+  // Step 4: write viewer index (viewer's own desks only).
+  // Also rewrite when the Drive index contains entries not present in ownDesks —
+  // this purges stale shared-desk entries that leaked in before ownerEmail was set correctly.
+  const ownDriveIds = new Set(
+    syncDesks.filter((d) => d.driveId).map((d) => String(d.driveId).trim())
+  );
+  const indexHasStaleEntries = driveIndex && Array.isArray(driveIndex.items) &&
+    driveIndex.items.some((e) => {
+      const did = String(e.driveId || '').trim();
+      return did && !ownDriveIds.has(did);
+    });
+  if (backupResult.updatedEntries.length > 0 || indexHasStaleEntries) {
     try {
       await writeOwnerIndex({ accessToken, folderId, ownerEmail, items: [], channels: [], desks: syncDesks });
     } catch (err) {

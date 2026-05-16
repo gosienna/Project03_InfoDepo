@@ -40,7 +40,7 @@ import {
   resetDriveImplicitUploadToken,
 } from '../utils/driveOAuthImplicitFlowToken.js';
 import { useDriveTileUpload, channelUploadKey } from '../hooks/useDriveTileUpload.js';
-import { backupSingleDesk, syncSingleDeskFromDrive } from '../utils/driveSync.js';
+import { backupSingleDesk, syncSingleDeskFromDrive, pullChangedItems } from '../utils/driveSync.js';
 
 /** Ensures startup background sync runs once per page load (survives React Strict Mode remount). */
 let ownerBackgroundSyncScheduled = false;
@@ -526,10 +526,11 @@ export const Library = ({
   }, [hasCredentials, credentials.clientId, onGoogleUserEmail]);
 
   useEffect(() => {
+    console.log('[InfoDepo][viewerAutoSync] effect fired', { userType, googleUserEmail, hasUserConfig: !!userConfig, done: viewerPeerSyncDoneRef.current, inFlight: syncInFlightRef.current });
     if (userType !== 'viewer') return;
-    if (!googleUserEmail || !userConfig) return;
-    if (viewerPeerSyncDoneRef.current) return;
-    if (syncInFlightRef.current) return;
+    if (!googleUserEmail || !userConfig) { console.log('[InfoDepo][viewerAutoSync] blocked: missing email or userConfig'); return; }
+    if (viewerPeerSyncDoneRef.current) { console.log('[InfoDepo][viewerAutoSync] blocked: already done'); return; }
+    if (syncInFlightRef.current) { console.log('[InfoDepo][viewerAutoSync] blocked: sync in flight'); return; }
     viewerPeerSyncDoneRef.current = true;
 
     let cancelled = false;
@@ -550,6 +551,30 @@ export const Library = ({
           return;
         }
         const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
+
+        // Pull viewer's own desks from their personal Drive folder first so they
+        // appear immediately, before shared content from peers is processed.
+        let deskResult = { backed: 0, backupFailed: 0, added: 0, updated: 0, skipped: 0 };
+        const viewerFolderId = getUserFolderId(googleUserEmail, userConfig);
+        if (viewerFolderId) {
+          setSyncProgress('Loading viewer desks…');
+          deskResult = await runViewerDeskSyncPipeline({
+            accessToken: token,
+            folderId: viewerFolderId,
+            desks,
+            ownerEmail: normalizedUserEmail,
+            onSetDriveId: (id, storeName, driveId, syncMeta = null) =>
+              onSetDriveId(id, storeName, driveId, { ...(syncMeta || {}), silent: true }),
+            onProgress: setSyncProgress,
+            upsertDriveDesk: (driveFile, deskData) =>
+              upsertDriveDesk(driveFile, deskData, { silent: true }),
+            onBatchComplete: loadAll,
+          });
+          if (!cancelled) loadAll();
+        }
+
+        if (cancelled) return;
+        setSyncProgress('Checking shared content from configured users...');
         const peerResult = await syncSharedFromPeers({
           accessToken: token,
           myEmail: googleUserEmail,
@@ -571,19 +596,34 @@ export const Library = ({
           lazyBooks: true,
           onBatchComplete: loadAll,
         });
+
+        // Also try the viewer's linked driveFolderId as a direct owner folder.
+        // This handles the common case where the viewer entered the owner's folder
+        // at setup but the config does not have the owner's folderId recorded.
+        let linkedResult = { added: 0, updated: 0, skipped: 0 };
+        if (!cancelled && driveFolderId) {
+          setSyncProgress('Checking linked Drive folder for shared content…');
+          try {
+            linkedResult = await pullSharedFromLinkedFolder(token, driveFolderId, googleUserEmail);
+            if (linkedResult.added > 0 || linkedResult.updated > 0) loadAll();
+          } catch (err) {
+            console.warn('[InfoDepo][viewerSync] linked folder pull failed:', err?.message);
+          }
+        }
+
         if (!cancelled) {
-          console.log('[InfoDepo][viewer-sync] peerSync complete', peerResult, '— calling loadAll');
+          console.log('[InfoDepo][viewer-sync] peerSync complete', peerResult, 'linkedFolder:', linkedResult, '— calling loadAll');
           loadAll();
           setSyncResult({
             sharedFor: googleUserEmail,
-            backed: 0,
-            backupFailed: 0,
-            added: peerResult.added,
-            updated: peerResult.updated,
-            skipped: peerResult.skipped,
+            backed: deskResult.backed,
+            backupFailed: deskResult.backupFailed,
+            added: deskResult.added + peerResult.added + linkedResult.added,
+            updated: (deskResult.updated || 0) + (peerResult.updated || 0) + (linkedResult.updated || 0),
+            skipped: deskResult.skipped,
             removed: peerResult.removed || 0,
             failed: peerResult.failed,
-            peerAdded: peerResult.added,
+            peerAdded: peerResult.added + linkedResult.added,
             peerRemoved: peerResult.removed || 0,
             peerFailed: peerResult.failed,
           });
@@ -635,9 +675,63 @@ export const Library = ({
     onDriveCredentialsChanged?.();
   };
 
+  // Pull items shared with viewerEmail from the owner's index in the given folderId.
+  // Used when the viewer has the owner's folder linked but it's not in the config.
+  const pullSharedFromLinkedFolder = async (accessToken, folderId, viewerEmail) => {
+    const counts = { added: 0, updated: 0, skipped: 0 };
+    if (!folderId || !viewerEmail) return counts;
+    const index = await fetchOwnerIndex({ accessToken, folderId });
+    if (!index || !Array.isArray(index.items)) return counts;
+    const ownerEmail = String(index.ownerEmail || '').trim().toLowerCase();
+    const me = viewerEmail.trim().toLowerCase();
+    if (ownerEmail && ownerEmail === me) return counts; // viewer's own folder; already handled
+    console.log('[InfoDepo][viewerSync] linked folder index:', { ownerEmail, totalItems: index.items.length });
+
+    const sharedWithMe = index.items.filter(entry =>
+      Array.isArray(entry.sharedWith) &&
+      entry.sharedWith.some(e => String(e).trim().toLowerCase() === me)
+    );
+    console.log('[InfoDepo][viewerSync] items shared with me from linked folder:', sharedWithMe.length);
+    if (!sharedWithMe.length) return counts;
+
+    // Freshness check: only pull items absent from IDB or where Drive is newer.
+    // Inject ownerEmail so upsertDriveBook stores it correctly for future pruning.
+    const toPull = [];
+    for (const entry of sharedWithMe) {
+      const did = String(entry.driveId || '').trim();
+      if (!did) continue;
+      let existing = await getBookByDriveId(did);
+      if (!existing && entry.type === 'infodepo-channel') existing = await getChannelByDriveId(did);
+      if (!existing && entry.type === 'infodepo-desk') existing = await getDeskByDriveId(did);
+      if (!existing || !existing.modifiedTime || !entry.modifiedTime ||
+          new Date(entry.modifiedTime) > new Date(existing.modifiedTime)) {
+        toPull.push(ownerEmail ? { ...entry, ownerEmail } : entry);
+      }
+    }
+    console.log('[InfoDepo][viewerSync] toPull from linked folder:', toPull.length);
+    if (!toPull.length) return counts;
+
+    const r = await pullChangedItems(toPull, {
+      accessToken,
+      upsertDriveBook: (driveFile, blob, assets) =>
+        upsertDriveBook(driveFile, blob, assets, { silent: true }),
+      upsertDriveChannel: (driveFile, channelData) =>
+        upsertDriveChannel(driveFile, channelData, { silent: true }),
+      upsertDriveDesk: (driveFile, deskData) =>
+        upsertDriveDesk(driveFile, deskData, { silent: true }),
+      lazyBooks: true,
+      onProgress: setSyncProgress,
+      onBatchComplete: loadAll,
+    });
+    return r;
+  };
+
   const runOwnerSync = async () => {
-    if (userType === 'viewer') return;
-    if (!hasCredentials || syncInFlightRef.current) return;
+    console.log('[InfoDepo][ownerSync] runOwnerSync called', { userType, hasCredentials, inFlight: syncInFlightRef.current, driveFolderId });
+    if (userType === 'viewer') { console.log('[InfoDepo][ownerSync] blocked: userType=viewer'); return; }
+    if (!hasCredentials) { console.log('[InfoDepo][ownerSync] blocked: no credentials'); return; }
+    if (syncInFlightRef.current) { console.log('[InfoDepo][ownerSync] blocked: sync already in flight'); return; }
+    console.log('[InfoDepo][ownerSync] starting', { userType, driveFolderId, items: items.length, channels: channels.length, desks: desks.length });
     syncInFlightRef.current = true;
     setIsSyncing(true);
     setSyncResult(null);
@@ -704,8 +798,12 @@ export const Library = ({
   };
 
   const runViewerPeerSync = async () => {
-    if (userType !== 'viewer' || syncInFlightRef.current) return;
-    if (!googleUserEmail || !userConfig) return;
+    console.log('[InfoDepo][viewerSync] runViewerPeerSync called', { userType, googleUserEmail, hasUserConfig: !!userConfig, inFlight: syncInFlightRef.current });
+    if (userType !== 'viewer') { console.log('[InfoDepo][viewerSync] blocked: userType is not viewer:', userType); return; }
+    if (syncInFlightRef.current) { console.log('[InfoDepo][viewerSync] blocked: sync already in flight'); return; }
+    if (!googleUserEmail) { console.log('[InfoDepo][viewerSync] blocked: no googleUserEmail'); return; }
+    if (!userConfig) { console.log('[InfoDepo][viewerSync] blocked: userConfig is null (VITE_CONFIG not set?)'); return; }
+    console.log('[InfoDepo][viewerSync] starting', { googleUserEmail, userConfig });
     syncInFlightRef.current = true;
     setIsSyncing(true);
     setSyncResult(null);
@@ -756,17 +854,30 @@ export const Library = ({
         onBatchComplete: loadAll,
         lazyBooks: true,
       });
+
+      // Also check the viewer's linked driveFolderId as a direct owner folder.
+      let linkedResult = { added: 0, updated: 0, skipped: 0 };
+      if (driveFolderId) {
+        setSyncProgress('Checking linked Drive folder for shared content…');
+        try {
+          linkedResult = await pullSharedFromLinkedFolder(token, driveFolderId, googleUserEmail);
+          if (linkedResult.added > 0 || linkedResult.updated > 0) loadAll();
+        } catch (err) {
+          console.warn('[InfoDepo][viewerSync] linked folder pull failed:', err?.message);
+        }
+      }
+
       loadAll();
       setSyncResult({
         sharedFor:    googleUserEmail,
         backed:       deskResult.backed,
         backupFailed: deskResult.backupFailed,
-        added:        deskResult.added + peerResult.added,
-        updated:      (deskResult.updated || 0) + (peerResult.updated || 0),
+        added:        deskResult.added + peerResult.added + linkedResult.added,
+        updated:      (deskResult.updated || 0) + (peerResult.updated || 0) + (linkedResult.updated || 0),
         skipped:      deskResult.skipped,
         removed:      peerResult.removed || 0,
         failed:       peerResult.failed,
-        peerAdded:    peerResult.added,
+        peerAdded:    peerResult.added + linkedResult.added,
         peerRemoved:  peerResult.removed || 0,
         peerFailed:   peerResult.failed,
       });
@@ -845,10 +956,12 @@ export const Library = ({
   });
 
   useEffect(() => {
-    if (!hasCredentials || !String(driveFolderId || '').trim()) return;
-    if (userType !== 'master' && userType !== 'editor') return;
-    if (ownerBackgroundSyncScheduled) return;
+    console.log('[InfoDepo][autoSync] effect fired', { hasCredentials, driveFolderId, userType, ownerBackgroundSyncScheduled });
+    if (!hasCredentials || !String(driveFolderId || '').trim()) { console.log('[InfoDepo][autoSync] blocked: no creds or folder'); return; }
+    if (userType !== 'master' && userType !== 'editor') { console.log('[InfoDepo][autoSync] blocked: userType:', userType); return; }
+    if (ownerBackgroundSyncScheduled) { console.log('[InfoDepo][autoSync] blocked: already scheduled'); return; }
     ownerBackgroundSyncScheduled = true;
+    console.log('[InfoDepo][autoSync] scheduling owner sync');
     // Call directly — no setTimeout so Strict Mode cleanup can't cancel it.
     runOwnerSyncRef.current();
   }, [hasCredentials, driveFolderId, userType]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1337,14 +1450,19 @@ export const Library = ({
               }
               if (row.kind === 'desk') {
                 const d = row.data;
+                const deskIsViewerOwned = !d.ownerEmail ||
+                  String(d.ownerEmail).trim().toLowerCase() === normalizedUserEmail;
+                const canDeleteDesk = isEditor
+                  ? !!onRequestDeleteDesk
+                  : (userType === 'viewer' && deskIsViewerOwned && !!onRequestDeleteDesk);
                 return React.createElement(DataTile, {
                   key: `desk-${d.id}`,
                   tileType: 'desk',
                   desk: d,
                   onSelect: onSelectDesk,
-                  onDelete: isEditor && onRequestDeleteDesk ? handleDeleteDeskRequest : undefined,
+                  onDelete: canDeleteDesk ? handleDeleteDeskRequest : undefined,
                   onRename: isEditor ? (desk, name) => renameItem(desk.id, 'desks', name) : undefined,
-                  readOnly: !isEditor,
+                  readOnly: !isEditor && !deskIsViewerOwned,
                   canShare: isEditor && canEditShareForRecord(d),
                   shareableEmails: shareableUserEmails,
                   onSetSharedWith: isEditor ? (desk, emails) => handleSetSharedWith(desk, 'desks', emails) : undefined,

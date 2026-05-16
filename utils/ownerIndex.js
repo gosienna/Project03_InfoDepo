@@ -189,3 +189,39 @@ async function findIndexFileId(accessToken, folderId) {
 export async function getIndexFileId(accessToken, folderId) {
   return findIndexFileId(accessToken, folderId);
 }
+
+/**
+ * Grant reader access on the owner's index file to every email in `recipients`.
+ * Called after writeOwnerIndex so viewers can discover the index via the
+ * sharedWithMe fallback in fetchOwnerIndex even when they can't list the folder.
+ * Idempotent — already-granted permissions are silently skipped.
+ */
+export async function shareIndexWithRecipients(accessToken, folderId, recipients) {
+  const emails = [...new Set(
+    (recipients || []).map(e => String(e || '').trim().toLowerCase()).filter(Boolean)
+  )];
+  if (!emails.length) return;
+  const fileId = await findIndexFileId(accessToken, folderId);
+  if (!fileId) return;
+  for (const email of emails) {
+    try {
+      const res = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions?sendNotificationEmail=false&fields=id`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'user', role: 'reader', emailAddress: email }),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const msg = err.error?.message || '';
+        if (!/already|duplicate/i.test(msg)) {
+          console.warn('[ownerIndex] shareIndexWithRecipients: grant failed for', email, msg);
+        }
+      }
+    } catch (err) {
+      console.warn('[ownerIndex] shareIndexWithRecipients: error for', email, err?.message);
+    }
+  }
+}
