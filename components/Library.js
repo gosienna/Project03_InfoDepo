@@ -482,6 +482,7 @@ export const Library = ({
 
   const { uploadStatuses, handleUpload, handleChannelUpload } = useDriveTileUpload({
     onSetDriveId,
+    getRecordByDriveId: getBookByDriveId,
     scheduleShareAclReconcile: () => scheduleAclAfterUploadRef.current(),
   });
 

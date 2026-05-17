@@ -9,7 +9,7 @@ import {
   layoutKeysForTempRecord,
   migrateDeskLayoutKeysForV10,
 } from '../utils/deskEntryKeys.js';
-import { makeTempDriveId, migrationTempDriveId, deskLayoutKey } from '../utils/driveRecordKey.js';
+import { makeTempDriveId, migrationTempDriveId, deskLayoutKey, isTempDriveId } from '../utils/driveRecordKey.js';
 
 const BOOKS_STORE    = 'books';
 const NOTES_STORE    = 'notes';
@@ -80,6 +80,42 @@ const storeForNewItem = (name, type) => {
   if (mime === 'text/x-markdown' || mime === 'text/md') return NOTES_STORE;
   if (mime.startsWith('image/')) return IMAGES_STORE;
   return BOOKS_STORE;
+};
+
+const SET_ITEM_DRIVE_ID_STORES = [
+  BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, IMAGES_STORE, CHANNELS_STORE, DESKS_STORE,
+];
+
+const storeCandidatesForSetDriveId = (hint) => {
+  const h = String(hint || '').trim();
+  const rest = SET_ITEM_DRIVE_ID_STORES.filter((s) => s !== h);
+  return h ? [h, ...rest] : [...SET_ITEM_DRIVE_ID_STORES];
+};
+
+/** Find a row by primary key `driveId`, trying the hinted store then other content stores. */
+const getRecordByDriveId = (db, driveId, stores) => {
+  const id = String(driveId || '').trim();
+  if (!id || !db) return Promise.resolve(null);
+  const candidates = stores?.length ? stores : SET_ITEM_DRIVE_ID_STORES;
+  return new Promise((resolve) => {
+    let i = 0;
+    const tryNext = () => {
+      if (i >= candidates.length) {
+        resolve(null);
+        return;
+      }
+      const store = candidates[i++];
+      let tx;
+      try { tx = db.transaction(store, 'readonly'); } catch { tryNext(); return; }
+      const req = tx.objectStore(store).get(id);
+      req.onsuccess = () => {
+        if (req.result) resolve({ store, record: req.result });
+        else tryNext();
+      };
+      req.onerror = () => tryNext();
+    };
+    tryNext();
+  });
 };
 
 const modifiedTimeSortKey = (rec) => {
@@ -852,9 +888,9 @@ export const useIndexedDB = () => {
     const mt = syncMeta?.modifiedTime != null ? new Date(syncMeta.modifiedTime) : undefined;
     const metaPatch = mt ? { modifiedTime: mt, localModifiedAt: mt } : {};
 
-    const remapDesksAndFinish = (tempDriveId, realDriveId, onDone, onErr) => {
+    const remapDesksAndFinish = (contentStore, tempDriveId, realDriveId, onDone, onErr) => {
       const driveKey = deskLayoutKey(realDriveId);
-      const oldKeys = layoutKeysForTempRecord(storeName, tempDriveId);
+      const oldKeys = layoutKeysForTempRecord(contentStore, tempDriveId);
       let tx2;
       try { tx2 = db.transaction(DESKS_STORE, 'readwrite'); } catch {
         onDone(false);
@@ -889,58 +925,96 @@ export const useIndexedDB = () => {
       ga.onerror = () => onDone(false);
     };
 
-    const notify = (remappedDesks) => {
+    const notify = (actualStore, remappedDesks) => {
       if (remappedDesks) {
         if (!silent) loadAll('setItemDriveId/desksRemap');
         else loadDesks('setItemDriveId/desksRemap');
       } else if (!silent) {
-        if (storeName === CHANNELS_STORE) loadChannels('setItemDriveId');
-        else if (storeName === DESKS_STORE) loadDesks('setItemDriveId');
+        if (actualStore === CHANNELS_STORE) loadChannels('setItemDriveId');
+        else if (actualStore === DESKS_STORE) loadDesks('setItemDriveId');
         else loadItems('setItemDriveId');
       }
     };
 
-    return new Promise((resolve, reject) => {
-      let tx;
-      try { tx = db.transaction(storeName, 'readwrite'); } catch (err) { reject(err); return; }
-      const os = tx.objectStore(storeName);
-      const getRequest = os.get(trimmedOld);
-      getRequest.onsuccess = () => {
-        const existing = getRequest.result;
-        if (!existing) { reject(new Error('Record not found')); return; }
+    const candidates = storeCandidatesForSetDriveId(storeName);
 
-        const finishPromote = (remappedDesks) => {
-          if (trimmedNew && trimmedOld !== trimmedNew) {
-            const isPdf = String(existing.type || '').trim() === 'application/pdf';
-            if (isPdf && storeName !== CHANNELS_STORE && storeName !== DESKS_STORE) {
-              rekeyPdfAnnotationSidecarOnPromote(db, trimmedOld, trimmedNew, storeName);
-            }
-          }
-          notify(remappedDesks);
-          resolve();
-        };
+    return getRecordByDriveId(db, trimmedOld, candidates)
+      .then((found) => {
+        if (!found && trimmedNew && trimmedNew !== trimmedOld) {
+          return getRecordByDriveId(db, trimmedNew, candidates);
+        }
+        return found;
+      })
+      .then((found) => {
+        if (!found) return Promise.reject(new Error('Record not found'));
 
-        if (!trimmedNew || trimmedOld === trimmedNew) {
-          const putRequest = os.put({ ...existing, driveId: trimmedNew || trimmedOld, ...metaPatch });
-          putRequest.onsuccess = () => finishPromote(false);
-          putRequest.onerror = () => reject(putRequest.error);
-          return;
+        const actualStore = found.store;
+        const existing = found.record;
+        const recordKey = String(existing.driveId || '').trim();
+        const shouldRemapDesks = trimmedNew && trimmedOld !== trimmedNew && isTempDriveId(trimmedOld);
+        const mustPromote = Boolean(
+          trimmedNew &&
+          trimmedNew !== recordKey &&
+          (isTempDriveId(recordKey) || isTempDriveId(trimmedOld)),
+        );
+
+        if (!trimmedNew && isTempDriveId(recordKey)) {
+          return Promise.reject(new Error('Google Drive file id missing; cannot promote local record'));
         }
 
-        const { driveId: _d, ...rest } = existing;
-        const promoted = { ...rest, driveId: trimmedNew, ...metaPatch };
-        const delReq = os.delete(trimmedOld);
-        delReq.onsuccess = () => {
-          const putReq = os.put(promoted);
-          putReq.onsuccess = () => {
-            remapDesksAndFinish(trimmedOld, trimmedNew, finishPromote, reject);
+        return new Promise((resolve, reject) => {
+          let tx;
+          try { tx = db.transaction(actualStore, 'readwrite'); } catch (err) { reject(err); return; }
+          const os = tx.objectStore(actualStore);
+
+          const finishPromote = (remappedDesks) => {
+            if (trimmedNew && trimmedOld !== trimmedNew && mustPromote) {
+              const isPdf = String(existing.type || '').trim() === 'application/pdf';
+              if (isPdf && actualStore !== CHANNELS_STORE && actualStore !== DESKS_STORE) {
+                rekeyPdfAnnotationSidecarOnPromote(db, trimmedOld, trimmedNew, actualStore);
+              }
+            }
+            notify(actualStore, remappedDesks);
+            resolve();
           };
-          putReq.onerror = () => reject(putReq.error);
-        };
-        delReq.onerror = () => reject(delReq.error);
-      };
-      getRequest.onerror = () => reject(getRequest.error);
-    });
+
+          if (!mustPromote) {
+            const putRequest = os.put({
+              ...existing,
+              driveId: trimmedNew || recordKey,
+              ...metaPatch,
+            });
+            putRequest.onsuccess = () => {
+              if (shouldRemapDesks) {
+                remapDesksAndFinish(actualStore, trimmedOld, trimmedNew, finishPromote, reject);
+              } else {
+                finishPromote(false);
+              }
+            };
+            putRequest.onerror = () => reject(putRequest.error);
+            return;
+          }
+
+          const { driveId: _d, ...rest } = existing;
+          const promoted = { ...rest, driveId: trimmedNew, ...metaPatch };
+          const delReq = os.delete(recordKey);
+          delReq.onsuccess = () => {
+            const putReq = os.put(promoted);
+            putReq.onsuccess = () => {
+              if (trimmedOld && trimmedOld !== recordKey && trimmedOld !== trimmedNew) {
+                try {
+                  os.delete(trimmedOld);
+                } catch {
+                  /* best-effort ghost cleanup */
+                }
+              }
+              remapDesksAndFinish(actualStore, trimmedOld, trimmedNew, finishPromote, reject);
+            };
+            putReq.onerror = () => reject(putReq.error);
+          };
+          delReq.onerror = () => reject(delReq.error);
+        });
+      });
   }, [db, loadAll, loadItems, loadChannels, loadDesks]);
 
   // --- Drive sync operations (books + notes stores) ---
@@ -2006,12 +2080,23 @@ export const useIndexedDB = () => {
       for (const { row, storeName } of candidates) {
         if (totalUsed <= limitBytes) break;
         const freed = row.size || 0;
+        const key = String(row.driveId || '').trim();
+        if (!key) continue;
         await new Promise(resolve => {
           let tx;
           try { tx = db.transaction(storeName, 'readwrite'); } catch { resolve(); return; }
-          const p = tx.objectStore(storeName).put({ ...row, data: null, size: 0 });
-          p.onsuccess = () => resolve();
-          p.onerror   = () => resolve();
+          const os = tx.objectStore(storeName);
+          const g = os.get(key);
+          g.onsuccess = () => {
+            if (!g.result) {
+              resolve();
+              return;
+            }
+            const p = os.put({ ...g.result, data: null, size: 0 });
+            p.onsuccess = () => resolve();
+            p.onerror = () => resolve();
+          };
+          g.onerror = () => resolve();
         });
         totalUsed -= freed;
         evicted = true;

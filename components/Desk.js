@@ -702,6 +702,7 @@ export const Desk = ({
   onOpenFile,
   onOpenUrl,
   onSetItemDriveId,
+  getBookByDriveId,
   onRequestDeleteItem,
   onRequestDeleteChannel,
   onCreateDesk,
@@ -709,6 +710,7 @@ export const Desk = ({
 }) => {
   const { uploadStatuses, handleUpload, handleChannelUpload } = useDriveTileUpload({
     onSetDriveId: onSetItemDriveId || (async () => {}),
+    getRecordByDriveId: getBookByDriveId,
     scheduleShareAclReconcile: undefined,
   });
 

@@ -935,6 +935,7 @@ const App = () => {
               onOpenFile: isEditor ? () => fileInputRef.current?.click() : undefined,
               onOpenUrl: isEditor ? () => setIsUrlOpen(true) : undefined,
               onSetItemDriveId: isEditor ? setItemDriveId : undefined,
+              getBookByDriveId,
               onRequestDeleteItem: isEditor ? handleRequestDeleteItem : undefined,
               onRequestDeleteChannel: isEditor ? handleRequestDeleteChannel : undefined,
               onCreateDesk: isEditor ? handleCreateDeskForLayout : undefined,

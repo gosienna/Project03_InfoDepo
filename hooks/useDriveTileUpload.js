@@ -10,6 +10,7 @@ import { OWNER_DRIVE_SCOPE } from '../utils/driveScopes.js';
 import { CHANNEL_JSON_MARKER } from '../utils/driveSync.js';
 import { libraryItemKey } from '../utils/libraryItemKey.js';
 import { cloneBlobForNetwork } from '../utils/cloneBlobForNetwork.js';
+import { isTempDriveId } from '../utils/driveRecordKey.js';
 
 export const channelUploadKey = (ch) => `channel-${ch?.id}`;
 
@@ -30,7 +31,7 @@ window.addEventListener('beforeunload', onBeforeUnload);
  * Google Drive multipart upload for library items and channel JSON, with per-tile status.
  * Used by Library and Desk so canvas tiles match grid upload behavior.
  */
-export function useDriveTileUpload({ onSetDriveId, scheduleShareAclReconcile }) {
+export function useDriveTileUpload({ onSetDriveId, getRecordByDriveId, scheduleShareAclReconcile }) {
   const [uploadStatuses, setUploadStatuses] = useState({});
   const credentials = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
@@ -57,26 +58,46 @@ export function useDriveTileUpload({ onSetDriveId, scheduleShareAclReconcile }) 
       setStatus(uKey, 'uploading');
       activeUploads++;
       try {
-        const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
-        const isYoutube = video.type === 'application/x-youtube';
-        const driveName = isYoutube ? video.name.replace(/\.youtube$/i, '.json') : video.name;
-        const driveMime = isYoutube ? 'application/json' : (video.type || 'application/octet-stream');
-        const metadata = {
-          name: driveName,
-          mimeType: driveMime,
-          parents: [driveFolderId],
-        };
+        let uploadItem = video;
+        if (
+          (uploadItem.data == null || uploadItem.size === 0) &&
+          typeof getRecordByDriveId === 'function' &&
+          uploadItem.driveId
+        ) {
+          const fresh = await getRecordByDriveId(uploadItem.driveId);
+          if (fresh?.data) {
+            uploadItem = {
+              ...uploadItem,
+              data: fresh.data,
+              size: fresh.size ?? fresh.data.size ?? 0,
+              idbStore: uploadItem.idbStore || fresh.idbStore,
+            };
+          }
+        }
+        if (isTempDriveId(uploadItem.driveId) && uploadItem.data == null) {
+          throw new Error(
+            'File data is not on this device (storage was cleared). Re-import the file, then upload again.',
+          );
+        }
 
-        const fileBody = await cloneBlobForNetwork(video.data, driveMime);
+        const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
+        const isYoutube = uploadItem.type === 'application/x-youtube';
+        const driveName = isYoutube ? uploadItem.name.replace(/\.youtube$/i, '.json') : uploadItem.name;
+        const driveMime = isYoutube ? 'application/json' : (uploadItem.type || 'application/octet-stream');
+        const existingDriveId = String(uploadItem.driveId || '').trim();
+        const hasRealDriveId = existingDriveId && !isTempDriveId(existingDriveId);
+        const metadata = hasRealDriveId
+          ? { name: driveName, mimeType: driveMime }
+          : { name: driveName, mimeType: driveMime, parents: [driveFolderId] };
+
+        const fileBody = await cloneBlobForNetwork(uploadItem.data, driveMime);
         const form = new FormData();
         form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
         form.append('file', fileBody);
-
-        const existingDriveId = String(video.driveId || '').trim();
-        const uploadUrl = existingDriveId
+        const uploadUrl = hasRealDriveId
           ? `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(existingDriveId)}?uploadType=multipart&fields=id,name,modifiedTime`
           : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime';
-        const uploadMethod = existingDriveId ? 'PATCH' : 'POST';
+        const uploadMethod = hasRealDriveId ? 'PATCH' : 'POST';
         const res = await fetch(uploadUrl, {
           method: uploadMethod,
           headers: { Authorization: `Bearer ${token}` },
@@ -89,7 +110,18 @@ export function useDriveTileUpload({ onSetDriveId, scheduleShareAclReconcile }) 
         }
 
         const driveFile = await res.json();
-        await onSetDriveId(video.driveId, video.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
+        const newDriveId = String(driveFile?.id || '').trim();
+        if (!newDriveId) {
+          throw new Error('Drive upload succeeded but response did not include a file id');
+        }
+        const storeHint =
+          uploadItem.idbStore ||
+          (uploadItem.type === 'text/markdown' ? 'notes'
+            : uploadItem.type === 'application/x-youtube' ? 'videos'
+              : 'books');
+        await onSetDriveId(uploadItem.driveId, storeHint, newDriveId, {
+          modifiedTime: driveFile.modifiedTime,
+        });
         setStatus(uKey, 'success');
         if (typeof scheduleShareAclReconcile === 'function') scheduleShareAclReconcile();
       } catch (err) {
@@ -101,13 +133,13 @@ export function useDriveTileUpload({ onSetDriveId, scheduleShareAclReconcile }) 
         activeUploads--;
       }
     },
-    [credentials.clientId, driveFolderId, onSetDriveId, scheduleShareAclReconcile, setStatus],
+    [credentials.clientId, driveFolderId, getRecordByDriveId, onSetDriveId, scheduleShareAclReconcile, setStatus],
   );
 
   const handleChannelUpload = useCallback(
     async (ch) => {
       const uKey = channelUploadKey(ch);
-      if (ch.driveId) {
+      if (ch.driveId && !isTempDriveId(ch.driveId)) {
         setStatus(uKey, 'success');
         return;
       }
@@ -141,7 +173,11 @@ export function useDriveTileUpload({ onSetDriveId, scheduleShareAclReconcile }) 
         }
 
         const driveFile = await res.json();
-        await onSetDriveId(ch.driveId, 'channels', driveFile.id, { modifiedTime: driveFile.modifiedTime });
+        const newDriveId = String(driveFile?.id || '').trim();
+        if (!newDriveId) {
+          throw new Error('Drive upload succeeded but response did not include a file id');
+        }
+        await onSetDriveId(ch.driveId, 'channels', newDriveId, { modifiedTime: driveFile.modifiedTime });
         setStatus(uKey, 'success');
         if (typeof scheduleShareAclReconcile === 'function') scheduleShareAclReconcile();
       } catch (err) {
