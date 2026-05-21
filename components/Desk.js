@@ -462,7 +462,7 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
       const key = itemEntryKey(item);
       if (inLayout.has(key)) continue;
       const itemOwner = String(item.ownerEmail || '').trim().toLowerCase();
-      if (itemOwner && itemOwner === normalizedUserEmail) continue;
+      if (itemOwner && itemOwner !== normalizedUserEmail) continue;
       const label = (item.name || '').replace(/\.youtube$/i, '');
       rows.push({ key, label, sub: item.idbStore, tags: item.tags || [], lastVisitedAt: item.lastVisitedAt });
     }
@@ -470,7 +470,7 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
       const key = channelEntryKey(ch);
       if (inLayout.has(key)) continue;
       const chOwner = String(ch.ownerEmail || '').trim().toLowerCase();
-      if (chOwner && chOwner === normalizedUserEmail) continue;
+      if (chOwner && chOwner !== normalizedUserEmail) continue;
       rows.push({ key, label: ch.name || ch.handle || '', sub: 'channel', tags: ch.tags || [], lastVisitedAt: ch.lastVisitedAt });
     }
     for (const d of (desks || [])) {
@@ -478,7 +478,7 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
       const key = deskEntryKey(d);
       if (inLayout.has(key)) continue;
       const deskOwner = String(d.ownerEmail || '').trim().toLowerCase();
-      if (deskOwner && deskOwner === normalizedUserEmail) continue;
+      if (deskOwner && deskOwner !== normalizedUserEmail) continue;
       rows.push({ key, label: d.name || 'Untitled Desk', sub: 'desk', tags: d.tags || [], lastVisitedAt: d.lastVisitedAt });
     }
     rows.sort((a, b) => {
