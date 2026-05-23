@@ -1286,7 +1286,7 @@ export const useIndexedDB = () => {
           ownerEmail: normOwner,
         });
         putReq.onsuccess = () => { loadChannels('addChannel/added'); resolve(driveId); };
-        addReq.onerror = (e) => reject(e.target.error);
+        putReq.onerror = (e) => reject(e.target.error);
       };
       existingByChannelReq.onerror = (e) => reject(e.target.error);
     });
