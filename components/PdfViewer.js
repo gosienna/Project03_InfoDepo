@@ -24,7 +24,7 @@ async function renderPageToCanvas(page, containerWidth, rotationDeg = 0) {
   canvas.height = Math.floor(viewport.height);
   canvas.style.width = `${viewport.width / outputScale}px`;
   canvas.style.height = `${viewport.height / outputScale}px`;
-  canvas.className = 'max-w-full shadow-md rounded bg-white';
+  canvas.className = 'shadow-md rounded bg-white';
 
   await page.render({ canvasContext: ctx, viewport }).promise;
   return { canvas, userScale, outputScale, viewportCss: page.getViewport({ scale: userScale, rotation: rotationDeg }) };
@@ -82,6 +82,115 @@ function readingPositionWithoutPdfAnnotations(rp) {
   return rest;
 }
 
+const PDF_VIEW_ZOOM_MIN = 0.5;
+const PDF_VIEW_ZOOM_MAX = 4;
+const PDF_VIEW_ZOOM_STEP = 0.1;
+const PDF_VIEW_PAN_STEP = 48;
+
+function isEditableEventTarget(target) {
+  if (!target || typeof target !== 'object') return false;
+  const tag = String(target.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
+}
+
+function refreshWindowScrollMode(mount, useWindowScrollRef) {
+  if (!mount) return;
+  useWindowScrollRef.current = !(mount.scrollHeight > mount.clientHeight + 2);
+}
+
+function readScrollPos(mount, useWindow) {
+  if (useWindow) return { left: window.scrollX, top: window.scrollY };
+  return { left: mount.scrollLeft, top: mount.scrollTop };
+}
+
+function writeScrollPos(mount, useWindow, left, top) {
+  if (useWindow) window.scrollTo(left, top);
+  else {
+    mount.scrollLeft = left;
+    mount.scrollTop = top;
+  }
+}
+
+function panScrollBy(mount, useWindow, dx, dy) {
+  if (useWindow) window.scrollBy(dx, dy);
+  else {
+    mount.scrollLeft += dx;
+    mount.scrollTop += dy;
+  }
+}
+
+function computeEffectivePageWidth(mount, twoPageMode, zoom) {
+  const baseW = mount?.clientWidth || mount?.parentElement?.clientWidth || window.innerWidth;
+  const perPage = twoPageMode !== 'off' ? Math.ceil(baseW / 2) : baseW;
+  return perPage * (zoom > 0 ? zoom : 1);
+}
+
+function mountPageCanvasInWrapper(wrapper, canvas, textLayer) {
+  const oldCanvas = wrapper.querySelector('canvas');
+  if (oldCanvas) wrapper.removeChild(oldCanvas);
+  const oldText = wrapper.querySelector('.pdf-text-layer');
+  if (oldText) wrapper.removeChild(oldText);
+  wrapper.insertBefore(canvas, wrapper.firstChild);
+  if (textLayer) wrapper.insertBefore(textLayer, canvas.nextSibling);
+  wrapper.style.width = canvas.style.width;
+  wrapper.style.height = canvas.style.height;
+}
+
+/** Keep the content point under (clientX, clientY) fixed while zoom changes. */
+function adjustScrollForZoomAtPointer(mount, useWindowScrollRef, clientX, clientY, oldZoom, newZoom) {
+  if (!mount || oldZoom <= 0 || newZoom === oldZoom) return;
+  refreshWindowScrollMode(mount, useWindowScrollRef);
+  const useWindow = useWindowScrollRef.current;
+  const ratio = newZoom / oldZoom;
+  const rect = mount.getBoundingClientRect();
+  const mx = clientX - rect.left;
+  const my = clientY - rect.top;
+  if (useWindow) {
+    const newLeft = (window.scrollX + mx) * ratio - mx;
+    const newTop = (window.scrollY + my) * ratio - my;
+    window.scrollTo(Math.max(0, newLeft), Math.max(0, newTop));
+  } else {
+    mount.scrollLeft = Math.max(0, (mount.scrollLeft + mx) * ratio - mx);
+    mount.scrollTop = Math.max(0, (mount.scrollTop + my) * ratio - my);
+  }
+}
+
+function clearContentCssZoom(wrap) {
+  if (wrap) wrap.style.zoom = '';
+}
+
+function scaleAnnotationByRatio(ann, ratio) {
+  if (!ann || ratio === 1) return ann;
+  const m = (n) => (typeof n === 'number' && Number.isFinite(n) ? n * ratio : n);
+  if (ann.type === 'highlight') {
+    return { ...ann, x: m(ann.x), y: m(ann.y), w: m(ann.w), h: m(ann.h) };
+  }
+  if (ann.type === 'text') {
+    return { ...ann, x: m(ann.x), y: m(ann.y), fontSize: m(ann.fontSize || 14) };
+  }
+  if (ann.type === 'line') {
+    return {
+      ...ann,
+      x1: m(ann.x1),
+      y1: m(ann.y1),
+      x2: m(ann.x2),
+      y2: m(ann.y2),
+      ...(ann.strokeWidth != null ? { strokeWidth: m(ann.strokeWidth) } : {}),
+    };
+  }
+  if (ann.type === 'draw') {
+    const points = Array.isArray(ann.points)
+      ? ann.points.map((p) => ({ x: m(p.x), y: m(p.y) }))
+      : [];
+    return {
+      ...ann,
+      points,
+      ...(ann.strokeWidth != null ? { strokeWidth: m(ann.strokeWidth) } : {}),
+    };
+  }
+  return ann;
+}
+
 function isExpectedPdfCancellation(err) {
   const name = String(err?.name || '');
   const msg = String(err?.message || '').toLowerCase();
@@ -111,6 +220,7 @@ export const PdfViewer = ({
 }) => {
   const recordDriveId = itemDriveId ?? itemId;
   const containerRef = useRef(null);
+  const contentWrapRef = useRef(null);
   const loadingTaskRef = useRef(null);
   const pdfDocRef = useRef(null);
   const [status, setStatus] = useState('loading');
@@ -351,6 +461,15 @@ export const PdfViewer = ({
   const [restoreMsg, setRestoreMsg] = useState('');
   const restoreMsgTimerRef = useRef(null);
   const [rotationDeg, setRotationDeg] = useState(0);
+  const [viewZoom, setViewZoom] = useState(1);
+  const viewZoomRef = useRef(1);
+  useEffect(() => { viewZoomRef.current = viewZoom; }, [viewZoom]);
+  const pageLayoutBaseRef = useRef({ cssW: 0, cssH: 0 });
+  const renderedPagesRef = useRef(new Set());
+  const zoomRerenderRunRef = useRef(0);
+  const lastZoomRerenderedRef = useRef(1);
+  const pointerOverViewerRef = useRef(false);
+  const middlePanRef = useRef(null); // { startX, startY, scrollLeft, scrollTop }
   const [twoPageMode, setTwoPageMode] = useState('off'); // 'off' | 'even-left' | 'odd-left'
   const [displayPanelOpen, setDisplayPanelOpen] = useState(false);
   const displayTabRef = useRef(null);
@@ -500,9 +619,10 @@ export const PdfViewer = ({
         const containerWidth = await waitForWidth();
         if (cancelled || runId !== runIdRef.current) { cleanupPdf(); return; }
 
+        renderedPagesRef.current = new Set();
         const isTwoPageActive = twoPageMode !== 'off';
-        const baseWidth = mount.clientWidth || containerWidth;
-        const effectiveWidth = isTwoPageActive ? Math.ceil(baseWidth / 2) : baseWidth;
+        const zoom = viewZoomRef.current;
+        const effectiveWidth = computeEffectivePageWidth(mount, twoPageMode, zoom);
 
         // --- Measure page 1 to size all placeholder wrappers ---
         // Most PDFs have uniform page sizes; placeholders give the scroll container
@@ -517,6 +637,10 @@ export const PdfViewer = ({
         const vp1 = page1.getViewport({ scale: userScale1 * outputScale, rotation: rotationDeg });
         const defaultCssW = vp1.width / outputScale;
         const defaultCssH = vp1.height / outputScale;
+        pageLayoutBaseRef.current = {
+          cssW: zoom > 0 ? defaultCssW / zoom : defaultCssW,
+          cssH: zoom > 0 ? defaultCssH / zoom : defaultCssH,
+        };
         page1.cleanup();
 
         if (cancelled || runId !== runIdRef.current) { cleanupPdf(); return; }
@@ -524,6 +648,8 @@ export const PdfViewer = ({
         // --- Build DOM: outer flex container + one placeholder wrapper per page ---
         const wrap = document.createElement('div');
         wrap.className = 'flex flex-col items-center gap-4 py-4 px-2 w-full min-h-full';
+        contentWrapRef.current = wrap;
+        clearContentCssZoom(wrap);
         mount.appendChild(wrap);
 
         const newWrappers = [];
@@ -533,7 +659,8 @@ export const PdfViewer = ({
           const row = document.createElement('div');
           row.style.display = 'flex';
           row.style.gap = '0px';
-          row.style.width = '100%';
+          row.style.width = 'max-content';
+          row.style.minWidth = '100%';
           row.style.alignItems = 'flex-start';
           row.style.justifyContent = 'center';
           row.style.flexWrap = 'nowrap';
@@ -554,6 +681,7 @@ export const PdfViewer = ({
           pageWrapper.style.display = 'inline-block';
           pageWrapper.style.width = `${defaultCssW}px`;
           pageWrapper.style.height = `${defaultCssH}px`;
+          pageWrapper.style.flexShrink = '0';
           pageWrapper.style.background = '#374151';
           pageWrapper.style.borderRadius = '4px';
           pageWrapper.dataset.pdfjsPage = String(i);
@@ -598,6 +726,7 @@ export const PdfViewer = ({
             const t = wrapper.querySelector('.pdf-text-layer');
             if (t) wrapper.removeChild(t);
             renderedPages.delete(pi);
+            renderedPagesRef.current.delete(pi);
           }
         };
 
@@ -611,23 +740,15 @@ export const PdfViewer = ({
             if (cancelled || runId !== runIdRef.current) { renderingPages.delete(pageIndex); return; }
             const { canvas, viewportCss } = await renderPageToCanvas(page, effectiveWidth, rotationDeg);
             if (cancelled || runId !== runIdRef.current) { renderingPages.delete(pageIndex); return; }
-            // Update wrapper size to match actual canvas (handles pages that differ from page 1)
-            wrapper.style.width = canvas.style.width;
-            wrapper.style.height = canvas.style.height;
-            // Remove stale canvas/text layer; leave any SVG annotation portals untouched
-            const oldCanvas = wrapper.querySelector('canvas');
-            if (oldCanvas) wrapper.removeChild(oldCanvas);
-            const oldText = wrapper.querySelector('.pdf-text-layer');
-            if (oldText) wrapper.removeChild(oldText);
-            // Insert before existing children (SVG portals) so z-index layering is correct
-            wrapper.insertBefore(canvas, wrapper.firstChild);
+            let textLayer = null;
             try {
-              const textLayer = await buildTextLayerDiv(page, viewportCss);
-              wrapper.insertBefore(textLayer, canvas.nextSibling);
+              textLayer = await buildTextLayerDiv(page, viewportCss);
             } catch (tlErr) {
               console.warn('PDF text layer failed:', tlErr);
             }
+            mountPageCanvasInWrapper(wrapper, canvas, textLayer);
             renderedPages.add(pageIndex);
+            renderedPagesRef.current.add(pageIndex);
             evictFarPages();
           } catch (err) {
             if (!isExpectedPdfCancellation(err) && !cancelled) {
@@ -681,6 +802,7 @@ export const PdfViewer = ({
     return () => {
       cancelled = true;
       if (lazyObserver) { lazyObserver.disconnect(); lazyObserver = null; }
+      contentWrapRef.current = null;
       clearDom();
       if (pdfDocRef.current) { pdfDocRef.current.destroy().catch(() => {}); pdfDocRef.current = null; }
       if (loadingTaskRef.current) { loadingTaskRef.current.destroy(); loadingTaskRef.current = null; }
@@ -692,7 +814,209 @@ export const PdfViewer = ({
     lastSavedPositionKeyRef.current = null;
     lastKnownPageRef.current = Number(initialReadingPosition?.pdfPage) || 1;
     lastUserScrollAtRef.current = 0;
+    setViewZoom(1);
+    lastZoomRerenderedRef.current = 1;
   }, [data, recordDriveId]);
+
+  // Re-render canvas pages when zoom changes (avoids CSS zoom + max-width stretch in two-page mode).
+  useEffect(() => {
+    const mount = containerRef.current;
+    const pdfDoc = pdfDocRef.current;
+    const layoutBase = pageLayoutBaseRef.current;
+    if (status !== 'ready' || !mount || !pdfDoc || !pageWrappers.length || !layoutBase.cssW) {
+      return undefined;
+    }
+
+    clearContentCssZoom(contentWrapRef.current);
+
+    for (const wrapper of pageWrappers) {
+      wrapper.style.width = `${layoutBase.cssW * viewZoom}px`;
+      wrapper.style.height = `${layoutBase.cssH * viewZoom}px`;
+    }
+
+    const zoomChanged = lastZoomRerenderedRef.current !== viewZoom;
+    lastZoomRerenderedRef.current = viewZoom;
+    if (!zoomChanged) return undefined;
+
+    const runId = ++zoomRerenderRunRef.current;
+    const effectiveWidth = computeEffectivePageWidth(mount, twoPageMode, viewZoom);
+
+    const indices = [...renderedPagesRef.current];
+    if (!indices.length) return undefined;
+
+    let cancelled = false;
+    (async () => {
+      for (const pageIndex of indices) {
+        if (cancelled || runId !== zoomRerenderRunRef.current) return;
+        const wrapper = pageWrappers[pageIndex];
+        if (!wrapper) continue;
+        try {
+          const page = await pdfDoc.getPage(pageIndex + 1);
+          if (cancelled || runId !== zoomRerenderRunRef.current) return;
+          const { canvas, viewportCss } = await renderPageToCanvas(page, effectiveWidth, rotationDeg);
+          if (cancelled || runId !== zoomRerenderRunRef.current) return;
+          let textLayer = null;
+          try {
+            textLayer = await buildTextLayerDiv(page, viewportCss);
+          } catch (tlErr) {
+            console.warn('PDF text layer failed:', tlErr);
+          }
+          mountPageCanvasInWrapper(wrapper, canvas, textLayer);
+        } catch (err) {
+          if (!isExpectedPdfCancellation(err)) {
+            console.warn('Zoom re-render failed:', pageIndex + 1, err);
+          }
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [viewZoom, status, pageWrappers, twoPageMode, rotationDeg]);
+
+  // Wheel = zoom only (never scroll). Middle-button drag / WASD = pan.
+  // Capture on window so page scroll is blocked when the PDF uses window scrolling.
+  useEffect(() => {
+    const mount = containerRef.current;
+    if (!mount || status !== 'ready') return undefined;
+
+    const focusViewer = () => {
+      try { mount.focus({ preventScroll: true }); } catch (_) { mount.focus(); }
+    };
+
+    const onEnter = () => {
+      pointerOverViewerRef.current = true;
+      focusViewer();
+    };
+    const onLeave = () => { pointerOverViewerRef.current = false; };
+
+    const isOverViewer = (e) => {
+      if (mount.contains(e.target)) return true;
+      if (typeof document.elementFromPoint !== 'function') return false;
+      const hit = document.elementFromPoint(e.clientX, e.clientY);
+      return hit != null && mount.contains(hit);
+    };
+
+    const onWheel = (e) => {
+      if (!isOverViewer(e)) return;
+      if (!e.cancelable) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.deltaY === 0) return;
+      const oldZoom = viewZoomRef.current;
+      const dir = e.deltaY > 0 ? -1 : 1;
+      const nextZoom = Math.min(
+        PDF_VIEW_ZOOM_MAX,
+        Math.max(PDF_VIEW_ZOOM_MIN, +(oldZoom + dir * PDF_VIEW_ZOOM_STEP).toFixed(2)),
+      );
+      if (nextZoom === oldZoom) return;
+      const zoomRatio = nextZoom / oldZoom;
+      adjustScrollForZoomAtPointer(mount, useWindowScrollRef, e.clientX, e.clientY, oldZoom, nextZoom);
+      setAnnotations((prev) => prev.map((a) => scaleAnnotationByRatio(a, zoomRatio)));
+      viewZoomRef.current = nextZoom;
+      setViewZoom(nextZoom);
+      lastUserScrollAtRef.current = Date.now();
+    };
+
+    const onMouseDown = (e) => {
+      if (e.button === 0 && isOverViewer(e)) focusViewer();
+      if (e.button !== 1 || toolRef.current !== 'none') return;
+      if (!isOverViewer(e)) return;
+      e.preventDefault();
+      refreshWindowScrollMode(mount, useWindowScrollRef);
+      const useWindow = useWindowScrollRef.current;
+      const pos = readScrollPos(mount, useWindow);
+      middlePanRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        scrollLeft: pos.left,
+        scrollTop: pos.top,
+        useWindow,
+      };
+      mount.style.cursor = 'grabbing';
+    };
+
+    const onMouseMove = (e) => {
+      const pan = middlePanRef.current;
+      if (!pan) return;
+      e.preventDefault();
+      writeScrollPos(
+        mount,
+        pan.useWindow,
+        pan.scrollLeft - (e.clientX - pan.startX),
+        pan.scrollTop - (e.clientY - pan.startY),
+      );
+      lastUserScrollAtRef.current = Date.now();
+    };
+
+    const endMiddlePan = () => {
+      if (!middlePanRef.current) return;
+      middlePanRef.current = null;
+      mount.style.cursor = '';
+    };
+
+    const onMouseUp = (e) => {
+      if (e.button === 1) endMiddlePan();
+    };
+
+    const onAuxClick = (e) => {
+      if (e.button === 1) e.preventDefault();
+    };
+
+    const panByKey = (key) => {
+      refreshWindowScrollMode(mount, useWindowScrollRef);
+      let useWindow = useWindowScrollRef.current;
+      const canPanMountY = mount.scrollHeight > mount.clientHeight + 1;
+      const canPanMountX = mount.scrollWidth > mount.clientWidth + 1;
+      if (!useWindow && !canPanMountY && !canPanMountX) useWindow = true;
+      const step = PDF_VIEW_PAN_STEP;
+      if (key === 'w') panScrollBy(mount, useWindow, 0, -step);
+      else if (key === 's') panScrollBy(mount, useWindow, 0, step);
+      else if (key === 'a') panScrollBy(mount, useWindow, -step, 0);
+      else if (key === 'd') panScrollBy(mount, useWindow, step, 0);
+      else return false;
+      lastUserScrollAtRef.current = Date.now();
+      return true;
+    };
+
+    const viewerHasFocusOrHover = () =>
+      pointerOverViewerRef.current || mount.contains(document.activeElement);
+
+    const onKeyDown = (e) => {
+      if (!viewerHasFocusOrHover()) return;
+      if (isEditableEventTarget(e.target)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const key = e.key.length === 1 ? e.key.toLowerCase() : '';
+      if (!['w', 'a', 's', 'd'].includes(key)) return;
+      if (panByKey(key)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    mount.addEventListener('mouseenter', onEnter);
+    mount.addEventListener('mouseleave', onLeave);
+    window.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    mount.addEventListener('mousedown', onMouseDown);
+    mount.addEventListener('mousemove', onMouseMove);
+    mount.addEventListener('mouseup', onMouseUp);
+    mount.addEventListener('auxclick', onAuxClick);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      mount.removeEventListener('mouseenter', onEnter);
+      mount.removeEventListener('mouseleave', onLeave);
+      window.removeEventListener('wheel', onWheel, { capture: true });
+      mount.removeEventListener('mousedown', onMouseDown);
+      mount.removeEventListener('mousemove', onMouseMove);
+      mount.removeEventListener('mouseup', onMouseUp);
+      mount.removeEventListener('auxclick', onAuxClick);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('keydown', onKeyDown);
+      endMiddlePan();
+    };
+  }, [status]);
 
   useEffect(() => {
     if (status !== 'ready' || didRestoreScrollRef.current) return;
@@ -1559,7 +1883,7 @@ export const PdfViewer = ({
 
   return React.createElement(
     'div',
-    { className: 'relative w-full h-full bg-gray-800 rounded-lg shadow-lg flex flex-col min-h-0' },
+    { className: 'relative w-full flex-1 min-h-0 bg-gray-800 rounded-lg shadow-lg flex flex-col' },
 
     // Top tab for display controls — visible pill that hangs from the top edge
     React.createElement('div', {
@@ -1702,8 +2026,14 @@ export const PdfViewer = ({
               pendingRestorePageRef.current = lastKnownPageRef.current || 1;
               didRestoreScrollRef.current = false;
             }
+            const z = viewZoomRef.current;
+            if (z !== 1) {
+              setAnnotations((prev) => prev.map((a) => scaleAnnotationByRatio(a, 1 / z)));
+            }
             setRotationDeg(0);
             setTwoPageMode('off');
+            setViewZoom(1);
+            lastZoomRerenderedRef.current = 1;
           },
         },
         'Reset display'
@@ -1718,7 +2048,19 @@ export const PdfViewer = ({
             whiteSpace: 'nowrap',
           },
         },
-        `Rotation: ${rotationDeg}°`
+        `Rotation: ${rotationDeg}° · Zoom: ${Math.round(viewZoom * 100)}%`
+      ),
+      React.createElement(
+        'span',
+        {
+          style: {
+            color: '#6b7280',
+            fontSize: 10,
+            paddingLeft: 2,
+            whiteSpace: 'nowrap',
+          },
+        },
+        'Wheel: zoom only · Middle-drag / WASD: pan',
       ),
     ),
 
@@ -1735,7 +2077,16 @@ export const PdfViewer = ({
     ),
     React.createElement('div', {
       ref: containerRef,
-      className: 'flex-1 min-h-0 overflow-auto rounded-lg bg-gray-900 ' + (status === 'error' ? 'hidden' : ''),
+      tabIndex: -1,
+      title: 'Mouse wheel: zoom only (no scroll). Middle-click drag or WASD: pan.',
+      className: 'flex-1 min-h-0 overflow-auto rounded-lg bg-gray-900 outline-none ' + (status === 'error' ? 'hidden' : ''),
+      style: {
+        cursor: tool === 'none' ? 'default' : undefined,
+        overscrollBehavior: 'none',
+        flex: '1 1 0',
+        minHeight: 0,
+        height: 0,
+      },
     }),
 
     // Page-restore toast
