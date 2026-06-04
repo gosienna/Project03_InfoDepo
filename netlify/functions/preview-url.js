@@ -46,9 +46,19 @@ exports.handler = async (event) => {
   let html = await res.text();
   const finalUrl = res.url;
 
-  // Inject <base> so relative paths (CSS, images, links) resolve from the original domain
+  // Inject <base> so relative paths (CSS, images, links) resolve from the original domain.
+  // Also patch history.replaceState/pushState — proxied pages' JS (e.g. Next.js router)
+  // tries to set URLs from the original domain, which throws SecurityError since the
+  // document's actual origin is ours.  The patch silently drops the cross-origin URL.
+  const historyPatch = `<script>
+(function(){
+  var rS=history.replaceState.bind(history),pS=history.pushState.bind(history);
+  history.replaceState=function(s,t,u){try{rS(s,t,u)}catch(e){}};
+  history.pushState=function(s,t,u){try{pS(s,t,u)}catch(e){}};
+})();
+</script>`;
   const baseTag = `<base href="${finalUrl}">`;
-  html = html.replace(/(<head[^>]*>)/i, `$1${baseTag}`);
+  html = html.replace(/(<head[^>]*>)/i, `$1${historyPatch}${baseTag}`);
 
   // Return as HTML from our origin — we intentionally do NOT forward X-Frame-Options
   // or Content-Security-Policy frame-ancestors from the upstream response.
