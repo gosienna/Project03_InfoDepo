@@ -47,14 +47,21 @@ exports.handler = async (event) => {
   const finalUrl = res.url;
 
   // Inject <base> so relative paths (CSS, images, links) resolve from the original domain.
-  // Also patch history.replaceState/pushState — proxied pages' JS (e.g. Next.js router)
-  // tries to set URLs from the original domain, which throws SecurityError since the
-  // document's actual origin is ours.  The patch silently drops the cross-origin URL.
+  // Patch history.replaceState/pushState on the prototype — proxied pages' JS (e.g.
+  // Next.js router) resolves URLs against the <base> domain and passes cross-origin
+  // URLs to replaceState, which throws SecurityError.  We rewrite those URLs to
+  // same-origin paths and fall back to a silent catch.
   const historyPatch = `<script>
 (function(){
-  var rS=history.replaceState.bind(history),pS=history.pushState.bind(history);
-  history.replaceState=function(s,t,u){try{rS(s,t,u)}catch(e){}};
-  history.pushState=function(s,t,u){try{pS(s,t,u)}catch(e){}};
+  var o=window.location.origin;
+  function f(u){
+    if(!u)return u;
+    try{var p=new URL(u,window.location.href);if(p.origin!==o)return p.pathname+p.search+p.hash}catch(e){}
+    return u;
+  }
+  var R=History.prototype.replaceState,P=History.prototype.pushState;
+  History.prototype.replaceState=function(s,t,u){try{R.call(this,s,t,f(u))}catch(e){}};
+  History.prototype.pushState=function(s,t,u){try{P.call(this,s,t,f(u))}catch(e){}};
 })();
 </script>`;
   const baseTag = `<base href="${finalUrl}">`;
