@@ -1,5 +1,6 @@
 /**
- * Desk canvas layout keys: always `drive:{driveId}` where driveId is temp (local:…) or real Google file id.
+ * Desk canvas layout keys: always `drive:{driveId}` where driveId is the permanent local app key.
+ * Google Drive file ids live on records as driveFileId and optionally in layout values.
  */
 import { deskLayoutKey, parseDeskLayoutKey, migrationTempDriveId, isTempDriveId } from './driveRecordKey.js';
 
@@ -13,14 +14,29 @@ export const channelEntryKey = (ch) => deskLayoutKey(trimDrive(ch?.driveId));
 
 export const deskEntryKey = (d) => deskLayoutKey(trimDrive(d?.driveId));
 
-/** Unresolved layout key — upload (temp id) vs sync (real Drive id, not in IDB yet). */
-export function pendingLayoutEntry(key) {
+export function normalizeLayoutPos(pos, driveFileId) {
+  const x = Number(pos?.x) || 0;
+  const y = Number(pos?.y) || 0;
+  const dfid = trimDrive(driveFileId) || trimDrive(pos?.driveFileId);
+  return dfid ? { x, y, driveFileId: dfid } : { x, y };
+}
+
+/** Unresolved layout key — upload (no Drive copy) vs sync (Drive copy, not loaded locally). */
+export function pendingLayoutEntry(key, pos) {
   const driveId = key?.startsWith('drive:') ? parseDeskLayoutKey(key) : '';
+  const dfid = trimDrive(pos?.driveFileId);
+  let kind = 'unknown';
+  if (driveId) {
+    if (isTempDriveId(driveId) && !dfid) kind = 'upload';
+    else if (dfid || !isTempDriveId(driveId)) kind = 'sync';
+    else kind = 'upload';
+  }
   return {
     _entryType: 'pending',
     _layoutKey: key || '',
     _driveId: driveId,
-    _pendingKind: driveId ? (isTempDriveId(driveId) ? 'upload' : 'sync') : 'unknown',
+    _driveFileId: dfid || (!isTempDriveId(driveId) ? driveId : ''),
+    _pendingKind: kind,
   };
 }
 
@@ -32,6 +48,18 @@ function findByDriveId(driveId, items, channels, desks) {
   const ch = (channels || []).find((c) => trimDrive(c?.driveId) === d);
   if (ch) return { ...ch, _entryType: 'channel' };
   const desk = (desks || []).find((x) => trimDrive(x?.driveId) === d);
+  if (desk) return { ...desk, _entryType: 'desk' };
+  return null;
+}
+
+export function findByDriveFileId(driveFileId, items, channels, desks) {
+  const d = trimDrive(driveFileId);
+  if (!d) return null;
+  const item = (items || []).find((i) => trimDrive(i?.driveFileId) === d);
+  if (item) return { ...item, _entryType: 'item' };
+  const ch = (channels || []).find((c) => trimDrive(c?.driveFileId) === d);
+  if (ch) return { ...ch, _entryType: 'channel' };
+  const desk = (desks || []).find((x) => trimDrive(x?.driveFileId) === d);
   if (desk) return { ...desk, _entryType: 'desk' };
   return null;
 }
@@ -108,13 +136,20 @@ function resolveLegacyLayoutKey(key, items, channels, desks) {
 /**
  * Resolve a layout key to a library record (+ _entryType).
  */
-export function resolveLayoutEntry(key, items, channels, desks) {
-  if (!key || typeof key !== 'string') return pendingLayoutEntry(key);
+export function resolveLayoutEntry(key, items, channels, desks, pos) {
+  if (!key || typeof key !== 'string') return pendingLayoutEntry(key, pos);
 
   if (key.startsWith('drive:')) {
     const parsedId = parseDeskLayoutKey(key);
-    if (!parsedId) return pendingLayoutEntry(key);
-    return findByDriveId(parsedId, items, channels, desks) || pendingLayoutEntry(key);
+    if (!parsedId) return pendingLayoutEntry(key, pos);
+    const byLocal = findByDriveId(parsedId, items, channels, desks);
+    if (byLocal) return byLocal;
+    const dfid = trimDrive(pos?.driveFileId) || (!isTempDriveId(parsedId) ? parsedId : '');
+    if (dfid) {
+      const byFile = findByDriveFileId(dfid, items, channels, desks);
+      if (byFile) return byFile;
+    }
+    return pendingLayoutEntry(key, pos);
   }
 
   return resolveLegacyLayoutKey(key, items, channels, desks);
@@ -129,63 +164,126 @@ export function canonicalKeyForEntry(entry) {
 }
 
 /**
- * Remap layout + connection keys to canonical drive:{driveId} (temp → real promotion on desk load).
+ * Cross-device: rewrite layout keys when value.driveFileId matches a local row.
  */
-export function migrateDeskDataKeys(layout, connections, items, channels, desks) {
-  const srcLayout = layout && typeof layout === 'object' ? layout : {};
+export function remapDeskLayoutByDriveFileId(layout, items, channels, desks) {
+  const src = layout && typeof layout === 'object' ? layout : {};
+  const newLayout = { ...src };
   const keyMap = new Map();
-  for (const oldKey of Object.keys(srcLayout)) {
-    const entry = resolveLayoutEntry(oldKey, items, channels, desks);
-    if (!entry || entry._entryType === 'pending') continue;
-    const canon = canonicalKeyForEntry(entry);
-    if (canon && canon !== oldKey) keyMap.set(oldKey, canon);
+  let changed = false;
+
+  for (const [key, rawPos] of Object.entries(src)) {
+    const pos = normalizeLayoutPos(rawPos);
+    if (resolveLayoutEntry(key, items, channels, desks, pos)._entryType !== 'pending') continue;
+    const dfid = trimDrive(pos.driveFileId);
+    if (!dfid) continue;
+    const record = findByDriveFileId(dfid, items, channels, desks);
+    if (!record) continue;
+    const newKey = canonicalKeyForEntry(record);
+    if (!newKey || newKey === key) {
+      if (!rawPos?.driveFileId && pos.driveFileId) {
+        newLayout[key] = pos;
+        changed = true;
+      }
+      continue;
+    }
+    keyMap.set(key, newKey);
+    if (newKey in newLayout) {
+      const prev = newLayout[newKey];
+      if (!prev?.driveFileId && pos.driveFileId) newLayout[newKey] = pos;
+    } else {
+      newLayout[newKey] = pos;
+    }
+    delete newLayout[key];
+    changed = true;
   }
-  if (keyMap.size === 0) return { layout: srcLayout, connections: connections || [], changed: false };
 
-  const newLayout = {};
-  for (const [k, pos] of Object.entries(srcLayout)) {
-    const nk = keyMap.get(k) || k;
-    newLayout[nk] = pos;
-  }
-
-  const conns = Array.isArray(connections) ? connections : [];
-  const newConnections = conns.map((c) => ({
-    ...c,
-    fromKey: keyMap.get(c.fromKey) || c.fromKey,
-    toKey: keyMap.get(c.toKey) || c.toKey,
-  }));
-
-  return { layout: newLayout, connections: newConnections, changed: true };
+  return { layout: newLayout, keyMap, changed };
 }
 
 /**
- * When a record receives a real Drive id, rewrite layout keys on one desk row.
+ * Normalize desk layout + connections to v11: local driveId keys, optional driveFileId in values.
+ * Idempotent — safe on DB upgrade and every desk open.
  */
-export function deskRecordRemapContentKeys(desk, oldKeys, driveKey) {
-  if (!desk || !driveKey || oldKeys.length === 0) return null;
-  const layout = desk.layout && typeof desk.layout === 'object' ? { ...desk.layout } : {};
-  let touched = false;
-  for (const ok of oldKeys) {
-    if (ok === driveKey || !(ok in layout)) continue;
-    const pos = layout[ok];
-    delete layout[ok];
-    layout[driveKey] = pos;
-    touched = true;
+export function normalizeDeskLayoutV11(layout, connections, items, channels, desks) {
+  const srcLayout = layout && typeof layout === 'object' ? layout : {};
+  const keyMap = new Map();
+  const newLayout = {};
+  let changed = false;
+
+  for (const [oldKey, rawPos] of Object.entries(srcLayout)) {
+    let canonicalKey = oldKey;
+    let driveFileId = trimDrive(rawPos?.driveFileId);
+
+    if (oldKey.startsWith('drive:')) {
+      const suffix = parseDeskLayoutKey(oldKey);
+      if (isTempDriveId(suffix)) {
+        canonicalKey = deskLayoutKey(suffix);
+        const record = findByDriveId(suffix, items, channels, desks);
+        if (record && !driveFileId) driveFileId = trimDrive(record.driveFileId);
+      } else {
+        driveFileId = driveFileId || suffix;
+        const record = findByDriveFileId(driveFileId, items, channels, desks)
+          || findByDriveId(suffix, items, channels, desks);
+        if (record) {
+          canonicalKey = deskLayoutKey(record.driveId);
+          if (!trimDrive(record.driveFileId)) driveFileId = suffix;
+        }
+      }
+    } else {
+      const entry = resolveLegacyLayoutKey(oldKey, items, channels, desks);
+      if (entry._entryType !== 'pending') {
+        const canon = canonicalKeyForEntry(entry);
+        if (canon) canonicalKey = canon;
+        if (!driveFileId) driveFileId = trimDrive(entry.driveFileId);
+      }
+    }
+
+    const normPos = normalizeLayoutPos(rawPos, driveFileId);
+    const posChanged = normPos.x !== rawPos?.x || normPos.y !== rawPos?.y
+      || trimDrive(rawPos?.driveFileId) !== (normPos.driveFileId || '');
+    if (canonicalKey !== oldKey || posChanged) changed = true;
+    if (canonicalKey !== oldKey) keyMap.set(oldKey, canonicalKey);
+
+    if (canonicalKey in newLayout) {
+      const prev = newLayout[canonicalKey];
+      if (!prev?.driveFileId && normPos.driveFileId) {
+        newLayout[canonicalKey] = normPos;
+        changed = true;
+      }
+    } else {
+      newLayout[canonicalKey] = normPos;
+    }
   }
-  if (!touched) return null;
-  const connections = (desk.connections || []).map((c) => ({
-    ...c,
-    fromKey: oldKeys.includes(c.fromKey) ? driveKey : c.fromKey,
-    toKey: oldKeys.includes(c.toKey) ? driveKey : c.toKey,
-  }));
-  return { ...desk, layout, connections };
+
+  const cross = remapDeskLayoutByDriveFileId(newLayout, items, channels, desks);
+  if (cross.changed) {
+    changed = true;
+    for (const [ok, nk] of cross.keyMap) keyMap.set(ok, nk);
+  }
+
+  const finalLayout = cross.layout;
+  const conns = Array.isArray(connections) ? connections : [];
+  const applyKey = (k) => {
+    if (keyMap.has(k)) return keyMap.get(k);
+    for (const [ok, nk] of keyMap) {
+      if (k === ok) return nk;
+    }
+    return k;
+  };
+  const newConnections = conns.map((c) => {
+    const fromKey = applyKey(c.fromKey);
+    const toKey = applyKey(c.toKey);
+    if (fromKey !== c.fromKey || toKey !== c.toKey) changed = true;
+    return { ...c, fromKey, toKey };
+  });
+
+  return { layout: finalLayout, connections: newConnections, changed };
 }
 
-/** Keys that refer to a row before promote (eager remap). */
-export function layoutKeysForTempRecord(_storeName, tempDriveId) {
-  const d = trimDrive(tempDriveId);
-  if (!d) return [];
-  return [deskLayoutKey(d)];
+/** @deprecated Use normalizeDeskLayoutV11 */
+export function migrateDeskDataKeys(layout, connections, items, channels, desks) {
+  return normalizeDeskLayoutV11(layout, connections, items, channels, desks);
 }
 
 /** Rewrite legacy layout keys to drive:… during v10 DB upgrade. */

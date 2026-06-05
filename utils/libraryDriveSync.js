@@ -28,6 +28,7 @@ export async function runOwnerSyncPipeline({
   onSetNoteFolderData,
   onProgress,
   getBookByDriveId,
+  getBookByDriveFileId,
   getBookByName,
   upsertDriveBook,
   getImageByDriveId,
@@ -35,8 +36,10 @@ export async function runOwnerSyncPipeline({
   upsertDriveImage,
   getNotes,
   getChannelByDriveId,
+  getChannelByDriveFileId,
   upsertDriveChannel,
   getDeskByDriveId,
+  getDeskByDriveFileId,
   upsertDriveDesk,
   getLocalRecordsByOwnerEmail,
   deleteItemByDriveId,
@@ -71,13 +74,13 @@ export async function runOwnerSyncPipeline({
         (Array.isArray(arr) ? arr : []).map((e) => String(e || '').trim().toLowerCase()).filter(Boolean).sort();
 
       const itemByDriveId = new Map(
-        (items || []).filter((i) => i.driveId).map((i) => [String(i.driveId).trim(), i])
+        (items || []).filter((i) => i.driveFileId).map((i) => [String(i.driveFileId).trim(), i])
       );
       const channelByDriveId = new Map(
-        (channels || []).filter((c) => c.driveId).map((c) => [String(c.driveId).trim(), c])
+        (channels || []).filter((c) => c.driveFileId).map((c) => [String(c.driveFileId).trim(), c])
       );
       const deskByDriveId = new Map(
-        (desks || []).filter((d) => d.driveId).map((d) => [String(d.driveId).trim(), d])
+        (desks || []).filter((d) => d.driveFileId).map((d) => [String(d.driveFileId).trim(), d])
       );
 
       for (const entry of driveIndex.items) {
@@ -108,19 +111,19 @@ export async function runOwnerSyncPipeline({
 
       if (patchedItems.size > 0) {
         syncItems = (items || []).map((item) => {
-          const did = String(item.driveId || '').trim();
+          const did = String(item.driveFileId || '').trim();
           return patchedItems.has(did) ? { ...item, sharedWith: patchedItems.get(did) } : item;
         });
       }
       if (patchedChannels.size > 0) {
         syncChannels = (channels || []).map((ch) => {
-          const did = String(ch.driveId || '').trim();
+          const did = String(ch.driveFileId || '').trim();
           return patchedChannels.has(did) ? { ...ch, sharedWith: patchedChannels.get(did) } : ch;
         });
       }
       if (patchedDesks.size > 0) {
         syncDesks = (desks || []).map((dk) => {
-          const did = String(dk.driveId || '').trim();
+          const did = String(dk.driveFileId || '').trim();
           return patchedDesks.has(did) ? { ...dk, sharedWith: patchedDesks.get(did) } : dk;
         });
       }
@@ -159,27 +162,27 @@ export async function runOwnerSyncPipeline({
   // Patch syncItems/syncChannels/syncDesks with newly assigned driveIds + modifiedTimes
   // so the index write reflects the results of this backup run.
   if (backupResult.updatedEntries.length > 0) {
-    const patchByOldDriveId = new Map(backupResult.updatedEntries.map((e) => [e.oldDriveId, e]));
+    const patchByLocalId = new Map(backupResult.updatedEntries.map((e) => [e.localDriveId, e]));
     syncItems = syncItems.map((i) => {
-      const p = patchByOldDriveId.get(i.driveId);
-      return p ? { ...i, driveId: p.driveId, modifiedTime: p.modifiedTime, ...(p.driveFolderId ? { driveFolderId: p.driveFolderId } : {}) } : i;
+      const p = patchByLocalId.get(i.driveId);
+      return p ? { ...i, driveFileId: p.driveFileId, modifiedTime: p.modifiedTime, ...(p.driveFolderId ? { driveFolderId: p.driveFolderId } : {}) } : i;
     });
     syncChannels = syncChannels.map((c) => {
-      const p = patchByOldDriveId.get(c.driveId);
-      return p ? { ...c, driveId: p.driveId, modifiedTime: p.modifiedTime } : c;
+      const p = patchByLocalId.get(c.driveId);
+      return p ? { ...c, driveFileId: p.driveFileId, modifiedTime: p.modifiedTime } : c;
     });
     syncDesks = syncDesks.map((d) => {
-      const p = patchByOldDriveId.get(d.driveId);
-      return p ? { ...d, driveId: p.driveId, modifiedTime: p.modifiedTime } : d;
+      const p = patchByLocalId.get(d.driveId);
+      return p ? { ...d, driveFileId: p.driveFileId, modifiedTime: p.modifiedTime } : d;
     });
   }
 
   // Step 4: write the owner index when anything was backed up or sharedWith changed.
   const sharedWithPatched = patchedItems.size > 0 || patchedChannels.size > 0 || patchedDesks.size > 0;
   const hasLocalDriveContent =
-    (syncItems || []).some((i) => String(i.driveId || '').trim()) ||
-    (syncChannels || []).some((c) => String(c.driveId || '').trim()) ||
-    (syncDesks || []).some((d) => String(d.driveId || '').trim());
+    (syncItems || []).some((i) => String(i.driveFileId || '').trim()) ||
+    (syncChannels || []).some((c) => String(c.driveFileId || '').trim()) ||
+    (syncDesks || []).some((d) => String(d.driveFileId || '').trim());
 
   if (hasLocalDriveContent && (backupResult.updatedEntries.length > 0 || sharedWithPatched)) {
     try {
@@ -226,7 +229,12 @@ export async function runOwnerSyncPipeline({
   // Step 6: sync images, sidecars, and any content files not tracked by the index
   // (e.g., files backed up before the index system, or manually placed in Drive).
   const indexTrackedDriveIds = new Set(
-    (driveIndex?.items || []).map(e => String(e.driveId || '').trim()).filter(Boolean)
+    [
+      ...(driveIndex?.items || []).map((e) => String(e.driveId || '').trim()),
+      ...(syncItems || []).map((i) => String(i.driveFileId || '').trim()),
+      ...(syncChannels || []).map((c) => String(c.driveFileId || '').trim()),
+      ...(syncDesks || []).map((d) => String(d.driveFileId || '').trim()),
+    ].filter(Boolean)
   );
   const assetResult = await syncFolderAssetsAndSidecars({
     accessToken,
@@ -244,10 +252,13 @@ export async function runOwnerSyncPipeline({
     // Fallback content sync: picks up files not in the index.
     indexTrackedDriveIds,
     getBookByDriveId,
+    getBookByDriveFileId,
     upsertDriveBook,
     getChannelByDriveId,
+    getChannelByDriveFileId,
     upsertDriveChannel,
     getDeskByDriveId,
+    getDeskByDriveFileId,
     upsertDriveDesk,
     lazyBooks: true,
   });
@@ -261,10 +272,13 @@ export async function runOwnerSyncPipeline({
         myEmail: ownerEmail,
         config,
         getBookByDriveId,
+        getBookByDriveFileId,
         upsertDriveBook,
         getChannelByDriveId,
+        getChannelByDriveFileId,
         upsertDriveChannel,
         getDeskByDriveId,
+        getDeskByDriveFileId,
         upsertDriveDesk,
         getLocalRecordsByOwnerEmail,
         deleteItemByDriveId,

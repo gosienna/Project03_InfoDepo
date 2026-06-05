@@ -24,7 +24,7 @@ export async function deleteDriveFilesForMergedItem(accessToken, item, getImages
     // Deleting the folder cascades to the .md file and all asset files inside it.
     push(item.driveFolderId);
   } else {
-    push(item?.driveId);
+    push(item?.driveFileId);
 
     // Legacy: notes without a folder — delete the .md file plus any individually-uploaded images.
     if (isMarkdownType(item?.type) && item?.id != null && typeof getImagesForNote === 'function') {
@@ -47,7 +47,7 @@ export async function deleteDriveFilesForMergedItem(accessToken, item, getImages
  * @param {object} channel
  */
 export async function deleteDriveFilesForChannel(accessToken, channel) {
-  await deleteDriveFile(accessToken, String(channel?.driveId || '').trim());
+  await deleteDriveFile(accessToken, String(channel?.driveFileId || '').trim());
 }
 
 /**
@@ -55,5 +55,5 @@ export async function deleteDriveFilesForChannel(accessToken, channel) {
  * @param {object} desk
  */
 export async function deleteDriveFilesForDesk(accessToken, desk) {
-  await deleteDriveFile(accessToken, String(desk?.driveId || '').trim());
+  await deleteDriveFile(accessToken, String(desk?.driveFileId || '').trim());
 }

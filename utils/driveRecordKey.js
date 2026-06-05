@@ -29,3 +29,8 @@ export function deskLayoutKey(driveId) {
 export function parseDeskLayoutKey(key) {
   return key?.startsWith('drive:') ? key.slice(6).trim() : '';
 }
+
+/** True when the record has been uploaded or synced to Google Drive. */
+export function hasDriveCopy(record) {
+  return Boolean(String(record?.driveFileId || '').trim());
+}

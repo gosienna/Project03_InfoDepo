@@ -9,7 +9,7 @@ import { YoutubeChannelViewer } from './components/YoutubeChannelViewer.js';
 import { Explorer } from './components/Explorer.js';
 import { Desk } from './components/Desk.js';
 import { itemEntryKey, channelEntryKey } from './utils/deskEntryKeys.js';
-import { isTempDriveId } from './utils/driveRecordKey.js';
+import { hasDriveCopy } from './utils/driveRecordKey.js';
 import { useIndexedDB } from './hooks/useIndexedDB.js';
 import { libraryItemKey } from './utils/libraryItemKey.js';
 import { needsGoogleSignIn } from './utils/driveOAuthGateCheck.js';
@@ -61,11 +61,11 @@ const App = () => {
     getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
     setItemDriveId, setNoteFolderData,
     addChannel, deleteChannel, updateChannel,
-    getChannelByDriveId, upsertDriveChannel,
-    getBookByDriveId, getBookByName, upsertDriveBook, updateBookBlob,
+    getChannelByDriveId, getChannelByDriveFileId, upsertDriveChannel,
+    getBookByDriveId, getBookByDriveFileId, getBookByName, upsertDriveBook, updateBookBlob,
     deleteItemByDriveId, deleteChannelByDriveId, getLocalRecordsByOwnerEmail,
     addDesk, deleteDesk, setDeskLayout, setDeskConnections, setDeskTextItems, migrateDeskLayout,
-    getDeskByDriveId, upsertDriveDesk,
+    getDeskByDriveId, getDeskByDriveFileId, upsertDriveDesk,
     setRecordTags,
     setItemSharedWith,
     mergeItemSharedWithByDriveId,
@@ -325,7 +325,7 @@ const App = () => {
           'application/vnd.amazon.ebook', 'application/vnd.amazon.mobi8-ebook'].includes(mime);
     if (isEpub && video.driveId) {
       console.log('[InfoDepo][openItem] epub/mobi', { driveId: video.driveId, store: video.idbStore, hasData: !!video.data });
-      if (!video.data && video.driveId && !isTempDriveId(video.driveId)) {
+      if (!video.data && hasDriveCopy(video)) {
         startProgress(blobKey, video.size);
         let fetchToken = null;
         try {
@@ -340,7 +340,7 @@ const App = () => {
           (async () => {
             try {
               const blob = await fetchWithProgress(
-                `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
+                `https://www.googleapis.com/drive/v3/files/${video.driveFileId}?alt=media`,
                 { Authorization: `Bearer ${fetchToken}` },
                 video.size || 0,
                 (loaded, total) => updateProgress(blobKey, loaded, total),
@@ -367,7 +367,7 @@ const App = () => {
     const isPdf = ext === 'pdf' || mime === 'application/pdf';
     if (isPdf && video.driveId) {
       console.log('[InfoDepo][openItem] pdf', { driveId: video.driveId, store: video.idbStore, hasData: !!video.data });
-      if (!video.data && video.driveId && !isTempDriveId(video.driveId)) {
+      if (!video.data && hasDriveCopy(video)) {
         startProgress(blobKey, video.size);
         let fetchToken = null;
         try {
@@ -382,7 +382,7 @@ const App = () => {
           (async () => {
             try {
               const blob = await fetchWithProgress(
-                `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
+                `https://www.googleapis.com/drive/v3/files/${video.driveFileId}?alt=media`,
                 { Authorization: `Bearer ${fetchToken}` },
                 video.size || 0,
                 (loaded, total) => updateProgress(blobKey, loaded, total),
@@ -407,13 +407,13 @@ const App = () => {
 
     // For non-tab types (TXT, MD, YouTube, images), download blob on demand.
     console.log('[InfoDepo][openItem] non-tab item', { ext, mime, driveId: video.driveId, hasData: !!video.data });
-    if (!video.data && video.driveId && !isTempDriveId(video.driveId)) {
+    if (!video.data && hasDriveCopy(video)) {
       startProgress(blobKey, video.size);
       try {
         const token = await getOwnerDriveAccessToken();
         console.log('[InfoDepo][openItem] non-tab token ready, downloading blob');
         const blob = await fetchWithProgress(
-          `https://www.googleapis.com/drive/v3/files/${video.driveId}?alt=media`,
+          `https://www.googleapis.com/drive/v3/files/${video.driveFileId}?alt=media`,
           { Authorization: `Bearer ${token}` },
           video.size || 0,
           (loaded, total) => updateProgress(blobKey, loaded, total),
@@ -566,10 +566,7 @@ const App = () => {
     userType === 'viewer'
   );
 
-  const recordHasDriveCopy = (rec) => {
-    const d = String(rec?.driveId || '').trim();
-    return d && !isTempDriveId(d);
-  };
+  const recordHasDriveCopy = (rec) => hasDriveCopy(rec);
 
   const handleRequestDeleteChannel = (channel) => {
     if (!recordHasDriveCopy(channel) || !hasDriveLibrarySetup) {
@@ -829,10 +826,13 @@ const App = () => {
           onAddChannel: addChannel,
           onDeleteChannel: deleteChannel,
           getChannelByDriveId,
+          getChannelByDriveFileId,
           upsertDriveChannel,
           getDeskByDriveId,
+          getDeskByDriveFileId,
           upsertDriveDesk,
           getBookByDriveId,
+          getBookByDriveFileId,
           getBookByName,
           upsertDriveBook,
           deleteItemByDriveId,

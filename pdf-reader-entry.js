@@ -8,7 +8,7 @@ import { INFO_DEPO_DB_NAME, INFO_DEPO_DB_VERSION } from './utils/infodepoDb.js';
 import { getDriveCredentials } from './utils/driveCredentials.js';
 import { getStoredAccessToken } from './utils/driveOAuthStorage.js';
 import { OWNER_DRIVE_SCOPE } from './utils/driveScopes.js';
-import { isTempDriveId } from './utils/driveRecordKey.js';
+import { hasDriveCopy } from './utils/driveRecordKey.js';
 
 const PDF_ANNOTATIONS_STORE = 'pdfAnnotations';
 const pdfAnnotationSidecarKey = (itemDriveId, idbStore) => `${idbStore}:${itemDriveId}`;
@@ -213,7 +213,7 @@ function PdfReaderApp() {
 
         let resolvedData = foundItem.data;
 
-        if (!resolvedData && foundItem.driveId && !isTempDriveId(foundItem.driveId)) {
+        if (!resolvedData && hasDriveCopy(foundItem)) {
           const { clientId } = getDriveCredentials();
           const token = clientId ? getStoredAccessToken(clientId, OWNER_DRIVE_SCOPE) : null;
           if (!token) {
@@ -225,7 +225,7 @@ function PdfReaderApp() {
           let blob;
           try {
             blob = await fetchWithProgress(
-              `https://www.googleapis.com/drive/v3/files/${foundItem.driveId}?alt=media`,
+              `https://www.googleapis.com/drive/v3/files/${foundItem.driveFileId}?alt=media`,
               { Authorization: `Bearer ${token}` },
               foundItem.size || 0,
               (loaded, total) => {

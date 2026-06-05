@@ -11,7 +11,7 @@ import {
   channelEntryKey,
   deskEntryKey,
   resolveLayoutEntry,
-  migrateDeskDataKeys,
+  normalizeDeskLayoutV11,
 } from '../utils/deskEntryKeys.js';
 
 const CARD_W = 250;
@@ -766,7 +766,7 @@ export const Desk = ({
     previousDeskIdRef.current = nextDeskId;
     let layout = desk?.layout && typeof desk.layout === 'object' ? desk.layout : {};
     let connections = Array.isArray(desk?.connections) ? desk.connections : [];
-    const migrated = migrateDeskDataKeys(layout, connections, items, channels, desks);
+    const migrated = normalizeDeskLayoutV11(layout, connections, items, channels, desks);
     if (migrated.changed && !readOnly && desk?.driveId != null) {
       layout = migrated.layout;
       connections = migrated.connections;
@@ -786,7 +786,7 @@ export const Desk = ({
       // loadItems() completing after setItemDriveId. Keep the current layoutRef so
       // the tile stays visible (pending-upload state) until items confirm the driveId.
       const hasUnresolvableDriveKey = Object.keys(layout).some(
-        (k) => k.startsWith('drive:') && resolveLayoutEntry(k, items, channels, desks)._entryType === 'pending'
+        (k) => k.startsWith('drive:') && resolveLayoutEntry(k, items, channels, desks, layout[k])._entryType === 'pending'
       );
       // Always apply when switching desks. The unresolved-drive guard is only for
       // same-desk refreshes to avoid briefly hiding tiles during async loads.
@@ -1231,7 +1231,7 @@ export const Desk = ({
     // Propagate desk's sharedWith to the newly added record
     const deskRecipients = Array.isArray(desk?.sharedWith) ? desk.sharedWith : [];
     if (deskRecipients.length > 0 && onSetSharedWith) {
-      const entry = resolveLayoutEntry(key, items, channels, desks);
+      const entry = resolveLayoutEntry(key, items, channels, desks, layoutRef.current[key]);
       if (entry?._entryType && entry._entryType !== 'pending') {
         const storeName =
           entry._entryType === 'channel' ? 'channels'
@@ -1392,7 +1392,7 @@ export const Desk = ({
   const layoutEntries = useMemo(() => {
     const layout = layoutRef.current;
     return Object.entries(layout).map(([key, pos]) => {
-      const entry = resolveLayoutEntry(key, items, channels, desks);
+      const entry = resolveLayoutEntry(key, items, channels, desks, pos);
       return { key, pos, entry };
     });
   }, [renderTick, items, channels, desks]); // eslint-disable-line react-hooks/exhaustive-deps

@@ -21,6 +21,7 @@ import { BookIcon } from './icons/BookIcon.js';
 import { TrashIcon } from './icons/TrashIcon.js';
 import { UploadIcon } from './icons/UploadIcon.js';
 import { normalizeTag } from '../utils/tagUtils.js';
+import { hasDriveCopy } from '../utils/driveRecordKey.js';
 
 const YT_VIDEO_ID_RE = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
 
@@ -1032,7 +1033,7 @@ export const DataTile = ({
         },
         isYoutube ? 'YouTube' : isUrl ? 'URL' : isStandaloneImage ? 'Image' : fileExtension.toUpperCase()
       ),
-      !isChannel && !isDesk && !video.data && video.driveId && (
+      !isChannel && !isDesk && !video.data && hasDriveCopy(video) && (
         dlProgress
           ? React.createElement(
               'div',

@@ -43,7 +43,7 @@ async function uploadIndexPayload(payload, { accessToken, folderId }) {
 export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items, channels, desks }) {
   const entries = [];
   for (const item of items || []) {
-    const did = String(item.driveId || '').trim();
+    const did = String(item.driveFileId || '').trim();
     if (!did) continue;
     entries.push({
       driveId: did,
@@ -57,7 +57,7 @@ export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items
     });
   }
   for (const ch of channels || []) {
-    const did = String(ch.driveId || '').trim();
+    const did = String(ch.driveFileId || '').trim();
     if (!did) continue;
     entries.push({
       driveId: did,
@@ -69,7 +69,7 @@ export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items
     });
   }
   for (const dk of desks || []) {
-    const did = String(dk.driveId || '').trim();
+    const did = String(dk.driveFileId || '').trim();
     if (!did) continue;
     entries.push({
       driveId: did,

@@ -29,10 +29,12 @@ Fetches `_infodepo_index.json` from Drive (one API call). For each entry, compar
 
 | List | Criteria |
 |------|----------|
-| `toBackup` | No `driveId` locally, OR `driveId` not in index, OR `localModifiedAt > indexEntry.modifiedTime` |
-| `toPull` | `indexEntry.modifiedTime > local.modifiedTime`, OR driveId present in index but absent locally |
+| `toBackup` | No `driveFileId` locally, OR `driveFileId` not in index, OR `localModifiedAt > indexEntry.modifiedTime` |
+| `toPull` | `indexEntry.modifiedTime > local.modifiedTime`, OR index Google id absent from local `driveFileId` set |
 
-Items with `idbStore === 'images'` are excluded from `toBackup` (standalone image files are handled by Step 6). Duplicates in `toPull` are deduplicated by `driveId`.
+Items with `idbStore === 'images'` are excluded from `toBackup` (standalone image files are handled by Step 6). Duplicates in `toPull` are deduplicated by index `driveId` (Google file id).
+
+Local records keep a permanent local `driveId`; the owner index still uses Google file ids as `driveId` in JSON entries. Local matching is via `driveFileId`.
 
 ### Step 3 — Backup changed items (`backupChangedItems`)
 
@@ -44,14 +46,14 @@ Uploads only the pre-classified `toBackup` list. Each entry is processed accordi
 | Channels | Serialize with `_type: 'infodepo-channel'`; PATCH or POST |
 | Desks | Delegate to `backupSingleDesk`; PATCH or POST |
 
-PDF annotation sidecars and cover image sidecars iterate the **full** items list (these can become dirty independently of the main blob). Returns `{ backed, failed, updatedEntries }` where `updatedEntries` is `[{ id, storeName, driveId, modifiedTime, driveFolderId? }]`.
+PDF annotation sidecars and cover image sidecars iterate the **full** items list (these can become dirty independently of the main blob). Returns `{ backed, failed, updatedEntries }` where `updatedEntries` is `[{ localDriveId, storeName, driveFileId, modifiedTime, driveFolderId? }]`.
 
-After this step, `syncItems/syncChannels/syncDesks` are patched with the new driveIds and modifiedTimes from `updatedEntries` so the index write in Step 4 is accurate.
+After this step, `syncItems/syncChannels/syncDesks` are patched with new `driveFileId` values and `modifiedTime` from `updatedEntries` (local `driveId` unchanged) so the index write in Step 4 is accurate.
 
 ### Step 4 — Write owner index
 
 Writes `_infodepo_index.json` with the merged + patched state. **Skipped** unless:
-- At least one local item has a `driveId` (guards against overwriting a valid Drive index on first sync), AND
+- At least one local item has a `driveFileId` (guards against overwriting a valid Drive index on first sync), AND
 - Either something was backed up (`backupResult.updatedEntries.length > 0`) OR `sharedWith` was patched in Step 1.
 
 The index entry for each item now includes `driveFolderId` for note bundles, enabling Step 5 to list the correct subfolder without a root folder scan.

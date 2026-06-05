@@ -55,9 +55,9 @@ export const Library = ({
   onAddItem, onSetNoteCoverImage, onDeleteItem, onClearLibrary,
   onSetDriveId, onSetNoteFolderData, onGetAllImages, getImagesForNote,
   onAddChannel, onDeleteChannel,
-  getChannelByDriveId, upsertDriveChannel,
-  getDeskByDriveId, upsertDriveDesk,
-  getBookByDriveId, getBookByName, upsertDriveBook,
+  getChannelByDriveId, getChannelByDriveFileId, upsertDriveChannel,
+  getDeskByDriveId, getDeskByDriveFileId, upsertDriveDesk,
+  getBookByDriveId, getBookByDriveFileId, getBookByName, upsertDriveBook,
   deleteItemByDriveId, deleteChannelByDriveId, getLocalRecordsByOwnerEmail,
   getImageByDriveId, getImageByName, upsertDriveImage, getNotes,
   getPdfAnnotationSidecar,
@@ -138,7 +138,7 @@ export const Library = ({
     driveFolderId.trim()
   );
 
-  const recordHasDriveCopy = (rec) => !!(rec?.driveId && String(rec.driveId).trim());
+  const recordHasDriveCopy = (rec) => !!(rec?.driveFileId && String(rec.driveFileId).trim());
 
   const handleDeleteItemRequest = (video) => {
     if (!recordHasDriveCopy(video) || !hasCredentials) {
@@ -582,12 +582,15 @@ export const Library = ({
           myEmail: googleUserEmail,
           config: userConfig,
           getBookByDriveId,
+          getBookByDriveFileId,
           upsertDriveBook: (driveFile, blob, assets) =>
             upsertDriveBook(driveFile, blob, assets, { silent: true }),
           getChannelByDriveId,
+          getChannelByDriveFileId,
           upsertDriveChannel: (driveFile, channelData) =>
             upsertDriveChannel(driveFile, channelData, { silent: true }),
           getDeskByDriveId,
+          getDeskByDriveFileId,
           upsertDriveDesk: (driveFile, deskData) =>
             upsertDriveDesk(driveFile, deskData, { silent: true }),
           getLocalRecordsByOwnerEmail,
@@ -702,9 +705,16 @@ export const Library = ({
     for (const entry of sharedWithMe) {
       const did = String(entry.driveId || '').trim();
       if (!did) continue;
-      let existing = await getBookByDriveId(did);
-      if (!existing && entry.type === 'infodepo-channel') existing = await getChannelByDriveId(did);
-      if (!existing && entry.type === 'infodepo-desk') existing = await getDeskByDriveId(did);
+      let existing = getBookByDriveFileId ? await getBookByDriveFileId(did) : null;
+      if (!existing) existing = await getBookByDriveId(did);
+      if (!existing && entry.type === 'infodepo-channel') {
+        existing = getChannelByDriveFileId ? await getChannelByDriveFileId(did) : null;
+        if (!existing) existing = await getChannelByDriveId(did);
+      }
+      if (!existing && entry.type === 'infodepo-desk') {
+        existing = getDeskByDriveFileId ? await getDeskByDriveFileId(did) : null;
+        if (!existing) existing = await getDeskByDriveId(did);
+      }
       if (!existing || !existing.modifiedTime || !entry.modifiedTime ||
           new Date(entry.modifiedTime) > new Date(existing.modifiedTime)) {
         toPull.push(ownerEmail ? { ...entry, ownerEmail } : entry);
@@ -756,6 +766,7 @@ export const Library = ({
           onSetNoteFolderData(noteDriveId, folderId, assetDriveIds, { silent: true }),
         onProgress: setSyncProgress,
         getBookByDriveId,
+        getBookByDriveFileId,
         getBookByName,
         upsertDriveBook: (driveFile, blob, assets) =>
           upsertDriveBook(driveFile, blob, assets, { silent: true }),
@@ -764,9 +775,11 @@ export const Library = ({
         upsertDriveImage,
         getNotes,
         getChannelByDriveId,
+        getChannelByDriveFileId,
         upsertDriveChannel: (driveFile, channelData) =>
           upsertDriveChannel(driveFile, channelData, { silent: true }),
         getDeskByDriveId,
+        getDeskByDriveFileId,
         upsertDriveDesk: (driveFile, deskData) =>
           upsertDriveDesk(driveFile, deskData, { silent: true }),
         getLocalRecordsByOwnerEmail,
@@ -839,12 +852,15 @@ export const Library = ({
         myEmail: googleUserEmail,
         config: userConfig,
         getBookByDriveId,
+        getBookByDriveFileId,
         upsertDriveBook: (driveFile, blob, assets) =>
           upsertDriveBook(driveFile, blob, assets, { silent: true }),
         getChannelByDriveId,
+        getChannelByDriveFileId,
         upsertDriveChannel: (driveFile, channelData) =>
           upsertDriveChannel(driveFile, channelData, { silent: true }),
         getDeskByDriveId,
+        getDeskByDriveFileId,
         upsertDriveDesk: (driveFile, deskData) =>
           upsertDriveDesk(driveFile, deskData, { silent: true }),
         getLocalRecordsByOwnerEmail,

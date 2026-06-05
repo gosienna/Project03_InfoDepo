@@ -8,7 +8,7 @@ import { INFO_DEPO_DB_NAME, INFO_DEPO_DB_VERSION } from './utils/infodepoDb.js';
 import { getDriveCredentials } from './utils/driveCredentials.js';
 import { getStoredAccessToken } from './utils/driveOAuthStorage.js';
 import { OWNER_DRIVE_SCOPE } from './utils/driveScopes.js';
-import { isTempDriveId } from './utils/driveRecordKey.js';
+import { hasDriveCopy } from './utils/driveRecordKey.js';
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -164,7 +164,7 @@ function EpubReaderApp() {
         document.title = (item.name || 'EPUB Reader') + ' — InfoDepo';
         console.log('[InfoDepo][epub-reader] item loaded', { name: item.name, hasData: !!item.data, driveId: item.driveId, size: item.size });
 
-        if (!item.data && item.driveId && !isTempDriveId(item.driveId)) {
+        if (!item.data && hasDriveCopy(item)) {
           const { clientId } = getDriveCredentials();
           const token = clientId ? getStoredAccessToken(clientId, OWNER_DRIVE_SCOPE) : null;
           console.log('[InfoDepo][epub-reader] lazy blob — token check', { clientId: clientId?.slice(0, 10), hasToken: !!token });
@@ -179,7 +179,7 @@ function EpubReaderApp() {
           let blob;
           try {
             blob = await fetchWithProgress(
-              `https://www.googleapis.com/drive/v3/files/${item.driveId}?alt=media`,
+              `https://www.googleapis.com/drive/v3/files/${item.driveFileId}?alt=media`,
               { Authorization: `Bearer ${token}` },
               item.size || 0,
               (loaded, total) => {

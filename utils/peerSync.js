@@ -20,10 +20,13 @@ export async function syncSharedFromPeers({
   myEmail,
   config,
   getBookByDriveId,
+  getBookByDriveFileId,
   upsertDriveBook,
   getChannelByDriveId,
+  getChannelByDriveFileId,
   upsertDriveChannel,
   getDeskByDriveId,
+  getDeskByDriveFileId,
   upsertDriveDesk,
   getLocalRecordsByOwnerEmail,
   deleteItemByDriveId,
@@ -182,7 +185,8 @@ export async function syncSharedFromPeers({
         console.log(`[InfoDepo][peerSync] (${globalIdx}/${globalTotal}) checking "${entry.name}" driveId=${driveId} type=${entry.type || 'item'}`);
 
         if (entry.type === 'infodepo-channel' && upsertDriveChannel) {
-          const existing = await getChannelByDriveId(driveId);
+          const existing = (getChannelByDriveFileId ? await getChannelByDriveFileId(driveId) : null)
+            || (getChannelByDriveId ? await getChannelByDriveId(driveId) : null);
           const driveIsNewer = !existing
             ? true
             : !existing.modifiedTime || new Date(entry.modifiedTime) > new Date(existing.modifiedTime);
@@ -221,7 +225,8 @@ export async function syncSharedFromPeers({
         }
 
         if (entry.type === 'infodepo-desk' && upsertDriveDesk) {
-          const existing = getDeskByDriveId ? await getDeskByDriveId(driveId) : undefined;
+          const existing = (getDeskByDriveFileId ? await getDeskByDriveFileId(driveId) : null)
+            || (getDeskByDriveId ? await getDeskByDriveId(driveId) : null);
           const driveIsNewer = !existing
             ? true
             : !existing.modifiedTime || new Date(entry.modifiedTime) > new Date(existing.modifiedTime);
@@ -252,7 +257,8 @@ export async function syncSharedFromPeers({
         }
 
         // Books, notes, YouTube videos
-        const existing = await getBookByDriveId(driveId);
+        const existing = (getBookByDriveFileId ? await getBookByDriveFileId(driveId) : null)
+          || (getBookByDriveId ? await getBookByDriveId(driveId) : null);
         const driveIsNewer = !existing
           ? true
           : !existing.modifiedTime || new Date(entry.modifiedTime) > new Date(existing.modifiedTime);

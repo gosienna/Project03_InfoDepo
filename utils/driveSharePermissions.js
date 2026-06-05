@@ -116,20 +116,20 @@ export async function applySharedWithToDriveFiles({
   };
 
   for (const item of items || []) {
-    const did = String(item.driveId || '').trim();
+    const did = String(item.driveFileId || '').trim();
     if (did && Array.isArray(item.sharedWith) && item.sharedWith.length > 0) {
       addDesired(did, item.sharedWith);
       if (item.coverImageDriveId) addDesired(String(item.coverImageDriveId).trim(), item.sharedWith);
     }
   }
   for (const ch of channels || []) {
-    const did = String(ch.driveId || '').trim();
+    const did = String(ch.driveFileId || '').trim();
     if (did && Array.isArray(ch.sharedWith) && ch.sharedWith.length > 0) {
       addDesired(did, ch.sharedWith);
     }
   }
   for (const dk of desks || []) {
-    const did = String(dk.driveId || '').trim();
+    const did = String(dk.driveFileId || '').trim();
     if (did && Array.isArray(dk.sharedWith) && dk.sharedWith.length > 0) {
       addDesired(did, dk.sharedWith);
     }

@@ -6,7 +6,7 @@ import {
   pdfAnnotationSidecarNeedsBackup,
 } from './pdfAnnotationSidecar.js';
 import { cloneBlobForNetwork } from './cloneBlobForNetwork.js';
-import { isTempDriveId, parseDeskLayoutKey } from './driveRecordKey.js';
+import { hasDriveCopy, isTempDriveId, parseDeskLayoutKey } from './driveRecordKey.js';
 import { resolveLayoutEntry } from './deskEntryKeys.js';
 
 function coverSidecarExt(mimeType) {
@@ -71,6 +71,7 @@ export async function syncDriveToLocal({
   channels,
   desks,
   getBookByDriveId,
+  getBookByDriveFileId,
   getBookByName,
   upsertDriveBook,
   getImageByDriveId,
@@ -78,8 +79,10 @@ export async function syncDriveToLocal({
   upsertDriveImage,
   getNotes,
   getChannelByDriveId,
+  getChannelByDriveFileId,
   upsertDriveChannel,
   getDeskByDriveId,
+  getDeskByDriveFileId,
   upsertDriveDesk,
   upsertDrivePdfAnnotation,
   upsertDriveCoverImage,
@@ -101,8 +104,8 @@ export async function syncDriveToLocal({
   const imageNameMap    = new Map(); // name    → { ...asset, noteId }
 
   for (const b of books || []) {
-    const d = String(b.driveId || '').trim();
-    const slim = { driveId: b.driveId, modifiedTime: b.modifiedTime, coverImageDriveId: b.coverImageDriveId };
+    const d = String(b.driveFileId || '').trim();
+    const slim = { driveId: b.driveId, driveFileId: b.driveFileId, modifiedTime: b.modifiedTime, coverImageDriveId: b.coverImageDriveId };
     if (d) bookDriveMap.set(d, slim);
     if (b.name) bookNameMap.set(b.name, slim);
     for (const asset of b.assets || []) {
@@ -113,32 +116,43 @@ export async function syncDriveToLocal({
     }
   }
   for (const c of channels || []) {
-    const d = String(c.driveId || '').trim();
-    if (d) channelDriveMap.set(d, { driveId: c.driveId, modifiedTime: c.modifiedTime });
+    const d = String(c.driveFileId || '').trim();
+    if (d) channelDriveMap.set(d, { driveId: c.driveId, driveFileId: c.driveFileId, modifiedTime: c.modifiedTime });
   }
   for (const dk of desks || []) {
-    const d = String(dk.driveId || '').trim();
-    if (d) deskDriveMap.set(d, { driveId: dk.driveId, modifiedTime: dk.modifiedTime });
+    const d = String(dk.driveFileId || '').trim();
+    if (d) deskDriveMap.set(d, { driveId: dk.driveId, driveFileId: dk.driveFileId, modifiedTime: dk.modifiedTime });
   }
 
-  const findBook = async (driveId, name) => {
-    const d = String(driveId || '').trim();
+  const findBook = async (driveFileId, name) => {
+    const d = String(driveFileId || '').trim();
     if (d && bookDriveMap.has(d)) return bookDriveMap.get(d);
     if (name && bookNameMap.has(name)) return bookNameMap.get(name);
-    // Fallback to IDB (handles items not present in the snapshot)
+    if (d && getBookByDriveFileId) {
+      const byFid = await getBookByDriveFileId(d);
+      if (byFid) return byFid;
+    }
     const byId = d && getBookByDriveId ? await getBookByDriveId(d) : undefined;
     if (byId) return byId;
     return name && getBookByName ? getBookByName(name) : undefined;
   };
-  const findChannel = (driveId) => {
-    const d = String(driveId || '').trim();
-    if (d && channelDriveMap.has(d)) return Promise.resolve(channelDriveMap.get(d));
-    return getChannelByDriveId ? getChannelByDriveId(d) : Promise.resolve(undefined);
+  const findChannel = async (driveFileId) => {
+    const d = String(driveFileId || '').trim();
+    if (d && channelDriveMap.has(d)) return channelDriveMap.get(d);
+    if (d && getChannelByDriveFileId) {
+      const byFid = await getChannelByDriveFileId(d);
+      if (byFid) return byFid;
+    }
+    return getChannelByDriveId ? getChannelByDriveId(d) : undefined;
   };
-  const findDesk = (driveId) => {
-    const d = String(driveId || '').trim();
-    if (d && deskDriveMap.has(d)) return Promise.resolve(deskDriveMap.get(d));
-    return getDeskByDriveId ? getDeskByDriveId(d) : Promise.resolve(undefined);
+  const findDesk = async (driveFileId) => {
+    const d = String(driveFileId || '').trim();
+    if (d && deskDriveMap.has(d)) return deskDriveMap.get(d);
+    if (d && getDeskByDriveFileId) {
+      const byFid = await getDeskByDriveFileId(d);
+      if (byFid) return byFid;
+    }
+    return getDeskByDriveId ? getDeskByDriveId(d) : undefined;
   };
   const findImage = async (driveId, name) => {
     const d = String(driveId || '').trim();
@@ -460,8 +474,7 @@ function timeMs(t) {
 /** True when local edits are newer than the last known Drive revision, or no Drive id yet. */
 export function itemNeedsBackupUpload(item) {
   if (!item?.data) return false;
-  const d = String(item.driveId || '').trim();
-  if (!d) return true;
+  if (!hasDriveCopy(item)) return true;
   const lm = timeMs(item.localModifiedAt);
   const mt = timeMs(item.modifiedTime);
   if (lm == null) return false;
@@ -481,8 +494,7 @@ function noteBundleNeedsBackup(item) {
 }
 
 function deskNeedsBackupUpload(desk) {
-  const d = String(desk?.driveId || '').trim();
-  if (!d) return true;
+  if (!hasDriveCopy(desk)) return true;
   const lm = timeMs(desk.localModifiedAt);
   const mt = timeMs(desk.modifiedTime);
   if (lm == null) return false;
@@ -491,8 +503,7 @@ function deskNeedsBackupUpload(desk) {
 }
 
 function channelNeedsBackupUpload(ch) {
-  const d = String(ch?.driveId || '').trim();
-  if (!d) return true;
+  if (!hasDriveCopy(ch)) return true;
   const lm = timeMs(ch.localModifiedAt);
   const mt = timeMs(ch.modifiedTime);
   if (lm == null) return false;
@@ -554,11 +565,11 @@ async function drivePatchMultipart(accessToken, fileId, blob, name, mimeType) {
  * Returns 'updated' | 'skipped'.
  */
 export async function syncSingleDeskFromDrive(desk, { accessToken, upsertDriveDesk }) {
-  const driveId = String(desk?.driveId || '').trim();
-  if (!driveId || !upsertDriveDesk) return 'skipped';
+  const driveFileId = String(desk?.driveFileId || '').trim();
+  if (!driveFileId || !upsertDriveDesk) return 'skipped';
 
   const metaRes = await fetchGoogleApisGet(
-    `/drive/v3/files/${driveId}?fields=id,name,mimeType,modifiedTime`,
+    `/drive/v3/files/${driveFileId}?fields=id,name,mimeType,modifiedTime`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
   if (!metaRes.ok) return 'skipped';
@@ -569,7 +580,7 @@ export async function syncSingleDeskFromDrive(desk, { accessToken, upsertDriveDe
   if (!driveIsNewer) return 'skipped';
 
   const blobRes = await fetch(
-    `https://www.googleapis.com/drive/v3/files/${driveId}?alt=media`,
+    `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
   if (!blobRes.ok) return 'skipped';
@@ -578,7 +589,7 @@ export async function syncSingleDeskFromDrive(desk, { accessToken, upsertDriveDe
   const parsed = JSON.parse(text);
   const { _type, ...deskData } = parsed;
   await upsertDriveDesk(
-    { driveId, modifiedTime: fileMeta.modifiedTime, name: fileMeta.name },
+    { driveId: driveFileId, modifiedTime: fileMeta.modifiedTime, name: fileMeta.name },
     deskData
   );
   return 'updated';
@@ -632,12 +643,14 @@ export async function pullMissingDeskLayoutRefs(desk, {
 }) {
   const layout = desk?.layout && typeof desk.layout === 'object' ? desk.layout : {};
   const missingIds = [];
-  for (const key of Object.keys(layout)) {
+  for (const [key, pos] of Object.entries(layout)) {
     if (!key.startsWith('drive:')) continue;
-    const driveId = parseDeskLayoutKey(key);
-    if (!driveId || isTempDriveId(driveId)) continue;
-    const entry = resolveLayoutEntry(key, items, channels, desks);
-    if (entry._entryType === 'pending') missingIds.push(driveId);
+    const suffix = parseDeskLayoutKey(key);
+    const entry = resolveLayoutEntry(key, items, channels, desks, pos);
+    if (entry._entryType !== 'pending') continue;
+    const dfid = String(pos?.driveFileId || '').trim()
+      || (!suffix || isTempDriveId(suffix) ? '' : suffix);
+    if (dfid) missingIds.push(dfid);
   }
   if (!missingIds.length) return { added: 0, updated: 0, skipped: 0 };
 
@@ -686,11 +699,11 @@ export async function backupSingleDesk(desk, { accessToken, folderId, onSetDrive
   const payload = JSON.stringify({ _type: DESK_JSON_MARKER, ...rest });
   const blob = new Blob([payload], { type: 'application/json' });
   const fileName = `${String(label).replace(/[/\\?%*:|"<>]/g, '-')}.desk.json`;
-  const did = String(desk.driveId || '').trim();
+  const fileId = String(desk.driveFileId || '').trim();
   let driveFile;
-  if (did) {
+  if (fileId) {
     try {
-      driveFile = await drivePatchMultipart(accessToken, did, blob, fileName, 'application/json');
+      driveFile = await drivePatchMultipart(accessToken, fileId, blob, fileName, 'application/json');
     } catch (patchErr) {
       if (patchErr.status === 404 || patchErr.status === 403) {
         driveFile = await drivePostMultipart(accessToken, blob, fileName, 'application/json', folderId);
@@ -755,7 +768,7 @@ export async function backupAllToGDrive({
       if (isNote && hasAssets) {
         const folderName = item.name.replace(/\.(md|markdown|mdown|mkd)$/i, '');
         const existingFolderId = String(item.driveFolderId || '').trim();
-        const existingMdId = String(item.driveId || '').trim();
+        const existingMdId = String(item.driveFileId || '').trim();
 
         if (!existingFolderId || !existingMdId) {
           const folder = await createFolder(folderName, folderId);
@@ -808,11 +821,11 @@ export async function backupAllToGDrive({
         const isYoutube = item.type === 'application/x-youtube';
         const driveName = isYoutube ? item.name.replace(/\.youtube$/i, '.json') : item.name;
         const driveMime = isYoutube ? 'application/json' : item.type;
-        const did = String(item.driveId || '').trim();
+        const fileId = String(item.driveFileId || '').trim();
         let driveFile;
-        if (did) {
+        if (fileId) {
           try {
-            driveFile = await patchMultipart(did, item.data, driveName, driveMime);
+            driveFile = await patchMultipart(fileId, item.data, driveName, driveMime);
           } catch (patchErr) {
             if (patchErr.status === 404 || patchErr.status === 403) {
               // 404: Drive file was deleted.
@@ -850,7 +863,7 @@ export async function backupAllToGDrive({
   if (getPdfAnnotationSidecar && setPdfAnnotationDriveSync) {
     for (const item of itemsList) {
       if (item.type !== 'application/pdf' || !item.data) continue;
-      const pdfDid = String(item.driveId || '').trim();
+      const pdfDid = String(item.driveFileId || '').trim();
       if (!pdfDid) continue;
       let sc;
       try {
@@ -942,11 +955,11 @@ export async function backupAllToGDrive({
       const blob = new Blob([payload], { type: 'application/json' });
       const safeName = String(label).replace(/[/\\?%*:|"<>]/g, '-');
       const fileName = `${safeName}.channel.json`;
-      const did = String(ch.driveId || '').trim();
+      const fileId = String(ch.driveFileId || '').trim();
       let driveFile;
-      if (did) {
+      if (fileId) {
         try {
-          driveFile = await patchMultipart(did, blob, fileName, 'application/json');
+          driveFile = await patchMultipart(fileId, blob, fileName, 'application/json');
         } catch (patchErr) {
           if (patchErr.status === 404 || patchErr.status === 403) {
             console.warn(`PATCH ${patchErr.status} for channel "${label}", uploading as new file.`);
@@ -1011,17 +1024,17 @@ async function listFolderContents(folderId, accessToken) {
 export function classifyChanges(driveIndex, items, channels, desks) {
   const toBackup = [];
   const toPull   = [];
-  const localDriveIds = new Set();
+  const localFileIds = new Set();
 
   const indexByDriveId = new Map(
     (driveIndex?.items || []).map(e => [String(e.driveId || '').trim(), e])
   );
 
   const checkRecord = (record, storeName) => {
-    const did = String(record.driveId || '').trim();
-    if (did && !isTempDriveId(did)) localDriveIds.add(did);
-    if (!did || isTempDriveId(did)) { toBackup.push({ record, storeName }); return; }
-    const entry = indexByDriveId.get(did);
+    const fileId = String(record.driveFileId || '').trim();
+    if (fileId) localFileIds.add(fileId);
+    if (!fileId) { toBackup.push({ record, storeName }); return; }
+    const entry = indexByDriveId.get(fileId);
     if (!entry) { toBackup.push({ record, storeName }); return; }
     const lm = timeMs(record.localModifiedAt);
     const im = timeMs(entry.modifiedTime);
@@ -1041,7 +1054,7 @@ export function classifyChanges(driveIndex, items, channels, desks) {
   // Index entries absent locally → need pull
   for (const entry of driveIndex?.items || []) {
     const did = String(entry.driveId || '').trim();
-    if (did && !localDriveIds.has(did)) toPull.push(entry);
+    if (did && !localFileIds.has(did)) toPull.push(entry);
   }
 
   // Deduplicate toPull (an entry can satisfy both "index newer" and "absent locally")
@@ -1080,7 +1093,7 @@ export async function backupChangedItems(toBackup, {
   const progress = onProgress || (() => {});
   let backed = 0;
   let failed = 0;
-  const updatedEntries = []; // { oldDriveId, storeName, driveId, modifiedTime, driveFolderId? }
+  const updatedEntries = []; // { localDriveId, storeName, driveFileId, modifiedTime, driveFolderId? }
 
   const postMultipart = (blob, name, mimeType, targetParentId) =>
     drivePostMultipart(accessToken, blob, name, mimeType, targetParentId || folderId);
@@ -1115,11 +1128,11 @@ export async function backupChangedItems(toBackup, {
         const blob = new Blob([payload], { type: 'application/json' });
         const safeName = String(label).replace(/[/\\?%*:|"<>]/g, '-');
         const fileName = `${safeName}.channel.json`;
-        const did = String(record.driveId || '').trim();
+        const fileId = String(record.driveFileId || '').trim();
         let driveFile;
-        if (did) {
+        if (fileId) {
           try {
-            driveFile = await patchMultipart(did, blob, fileName, 'application/json');
+            driveFile = await patchMultipart(fileId, blob, fileName, 'application/json');
           } catch (patchErr) {
             if (patchErr.status === 404 || patchErr.status === 403) {
               driveFile = await postMultipart(blob, fileName, 'application/json');
@@ -1129,7 +1142,7 @@ export async function backupChangedItems(toBackup, {
           driveFile = await postMultipart(blob, fileName, 'application/json');
         }
         await onSetDriveId(record.driveId, 'channels', driveFile.id, { modifiedTime: driveFile.modifiedTime });
-        updatedEntries.push({ oldDriveId: record.driveId, storeName: 'channels', driveId: driveFile.id, modifiedTime: driveFile.modifiedTime });
+        updatedEntries.push({ localDriveId: record.driveId, storeName: 'channels', driveFileId: driveFile.id, modifiedTime: driveFile.modifiedTime });
         backed++;
       } catch (err) {
         console.warn(`Backup failed for channel "${record.name || record.channelId}":`, err.message);
@@ -1142,15 +1155,15 @@ export async function backupChangedItems(toBackup, {
       if (!deskNeedsBackupUpload(record)) continue;
       progress(`Backing up desk "${record.name || `desk-${record.driveId}`}"...`);
       try {
-        let capturedDriveId, capturedModifiedTime;
-        const wrappedSetDriveId = async (id, sn, driveId, meta) => {
-          await onSetDriveId(id, sn, driveId, meta);
-          capturedDriveId = driveId;
+        let capturedFileId, capturedModifiedTime;
+        const wrappedSetDriveId = async (id, sn, driveFileId, meta) => {
+          await onSetDriveId(id, sn, driveFileId, meta);
+          capturedFileId = driveFileId;
           capturedModifiedTime = meta?.modifiedTime;
         };
         await backupSingleDesk(record, { accessToken, folderId, onSetDriveId: wrappedSetDriveId });
-        if (capturedDriveId) {
-          updatedEntries.push({ oldDriveId: record.driveId, storeName: 'desks', driveId: capturedDriveId, modifiedTime: capturedModifiedTime });
+        if (capturedFileId) {
+          updatedEntries.push({ localDriveId: record.driveId, storeName: 'desks', driveFileId: capturedFileId, modifiedTime: capturedModifiedTime });
         }
         backed++;
       } catch (err) {
@@ -1170,7 +1183,7 @@ export async function backupChangedItems(toBackup, {
       if (isNote && hasAssets) {
         const folderName = record.name.replace(/\.(md|markdown|mdown|mkd)$/i, '');
         const existingFolderId = String(record.driveFolderId || '').trim();
-        const existingMdId = String(record.driveId || '').trim();
+        const existingMdId = String(record.driveFileId || '').trim();
         let newFolderId = existingFolderId;
 
         if (!existingFolderId || !existingMdId) {
@@ -1178,7 +1191,7 @@ export async function backupChangedItems(toBackup, {
           newFolderId = folder.id;
           const driveFile = await postMultipart(record.data, record.name, record.type, folder.id);
           await onSetDriveId(record.driveId, record.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
-          updatedEntries.push({ oldDriveId: record.driveId, storeName: record.idbStore, driveId: driveFile.id, modifiedTime: driveFile.modifiedTime, driveFolderId: folder.id });
+          updatedEntries.push({ localDriveId: record.driveId, storeName: record.idbStore, driveFileId: driveFile.id, modifiedTime: driveFile.modifiedTime, driveFolderId: folder.id });
 
           const assetDriveIds = [];
           for (const asset of record.assets) {
@@ -1196,7 +1209,7 @@ export async function backupChangedItems(toBackup, {
             const mdRes = await patchMultipart(existingMdId, record.data, record.name, record.type);
             lastMdTime = mdRes.modifiedTime;
             await onSetDriveId(record.driveId, record.idbStore, existingMdId, { modifiedTime: mdRes.modifiedTime });
-            updatedEntries.push({ oldDriveId: record.driveId, storeName: record.idbStore, driveId: existingMdId, modifiedTime: mdRes.modifiedTime, driveFolderId: existingFolderId });
+            updatedEntries.push({ localDriveId: record.driveId, storeName: record.idbStore, driveFileId: existingMdId, modifiedTime: mdRes.modifiedTime, driveFolderId: existingFolderId });
             backed++;
           }
           const assetDriveIds = [];
@@ -1221,11 +1234,11 @@ export async function backupChangedItems(toBackup, {
         const isYoutube = record.type === 'application/x-youtube';
         const driveName = isYoutube ? record.name.replace(/\.youtube$/i, '.json') : record.name;
         const driveMime = isYoutube ? 'application/json' : record.type;
-        const did = String(record.driveId || '').trim();
+        const fileId = String(record.driveFileId || '').trim();
         let driveFile;
-        if (did) {
+        if (fileId) {
           try {
-            driveFile = await patchMultipart(did, record.data, driveName, driveMime);
+            driveFile = await patchMultipart(fileId, record.data, driveName, driveMime);
           } catch (patchErr) {
             if (patchErr.status === 404 || patchErr.status === 403) {
               console.warn(`PATCH ${patchErr.status} for "${record.name}", uploading as new file.`);
@@ -1236,7 +1249,7 @@ export async function backupChangedItems(toBackup, {
           driveFile = await postMultipart(record.data, driveName, driveMime);
         }
         await onSetDriveId(record.driveId, record.idbStore, driveFile.id, { modifiedTime: driveFile.modifiedTime });
-        updatedEntries.push({ oldDriveId: record.driveId, storeName: record.idbStore, driveId: driveFile.id, modifiedTime: driveFile.modifiedTime });
+        updatedEntries.push({ localDriveId: record.driveId, storeName: record.idbStore, driveFileId: driveFile.id, modifiedTime: driveFile.modifiedTime });
         backed++;
         if (record.type === 'application/pdf' && setPdfAnnotationDriveSync) {
           try {
@@ -1256,7 +1269,7 @@ export async function backupChangedItems(toBackup, {
   if (getPdfAnnotationSidecar && setPdfAnnotationDriveSync) {
     for (const item of items || []) {
       if (item.type !== 'application/pdf' || !item.data) continue;
-      const pdfDid = String(item.driveId || '').trim();
+      const pdfDid = String(item.driveFileId || '').trim();
       if (!pdfDid) continue;
       let sc;
       try { sc = await getPdfAnnotationSidecar(item.driveId, item.idbStore); } catch { continue; }
@@ -1487,13 +1500,43 @@ export async function syncFolderAssetsAndSidecars({
   // or if the Drive copy is newer.
   indexTrackedDriveIds,
   getBookByDriveId,
+  getBookByDriveFileId,
   upsertDriveBook,
   getChannelByDriveId,
+  getChannelByDriveFileId,
   upsertDriveChannel,
   getDeskByDriveId,
+  getDeskByDriveFileId,
   upsertDriveDesk,
   lazyBooks = false,
 }) {
+  const findBookByGoogleId = async (googleId) => {
+    const id = String(googleId || '').trim();
+    if (!id) return null;
+    if (getBookByDriveFileId) {
+      const byFid = await getBookByDriveFileId(id);
+      if (byFid) return byFid;
+    }
+    return getBookByDriveId ? getBookByDriveId(id) : null;
+  };
+  const findChannelByGoogleId = async (googleId) => {
+    const id = String(googleId || '').trim();
+    if (!id) return null;
+    if (getChannelByDriveFileId) {
+      const byFid = await getChannelByDriveFileId(id);
+      if (byFid) return byFid;
+    }
+    return getChannelByDriveId ? getChannelByDriveId(id) : null;
+  };
+  const findDeskByGoogleId = async (googleId) => {
+    const id = String(googleId || '').trim();
+    if (!id) return null;
+    if (getDeskByDriveFileId) {
+      const byFid = await getDeskByDriveFileId(id);
+      if (byFid) return byFid;
+    }
+    return getDeskByDriveId ? getDeskByDriveId(id) : null;
+  };
   const progress = onProgress || (() => {});
   const counts = { added: 0, updated: 0, skipped: 0 };
 
@@ -1658,7 +1701,7 @@ export async function syncFolderAssetsAndSidecars({
           try { parsed = JSON.parse(await blobRes.text()); } catch { counts.skipped++; batchTick(); continue; }
 
           if (parsed._type === CHANNEL_JSON_MARKER && parsed.channelId && upsertDriveChannel) {
-            const existingCh = getChannelByDriveId ? await getChannelByDriveId(driveFile.driveId) : null;
+            const existingCh = await findChannelByGoogleId(driveFile.driveId);
             const chNewer = !existingCh || !existingCh.modifiedTime
               || new Date(driveFile.modifiedTime) > new Date(existingCh.modifiedTime);
             if (!chNewer) { counts.skipped++; batchTick(); continue; }
@@ -1668,7 +1711,7 @@ export async function syncFolderAssetsAndSidecars({
             else if (action === 'updated') counts.updated++;
             else counts.skipped++;
           } else if (parsed._type === DESK_JSON_MARKER && upsertDriveDesk) {
-            const existingDk = getDeskByDriveId ? await getDeskByDriveId(driveFile.driveId) : null;
+            const existingDk = await findDeskByGoogleId(driveFile.driveId);
             const dkNewer = !existingDk || !existingDk.modifiedTime
               || new Date(driveFile.modifiedTime) > new Date(existingDk.modifiedTime);
             if (!dkNewer) { counts.skipped++; batchTick(); continue; }
@@ -1678,7 +1721,7 @@ export async function syncFolderAssetsAndSidecars({
             else if (action === 'updated') counts.updated++;
             else counts.skipped++;
           } else if (parsed.url && /youtube\.com|youtu\.be/.test(parsed.url) && upsertDriveBook) {
-            const existingBook = getBookByDriveId ? await getBookByDriveId(driveFile.driveId) : null;
+            const existingBook = await findBookByGoogleId(driveFile.driveId);
             const bookNewer = !existingBook || !existingBook.modifiedTime
               || new Date(driveFile.modifiedTime) > new Date(existingBook.modifiedTime);
             if (!bookNewer) { counts.skipped++; batchTick(); continue; }
@@ -1694,9 +1737,7 @@ export async function syncFolderAssetsAndSidecars({
           }
         } else if (upsertDriveBook) {
           // Binary or text content file (EPUB, PDF, TXT, Markdown)
-          const existingBook = getBookByDriveId
-            ? await getBookByDriveId(driveFile.driveId)
-            : null;
+          const existingBook = await findBookByGoogleId(driveFile.driveId);
           const bookNewer = !existingBook || !existingBook.modifiedTime
             || new Date(driveFile.modifiedTime) > new Date(existingBook.modifiedTime);
           if (!bookNewer) { counts.skipped++; batchTick(); continue; }

@@ -1,6 +1,6 @@
 # Data stores
 
-Current IndexedDB database: `InfoDepo`, schema version `10`.
+Current IndexedDB database: `InfoDepo`, schema version `11`.
 
 ## Stores
 
@@ -16,24 +16,25 @@ Current IndexedDB database: `InfoDepo`, schema version `10`.
 
 `shares` store was removed in v7.
 
-## Primary key: `driveId`
+## Two-field identity: `driveId` + `driveFileId`
 
-All content stores (`books`, `notes`, `videos`, `channels`, `desks`) use **`driveId` as the IndexedDB keyPath** (no numeric `id`).
+All content stores (`books`, `notes`, `videos`, `channels`, `desks`, `images`) use **`driveId` as the IndexedDB keyPath** (no numeric `id`).
 
-| Kind | `driveId` value |
-|------|-----------------|
-| **Google Drive file** | Opaque file id from Drive API (never starts with `local:`) |
-| **Not uploaded yet** | Temp key `local:{store}:{uuid}` (e.g. `local:books:550e8400-e29b-…`) |
+| Field | Role |
+|-------|------|
+| **`driveId`** | Permanent app-issued key, always `local:{store}:{uuid}` after v11. Never replaced on upload. |
+| **`driveFileId`** | Google Drive file id when the row exists on Drive; absent = local-only. Indexed for sync lookup. |
 
-Helpers: [`utils/driveRecordKey.js`](../utils/driveRecordKey.js) — `isTempDriveId()`, `makeTempDriveId(store)`, `deskLayoutKey(driveId)`.
+Helpers: [`utils/driveRecordKey.js`](../utils/driveRecordKey.js) — `makeTempDriveId(store)`, `hasDriveCopy(record)`, `deskLayoutKey(driveId)`.
 
-After upload, `promoteDriveId` (formerly “set drive id on row”) deletes the temp key and inserts the same record under the real Drive file id. Desk layout keys `drive:local:…` are remapped to `drive:{realId}` (eagerly on upload, lazily via `migrateDeskDataKeys` when a desk opens).
+Upload/sync sets `driveFileId` in place via `setItemDriveId` (local `driveId` unchanged). The owner index still publishes Google ids as `driveId` in `_infodepo_index.json` for backward compatibility.
 
 ## Common fields (content records)
 
 ```js
 {
-  driveId,            // primary key (temp or Google)
+  driveId,            // primary key (local:…)
+  driveFileId,        // Google Drive file id (optional)
   name,
   data,               // Blob | null
   type,
@@ -58,24 +59,28 @@ Additional fields:
 - `channels`: `channelId` (unique index), `handle`, `videos[]`, etc.
 - `desks`: `layout`, `connections`, etc.
 
-## Desk layout keys
+## Desk layout keys and values
 
-Canonical format: **`drive:{driveId}`** — see [`utils/deskEntryKeys.js`](../utils/deskEntryKeys.js).
+Canonical layout key: **`drive:{localDriveId}`** — see [`utils/deskEntryKeys.js`](../utils/deskEntryKeys.js).
 
-`resolveLayoutEntry` and `migrateDeskDataKeys` rewrite stale temp keys when items gain a real Drive id.
+Layout values: `{ x, y, driveFileId? }`. The optional `driveFileId` enables cross-device desk resolution when layout JSON is pulled from Drive.
+
+`normalizeDeskLayoutV11` runs on DB upgrade and at desk open to rewrite legacy key shapes (numeric ids, Google-id keys from v10) into the v11 format. `remapDeskLayoutByDriveFileId` resolves pending tiles by matching `value.driveFileId` to local rows.
 
 ## Key indexes
 
+- `driveFileId` index on all content stores (v11)
 - `channelId` unique index on `channels`
 - `noteDriveId` index on legacy `images`
-- `pdfAnnotations`: keyPath `sidecarKey` = `` `${idbStore}:${itemDriveId}` ``
+- `pdfAnnotations`: keyPath `sidecarKey` = `` `${idbStore}:${itemDriveId}` `` (uses local `driveId`)
 
 ## Readers
 
-Standalone EPUB/PDF tabs use `?driveId=…&store=books` (no legacy `?id=`).
+Standalone EPUB/PDF tabs use `?driveId=…&store=books` with the **local** `driveId`. Lazy download fetches blob via `driveFileId` when `data` is null.
 
 ## Schema history
 
+- **v11:** stable local `driveId` + `driveFileId`; v10 Google-id primary keys migrated; desk layout normalization.
 - **v10:** `driveId` keyPath on content stores; removed numeric `id`; desk layout migration to `drive:{driveId}`.
 - **v9:** desks store repair.
 - **v7:** dropped `shares`; added `sharedWith` / `ownerEmail`.
