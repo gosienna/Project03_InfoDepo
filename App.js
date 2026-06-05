@@ -112,6 +112,7 @@ const App = () => {
   const syncFnRef = useRef(null);
   const itemBackupFnRef = useRef(null);
   const initialDeskSyncFnRef = useRef(null);
+  const deskLayoutSyncFnRef = useRef(null);
   const setSharedWithFnRef = useRef(null);
   const firstDeskDisplayedRef = useRef(false);
   const [initialDeskSyncing, setInitialDeskSyncing] = useState(false);
@@ -879,6 +880,7 @@ const App = () => {
           onRegisterSync: (fn) => { syncFnRef.current = fn; },
           onRegisterItemBackup: (fn) => { itemBackupFnRef.current = fn; },
           onRegisterInitialDeskSync: (fn) => { initialDeskSyncFnRef.current = fn; },
+          onRegisterDeskLayoutSync: (fn) => { deskLayoutSyncFnRef.current = fn; },
           onRegisterSetSharedWith: (fn) => { setSharedWithFnRef.current = fn; },
           itemDownloadProgress,
         })
@@ -939,6 +941,9 @@ const App = () => {
               onRequestDeleteItem: isEditor ? handleRequestDeleteItem : undefined,
               onRequestDeleteChannel: isEditor ? handleRequestDeleteChannel : undefined,
               onCreateDesk: isEditor ? handleCreateDeskForLayout : undefined,
+              onPullMissingLayoutRefs: deskLayoutSyncFnRef.current
+                ? (d) => deskLayoutSyncFnRef.current(d)
+                : undefined,
               itemDownloadProgress,
             })
           : React.createElement(

@@ -6,7 +6,8 @@ import {
   pdfAnnotationSidecarNeedsBackup,
 } from './pdfAnnotationSidecar.js';
 import { cloneBlobForNetwork } from './cloneBlobForNetwork.js';
-import { isTempDriveId } from './driveRecordKey.js';
+import { isTempDriveId, parseDeskLayoutKey } from './driveRecordKey.js';
+import { resolveLayoutEntry } from './deskEntryKeys.js';
 
 function coverSidecarExt(mimeType) {
   const m = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
@@ -581,6 +582,97 @@ export async function syncSingleDeskFromDrive(desk, { accessToken, upsertDriveDe
     deskData
   );
   return 'updated';
+}
+
+function indexEntryFromDriveFile(meta) {
+  const name = meta?.name || '';
+  const mime = meta?.mimeType || 'application/octet-stream';
+  let type = mime;
+  if (/\.channel\.json$/i.test(name)) type = 'infodepo-channel';
+  else if (/\.desk\.json$/i.test(name)) type = 'infodepo-desk';
+  return {
+    driveId: String(meta.id || '').trim(),
+    name,
+    type,
+    modifiedTime: meta.modifiedTime || '',
+    size: meta.size || 0,
+    sharedWith: [],
+    tags: [],
+  };
+}
+
+async function fetchDriveFileMeta(accessToken, driveId) {
+  const id = String(driveId || '').trim();
+  if (!id) return null;
+  const res = await fetchGoogleApisGet(
+    `/drive/v3/files/${encodeURIComponent(id)}?fields=id,name,mimeType,modifiedTime,size`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok) return null;
+  return res.json();
+}
+
+/**
+ * Pull library rows referenced on a desk layout but absent from IndexedDB.
+ * Uses the owner index when available; otherwise fetches Drive file metadata.
+ */
+export async function pullMissingDeskLayoutRefs(desk, {
+  accessToken,
+  folderId,
+  items,
+  channels,
+  desks,
+  fetchOwnerIndex,
+  upsertDriveBook,
+  upsertDriveChannel,
+  upsertDriveDesk,
+  lazyBooks = true,
+  onProgress,
+  onBatchComplete,
+}) {
+  const layout = desk?.layout && typeof desk.layout === 'object' ? desk.layout : {};
+  const missingIds = [];
+  for (const key of Object.keys(layout)) {
+    if (!key.startsWith('drive:')) continue;
+    const driveId = parseDeskLayoutKey(key);
+    if (!driveId || isTempDriveId(driveId)) continue;
+    const entry = resolveLayoutEntry(key, items, channels, desks);
+    if (entry._entryType === 'pending') missingIds.push(driveId);
+  }
+  if (!missingIds.length) return { added: 0, updated: 0, skipped: 0 };
+
+  let index = null;
+  if (folderId && fetchOwnerIndex) {
+    try {
+      index = await fetchOwnerIndex({ accessToken, folderId });
+    } catch (e) {
+      console.warn('[pullMissingDeskLayoutRefs] index fetch failed:', e.message);
+    }
+  }
+
+  const toPull = [];
+  for (const driveId of missingIds) {
+    const fromIndex = (index?.items || []).find((e) => String(e.driveId || '').trim() === driveId);
+    if (fromIndex) {
+      toPull.push(fromIndex);
+      continue;
+    }
+    const meta = await fetchDriveFileMeta(accessToken, driveId);
+    if (meta?.id) toPull.push(indexEntryFromDriveFile(meta));
+    else console.warn('[pullMissingDeskLayoutRefs] could not resolve Drive file:', driveId);
+  }
+
+  if (!toPull.length) return { added: 0, updated: 0, skipped: missingIds.length };
+
+  return pullChangedItems(toPull, {
+    accessToken,
+    upsertDriveBook,
+    upsertDriveChannel,
+    upsertDriveDesk,
+    lazyBooks,
+    onProgress,
+    onBatchComplete,
+  });
 }
 
 /**

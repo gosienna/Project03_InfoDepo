@@ -706,6 +706,7 @@ export const Desk = ({
   onRequestDeleteItem,
   onRequestDeleteChannel,
   onCreateDesk,
+  onPullMissingLayoutRefs,
   itemDownloadProgress,
 }) => {
   const { uploadStatuses, handleUpload, handleChannelUpload } = useDriveTileUpload({
@@ -715,6 +716,7 @@ export const Desk = ({
   });
 
   const autoUploadTriggeredRef = useRef(new Set());
+  const layoutSyncTriggeredRef = useRef(new Set());
   const previousDeskIdRef = useRef(desk?.driveId ?? null);
 
   const viewportRef = useRef(null);
@@ -1395,19 +1397,27 @@ export const Desk = ({
     });
   }, [renderTick, items, channels, desks]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-upload items that are on the desk but not yet on Drive.
-  // A ref prevents re-firing for items already queued; on error the user can retry manually.
+  // Pull layout tiles that reference real Drive ids not yet in IndexedDB.
   useEffect(() => {
-    if (!onSetItemDriveId) return;
-    for (const { entry } of layoutEntries) {
-      if (!entry._pendingUpload) continue;
-      const uKey = entry._entryType === 'channel' ? channelUploadKey(entry) : libraryItemKey(entry);
-      if (autoUploadTriggeredRef.current.has(uKey)) continue;
-      autoUploadTriggeredRef.current.add(uKey);
-      if (entry._entryType === 'channel') handleChannelUpload(entry);
-      else handleUpload(entry);
-    }
-  }, [layoutEntries, onSetItemDriveId, handleUpload, handleChannelUpload]);
+    if (readOnly || !onPullMissingLayoutRefs || !desk?.driveId) return;
+    const syncKeys = layoutEntries
+      .filter(({ entry }) => entry._entryType === 'pending' && entry._pendingKind === 'sync')
+      .map(({ key }) => key)
+      .sort()
+      .join('|');
+    if (!syncKeys) return;
+    const sig = `${desk.driveId}:${syncKeys}`;
+    if (layoutSyncTriggeredRef.current.has(sig)) return;
+    layoutSyncTriggeredRef.current.add(sig);
+    onPullMissingLayoutRefs(desk).catch((e) => {
+      layoutSyncTriggeredRef.current.delete(sig);
+      console.warn('[InfoDepo] desk layout sync failed:', e?.message || e);
+    });
+  }, [layoutEntries, desk, onPullMissingLayoutRefs, readOnly]);
+
+  useEffect(() => {
+    layoutSyncTriggeredRef.current.clear();
+  }, [desk?.driveId]);
 
   const availableTags = useMemo(() => {
     const set = new Set();
@@ -1741,13 +1751,17 @@ export const Desk = ({
                 outline: connectMode && connectStartKey === key ? '2px solid #818cf8' : 'none',
               },
             },
-            (entry._entryType === 'pending' || (entry._pendingUpload && onSetItemDriveId))
+            entry._entryType === 'pending'
               ? (() => {
-                  const uKey = entry._pendingUpload
-                    ? (entry._entryType === 'channel' ? channelUploadKey(entry) : libraryItemKey(entry))
-                    : null;
-                  const status = uKey ? (uploadStatuses[uKey] ?? 'uploading') : null;
-                  const isError = status === 'error';
+                  const kind = entry._pendingKind || 'unknown';
+                  const isUpload = kind === 'upload';
+                  const isSync = kind === 'sync';
+                  const statusLabel = isUpload
+                    ? 'Uploading to Drive…'
+                    : isSync
+                      ? 'Syncing from Drive…'
+                      : 'Not available on this device';
+                  const showSpinner = isUpload || isSync;
                   return React.createElement(
                     'div',
                     {
@@ -1761,66 +1775,30 @@ export const Desk = ({
                         gap: 8,
                         background: '#1f2937',
                         borderRadius: readOnly ? 8 : '0 0 8px 8px',
-                        border: `1px dashed ${isError ? '#7f1d1d' : '#374151'}`,
+                        border: '1px dashed #374151',
                         color: '#6b7280',
                       },
                     },
-                    isError
-                      ? React.createElement('span', { style: { fontSize: 22 } }, '⚠️')
-                      : React.createElement(
-                          'svg',
-                          {
-                            className: 'animate-spin',
-                            style: { width: 28, height: 28, flexShrink: 0 },
-                            viewBox: '0 0 24 24',
-                            fill: 'none',
-                          },
-                          React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#374151', strokeWidth: 3 }),
-                          React.createElement('path', {
-                            d: 'M12 2a10 10 0 0 1 10 10',
-                            stroke: '#818cf8',
-                            strokeWidth: 3,
-                            strokeLinecap: 'round',
-                          }),
-                        ),
-                    React.createElement(
-                      'span',
-                      { style: { fontSize: 12, textAlign: 'center', padding: '0 16px', color: '#9ca3af' } },
-                      entry.name
-                        ? (entry.name.replace(/\.youtube$/i, '').slice(0, 32) + (entry.name.length > 32 ? '…' : ''))
-                        : null,
-                    ),
-                    React.createElement(
-                      'span',
-                      { style: { fontSize: 11, color: isError ? '#f87171' : '#6b7280' } },
-                      isError ? 'Upload failed' : 'Uploading to Drive…',
-                    ),
-                    isError && entry._pendingUpload && React.createElement(
-                      'button',
+                    showSpinner && React.createElement(
+                      'svg',
                       {
-                        onClick: (e) => {
-                          e.stopPropagation();
-                          autoUploadTriggeredRef.current.delete(uKey);
-                          if (entry._entryType === 'channel') handleChannelUpload(entry);
-                          else handleUpload(entry);
-                        },
-                        style: {
-                          marginTop: 4,
-                          fontSize: 11,
-                          padding: '3px 10px',
-                          borderRadius: 4,
-                          border: '1px solid #374151',
-                          background: '#111827',
-                          color: '#d1d5db',
-                          cursor: 'pointer',
-                        },
+                        className: 'animate-spin',
+                        style: { width: 28, height: 28, flexShrink: 0 },
+                        viewBox: '0 0 24 24',
+                        fill: 'none',
                       },
-                      'Retry',
+                      React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#374151', strokeWidth: 3 }),
+                      React.createElement('path', {
+                        d: 'M12 2a10 10 0 0 1 10 10',
+                        stroke: '#818cf8',
+                        strokeWidth: 3,
+                        strokeLinecap: 'round',
+                      }),
                     ),
-                    !entry._pendingUpload && React.createElement(
+                    React.createElement(
                       'span',
-                      { style: { fontSize: 11, color: '#4b5563' } },
-                      'Not available on this device',
+                      { style: { fontSize: 11, color: '#6b7280', textAlign: 'center', padding: '0 16px' } },
+                      statusLabel,
                     ),
                   );
                 })()

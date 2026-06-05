@@ -1,7 +1,7 @@
 /**
  * Desk canvas layout keys: always `drive:{driveId}` where driveId is temp (local:…) or real Google file id.
  */
-import { deskLayoutKey, parseDeskLayoutKey, migrationTempDriveId } from './driveRecordKey.js';
+import { deskLayoutKey, parseDeskLayoutKey, migrationTempDriveId, isTempDriveId } from './driveRecordKey.js';
 
 const trimDrive = (d) => String(d || '').trim();
 
@@ -13,7 +13,16 @@ export const channelEntryKey = (ch) => deskLayoutKey(trimDrive(ch?.driveId));
 
 export const deskEntryKey = (d) => deskLayoutKey(trimDrive(d?.driveId));
 
-const PENDING = { _entryType: 'pending' };
+/** Unresolved layout key — upload (temp id) vs sync (real Drive id, not in IDB yet). */
+export function pendingLayoutEntry(key) {
+  const driveId = key?.startsWith('drive:') ? parseDeskLayoutKey(key) : '';
+  return {
+    _entryType: 'pending',
+    _layoutKey: key || '',
+    _driveId: driveId,
+    _pendingKind: driveId ? (isTempDriveId(driveId) ? 'upload' : 'sync') : 'unknown',
+  };
+}
 
 function findByDriveId(driveId, items, channels, desks) {
   const d = trimDrive(driveId);
@@ -29,23 +38,23 @@ function findByDriveId(driveId, items, channels, desks) {
 
 /** Legacy v9 layout keys → canonical drive:… (upgrade / one-time load only). */
 function resolveLegacyLayoutKey(key, items, channels, desks) {
-  if (!key || typeof key !== 'string') return PENDING;
+  if (!key || typeof key !== 'string') return pendingLayoutEntry(key);
 
   if (key.startsWith('local:')) {
     const rest = key.slice(6);
     if (rest.startsWith('channel:')) {
       const numId = Number(rest.slice(8));
-      if (!Number.isFinite(numId)) return PENDING;
+      if (!Number.isFinite(numId)) return pendingLayoutEntry(key);
       const ch = (channels || []).find((c) => c.driveId === migrationTempDriveId('channels', numId));
       if (ch) return { ...ch, _entryType: 'channel' };
       const chLegacy = (channels || []).find((c) => {
         const legacy = migrationTempDriveId('channels', numId);
         return trimDrive(c.driveId) === legacy;
       });
-      return chLegacy ? { ...chLegacy, _entryType: 'channel' } : PENDING;
+      return chLegacy ? { ...chLegacy, _entryType: 'channel' } : pendingLayoutEntry(key);
     }
     const sep = rest.indexOf(':');
-    if (sep <= 0) return PENDING;
+    if (sep <= 0) return pendingLayoutEntry(key);
     const store = rest.slice(0, sep);
     const suffix = rest.slice(sep + 1);
     if (store === 'channels') {
@@ -56,7 +65,7 @@ function resolveLegacyLayoutKey(key, items, channels, desks) {
         if (ch) return { ...ch, _entryType: 'channel' };
       }
     }
-    if (store !== 'books' && store !== 'notes' && store !== 'videos') return PENDING;
+    if (store !== 'books' && store !== 'notes' && store !== 'videos') return pendingLayoutEntry(key);
     const tempId = `local:${store}:${suffix}`;
     const item = (items || []).find((i) => i.idbStore === store && trimDrive(i.driveId) === tempId);
     if (item) return { ...item, _entryType: 'item' };
@@ -66,46 +75,46 @@ function resolveLegacyLayoutKey(key, items, channels, desks) {
       const item2 = (items || []).find((i) => i.idbStore === store && trimDrive(i.driveId) === migrated);
       if (item2) return { ...item2, _entryType: 'item' };
     }
-    return PENDING;
+    return pendingLayoutEntry(key);
   }
 
   if (key.startsWith('channel:')) {
     const numId = Number(key.slice(8));
-    if (!Number.isFinite(numId)) return PENDING;
+    if (!Number.isFinite(numId)) return pendingLayoutEntry(key);
     const tempId = migrationTempDriveId('channels', numId);
     const ch = (channels || []).find((c) => trimDrive(c.driveId) === tempId);
-    return ch ? { ...ch, _entryType: 'channel' } : PENDING;
+    return ch ? { ...ch, _entryType: 'channel' } : pendingLayoutEntry(key);
   }
 
   if (key.startsWith('desk:')) {
     const numId = Number(key.slice(5));
-    if (!Number.isFinite(numId)) return PENDING;
+    if (!Number.isFinite(numId)) return pendingLayoutEntry(key);
     const tempId = migrationTempDriveId('desks', numId);
     const d = (desks || []).find((x) => trimDrive(x.driveId) === tempId);
-    return d ? { ...d, _entryType: 'desk' } : PENDING;
+    return d ? { ...d, _entryType: 'desk' } : pendingLayoutEntry(key);
   }
 
   const sep = key.lastIndexOf(':');
-  if (sep <= 0) return PENDING;
+  if (sep <= 0) return pendingLayoutEntry(key);
   const store = key.slice(0, sep);
   const numId = Number(key.slice(sep + 1));
-  if (!Number.isFinite(numId)) return PENDING;
-  if (store !== 'books' && store !== 'notes' && store !== 'videos') return PENDING;
+  if (!Number.isFinite(numId)) return pendingLayoutEntry(key);
+  if (store !== 'books' && store !== 'notes' && store !== 'videos') return pendingLayoutEntry(key);
   const tempId = migrationTempDriveId(store, numId);
   const item = (items || []).find((i) => i.idbStore === store && trimDrive(i.driveId) === tempId);
-  return item ? { ...item, _entryType: 'item' } : PENDING;
+  return item ? { ...item, _entryType: 'item' } : pendingLayoutEntry(key);
 }
 
 /**
  * Resolve a layout key to a library record (+ _entryType).
  */
 export function resolveLayoutEntry(key, items, channels, desks) {
-  if (!key || typeof key !== 'string') return PENDING;
+  if (!key || typeof key !== 'string') return pendingLayoutEntry(key);
 
   if (key.startsWith('drive:')) {
     const parsedId = parseDeskLayoutKey(key);
-    if (!parsedId) return PENDING;
-    return findByDriveId(parsedId, items, channels, desks) || PENDING;
+    if (!parsedId) return pendingLayoutEntry(key);
+    return findByDriveId(parsedId, items, channels, desks) || pendingLayoutEntry(key);
   }
 
   return resolveLegacyLayoutKey(key, items, channels, desks);

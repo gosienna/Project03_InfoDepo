@@ -40,7 +40,7 @@ import {
   resetDriveImplicitUploadToken,
 } from '../utils/driveOAuthImplicitFlowToken.js';
 import { useDriveTileUpload, channelUploadKey } from '../hooks/useDriveTileUpload.js';
-import { backupSingleDesk, syncSingleDeskFromDrive, pullChangedItems } from '../utils/driveSync.js';
+import { backupSingleDesk, syncSingleDeskFromDrive, pullChangedItems, pullMissingDeskLayoutRefs } from '../utils/driveSync.js';
 
 /** Ensures startup background sync runs once per page load (survives React Strict Mode remount). */
 let ownerBackgroundSyncScheduled = false;
@@ -98,6 +98,7 @@ export const Library = ({
   onRegisterSync,
   onRegisterItemBackup,
   onRegisterInitialDeskSync,
+  onRegisterDeskLayoutSync,
   onRegisterSetSharedWith,
   itemDownloadProgress,
 }) => {
@@ -944,6 +945,31 @@ export const Library = ({
 
   onRegisterSetSharedWith?.((record, storeName, emails) => handleSetSharedWith(record, storeName, emails));
 
+  const pullDeskLayoutMissing = async (desk) => {
+    if (!credentials?.clientId || !String(driveFolderId || '').trim()) return;
+    if (userType !== 'master' && userType !== 'editor') return;
+    const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
+    if (!token) return;
+    await pullMissingDeskLayoutRefs(desk, {
+      accessToken: token,
+      folderId: driveFolderId,
+      items,
+      channels,
+      desks,
+      fetchOwnerIndex,
+      upsertDriveBook: (driveFile, blob, assets) =>
+        upsertDriveBook(driveFile, blob, assets, { silent: true }),
+      upsertDriveChannel: (driveFile, channelData) =>
+        upsertDriveChannel(driveFile, channelData, { silent: true }),
+      upsertDriveDesk: (driveFile, deskData) =>
+        upsertDriveDesk(driveFile, deskData, { silent: true }),
+      lazyBooks: true,
+      onBatchComplete: loadAll,
+    });
+  };
+
+  onRegisterDeskLayoutSync?.(pullDeskLayoutMissing);
+
   onRegisterInitialDeskSync?.(async (desk) => {
     if (!credentials?.clientId || !String(driveFolderId || '').trim()) return;
     if (userType !== 'master' && userType !== 'editor') return;
@@ -951,6 +977,7 @@ export const Library = ({
       const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
       if (!token) return;
       await syncSingleDeskFromDrive(desk, { accessToken: token, upsertDriveDesk });
+      await pullDeskLayoutMissing(desk);
     } catch (err) {
       console.warn('[InfoDepo] initial desk sync failed:', err.message);
     }
