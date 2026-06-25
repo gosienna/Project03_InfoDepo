@@ -82,8 +82,8 @@ function readingPositionWithoutPdfAnnotations(rp) {
   return rest;
 }
 
-const PDF_VIEW_ZOOM_MIN = 0.5;
-const PDF_VIEW_ZOOM_MAX = 4;
+const PDF_VIEW_ZOOM_MIN = 0.1;
+const PDF_VIEW_ZOOM_MAX = 8;
 const PDF_VIEW_ZOOM_STEP = 0.1;
 const PDF_VIEW_PAN_STEP = 48;
 
@@ -191,6 +191,40 @@ function scaleAnnotationByRatio(ann, ratio) {
   return ann;
 }
 
+// Scales only positional coordinates (x/y/points/bounds) — leaves fontSize and strokeWidth
+// unchanged. Used when switching twoPageMode so text/stroke sizes stay visually constant.
+function scaleAnnotationPositionsOnly(ann, ratio) {
+  if (!ann || Math.abs(ratio - 1) < 0.001) return ann;
+  const m = (n) => (typeof n === 'number' && Number.isFinite(n) ? n * ratio : n);
+  if (ann.type === 'highlight') {
+    return { ...ann, x: m(ann.x), y: m(ann.y), w: m(ann.w), h: m(ann.h) };
+  }
+  if (ann.type === 'text') {
+    return { ...ann, x: m(ann.x), y: m(ann.y) };
+  }
+  if (ann.type === 'line') {
+    return { ...ann, x1: m(ann.x1), y1: m(ann.y1), x2: m(ann.x2), y2: m(ann.y2) };
+  }
+  if (ann.type === 'draw') {
+    const points = Array.isArray(ann.points) ? ann.points.map((p) => ({ x: m(p.x), y: m(p.y) })) : [];
+    return { ...ann, points };
+  }
+  return ann;
+}
+
+// Derive the one-page/zoom=1 reference page width from the actual DOM wrapper width.
+// pageWrappers[0].clientWidth reflects the size baked in at render time (immune to
+// later scrollbar-induced changes to the scroll-container's clientWidth).
+function basePageW(wrappers, mode, zoom) {
+  const w = wrappers[0]?.clientWidth;
+  if (!w) return 100;
+  const z = zoom > 0 ? zoom : 1;
+  // In one-page: wrapper = (containerW - 32) * z  →  base = wrapper / z
+  // In two-page: wrapper = (containerW/2 - 32) * z  →  containerW = (wrapper/z + 32)*2
+  //              base = containerW - 32 = 2*wrapper/z + 32
+  return mode !== 'off' ? Math.max(1, 2 * w / z + 32) : Math.max(1, w / z);
+}
+
 function isExpectedPdfCancellation(err) {
   const name = String(err?.name || '');
   const msg = String(err?.message || '').toLowerCase();
@@ -234,6 +268,9 @@ export const PdfViewer = ({
   const pendingRestorePageRef = useRef(null);
   const saveScrollDebounceRef = useRef(null);
   const savePageDebounceRef = useRef(null);
+  const annotationSaveTimerRef = useRef(null);
+  const skipAnnotationSaveRef = useRef(false);
+  const inlineTextInputRef = useRef(null);
   const useWindowScrollRef = useRef(false);
   const lastKnownPageRef = useRef(1);
   const lastUserScrollAtRef = useRef(0);
@@ -250,6 +287,7 @@ export const PdfViewer = ({
 
   useEffect(() => {
     const list = Array.isArray(initialAnnotations) ? initialAnnotations : [];
+    skipAnnotationSaveRef.current = true;
     setAnnotations(list);
     annotationsRef.current = list;
   }, [recordDriveId, initialAnnotations]);
@@ -738,7 +776,9 @@ export const PdfViewer = ({
           try {
             const page = await pdfDoc.getPage(pageIndex + 1);
             if (cancelled || runId !== runIdRef.current) { renderingPages.delete(pageIndex); return; }
-            const { canvas, viewportCss } = await renderPageToCanvas(page, effectiveWidth, rotationDeg);
+            // Use current zoom at render time (effectiveWidth captured at load is stale after zoom).
+            const lazyEffW = computeEffectivePageWidth(mount, twoPageMode, viewZoomRef.current);
+            const { canvas, viewportCss } = await renderPageToCanvas(page, lazyEffW, rotationDeg);
             if (cancelled || runId !== runIdRef.current) { renderingPages.delete(pageIndex); return; }
             let textLayer = null;
             try {
@@ -896,8 +936,15 @@ export const PdfViewer = ({
       return hit != null && mount.contains(hit);
     };
 
+    const isOverPage = (e) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      return el != null && el.closest('[data-pdfjs-page]') != null;
+    };
+
     const onWheel = (e) => {
       if (!isOverViewer(e)) return;
+      // Scroll when cursor is outside a page; zoom when over a page.
+      if (!isOverPage(e)) return;
       if (!e.cancelable) return;
       e.preventDefault();
       e.stopPropagation();
@@ -1217,23 +1264,39 @@ export const PdfViewer = ({
     });
   }, [tool, status, pageWrappers.length]);
 
-  // Auto-save annotation sidecar every 60 seconds
+  // Auto-save 1.5 s after each annotation edit (debounced).
   useEffect(() => {
+    if (skipAnnotationSaveRef.current) {
+      skipAnnotationSaveRef.current = false;
+      return;
+    }
     if (readOnly || !onSavePdfAnnotations || !storeName || !recordDriveId) return;
-    const id = setInterval(() => {
+    if (annotationSaveTimerRef.current) clearTimeout(annotationSaveTimerRef.current);
+    annotationSaveTimerRef.current = setTimeout(() => {
       performSave(annotationsRef.current, true);
-    }, 60_000);
-    return () => clearInterval(id);
-  }, [data, recordDriveId, onSavePdfAnnotations, storeName]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, 1500);
+    return () => {
+      if (annotationSaveTimerRef.current) clearTimeout(annotationSaveTimerRef.current);
+    };
+  }, [annotations]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function performSave(currentAnnotations, isAuto = false) {
     if (!onSavePdfAnnotations || !storeName || !recordDriveId) return;
     setSaving(true);
     try {
+      const anns = Array.isArray(currentAnnotations) ? currentAnnotations : [];
+      // Normalize to "one-page, zoom=1" space before persisting so annotations
+      // reload correctly regardless of active zoom or twoPageMode at save time.
+      const baseW = basePageW(pageWrappers, twoPageMode, viewZoomRef.current);
+      const curW = pageWrappers[0]?.clientWidth || baseW;
+      const normalRatio = baseW / Math.max(1, curW);
+      const toSave = Math.abs(normalRatio - 1) > 0.001
+        ? anns.map((a) => scaleAnnotationByRatio(a, normalRatio))
+        : anns;
       await onSavePdfAnnotations(
         recordDriveId,
         storeName,
-        Array.isArray(currentAnnotations) ? currentAnnotations : [],
+        toSave,
         pdfDriveId || ''
       );
 
@@ -1434,12 +1497,15 @@ export const PdfViewer = ({
     if (toolRef.current === 'draw') {
       const draft = strokeDraftRef.current;
       if (draft && draft.pageIndex === pageIndex && draft.points.length > 1) {
+        const drawBaseW = basePageW(pageWrappers, twoPageMode, viewZoomRef.current);
+        const drawCurW = pageWrappers[pageIndex]?.clientWidth || drawBaseW;
+        const drawScale = drawCurW / drawBaseW;
         setAnnotations((prev) => [...prev, {
           type: 'draw',
           pageIndex,
           points: draft.points,
           color: lineStrokeColor,
-          strokeWidth: lineStrokeWidth,
+          strokeWidth: lineStrokeWidth * drawScale,
         }]);
       }
       setStrokeDraft(null);
@@ -1457,6 +1523,9 @@ export const PdfViewer = ({
         const x2 = draft.curX;
         const y2 = draft.curY;
         if (Math.abs(x2 - x1) > 2 || Math.abs(y2 - y1) > 2) {
+          const lineBaseW = basePageW(pageWrappers, twoPageMode, viewZoomRef.current);
+          const lineCurW = pageWrappers[pageIndex]?.clientWidth || lineBaseW;
+          const lineScale = lineCurW / lineBaseW;
           setAnnotations((prev) => [...prev, {
             type: 'line',
             pageIndex,
@@ -1465,7 +1534,7 @@ export const PdfViewer = ({
             x2,
             y2,
             color: lineStrokeColor,
-            strokeWidth: lineStrokeWidth,
+            strokeWidth: lineStrokeWidth * lineScale,
           }]);
         }
       }
@@ -1532,11 +1601,14 @@ export const PdfViewer = ({
 
   function commitTextDraft() {
     if (!textDraft) return;
-    const text = String(textDraft.text || '').trim();
+    const text = String(inlineTextInputRef.current?.value ?? '').trim();
     if (!text) {
       setTextDraft(null);
       return;
     }
+    const tBaseW = basePageW(pageWrappers, twoPageMode, viewZoomRef.current);
+    const tCurW = pageWrappers[textDraft.pageIndex]?.clientWidth || tBaseW;
+    const tScale = tCurW / tBaseW;
     setAnnotations((prev) => [
       ...prev,
       {
@@ -1546,7 +1618,7 @@ export const PdfViewer = ({
         y: textDraft.y,
         text,
         color: textColor,
-        fontSize: textFontSize,
+        fontSize: textFontSize * tScale,
       },
     ]);
     setTextDraft(null);
@@ -1735,129 +1807,68 @@ export const PdfViewer = ({
         );
       }
       if (!readOnly && textDraft && textDraft.pageIndex === pageIndex) {
+        const tBaseW = basePageW(pageWrappers, twoPageMode, viewZoomRef.current);
+        const tCurW = pageWrappers[pageIndex]?.clientWidth || tBaseW;
+        const liveFontSize = Math.max(6, textFontSize * (tCurW / tBaseW));
+        const colorCss = getTextColorMeta(textColor).css;
         children.push(
-          React.createElement(
-            'div',
-            {
-              key: 'text-draft',
-              style: {
-                position: 'absolute',
-                left: textDraft.x,
-                top: textDraft.y,
-                zIndex: 20,
-                background: 'rgba(17,24,39,0.95)',
-                border: '1px solid rgba(75,85,99,1)',
-                borderRadius: 8,
-                padding: 8,
-                width: 220,
-                boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
-              },
-              onMouseDown: (e) => e.stopPropagation(),
-              onClick: (e) => e.stopPropagation(),
+          React.createElement('textarea', {
+            key: `text-draft-${pageIndex}-${textDraft.x}-${textDraft.y}`,
+            ref: (el) => {
+              inlineTextInputRef.current = el;
+              if (el) {
+                el.style.height = 'auto';
+                el.style.height = el.scrollHeight + 'px';
+                el.focus();
+              }
             },
-            React.createElement('textarea', {
-              autoFocus: true,
-              rows: 3,
-              value: textDraft.text,
-              placeholder: 'Type annotation text',
-              style: {
-                width: '100%',
-                resize: 'vertical',
-                minHeight: 58,
-                borderRadius: 6,
-                border: '1px solid rgba(107,114,128,1)',
-                padding: 6,
-                fontSize: 13,
-                background: 'rgba(255,255,255,0.95)',
-                color: '#111827',
-                outline: 'none',
-              },
-              onChange: (e) => setTextDraft((prev) => (prev ? { ...prev, text: e.target.value } : prev)),
-              onKeyDown: (e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                  e.preventDefault();
-                  commitTextDraft();
-                } else if (e.key === 'Escape') {
-                  e.preventDefault();
-                  cancelTextDraft();
-                }
-              },
-            }),
-            React.createElement(
-              'div',
-              { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 } },
-              React.createElement('span', { style: { color: '#d1d5db', fontSize: 12 } }, 'Color'),
-              React.createElement(
-                'select',
-                {
-                  value: textColor,
-                  style: {
-                    borderRadius: 6,
-                    border: '1px solid rgba(107,114,128,1)',
-                    padding: '4px 6px',
-                    fontSize: 12,
-                    background: 'rgba(255,255,255,0.95)',
-                    color: '#111827',
-                  },
-                  onChange: (e) => setTextColor(e.target.value),
-                },
-                TEXT_COLOR_OPTIONS.map((opt) =>
-                  React.createElement('option', { key: opt.id, value: opt.id }, opt.label)
-                )
-              )
-            ),
-            React.createElement(
-              'div',
-              { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 6 } },
-              React.createElement('span', { style: { color: '#d1d5db', fontSize: 12 } }, 'Size'),
-              React.createElement(
-                'select',
-                {
-                  value: String(textFontSize),
-                  style: {
-                    borderRadius: 6,
-                    border: '1px solid rgba(107,114,128,1)',
-                    padding: '4px 6px',
-                    fontSize: 12,
-                    background: 'rgba(255,255,255,0.95)',
-                    color: '#111827',
-                  },
-                  onChange: (e) => setTextFontSize(Number(e.target.value)),
-                },
-                [12, 14, 16, 18, 20, 24, 28, 32].map((size) =>
-                  React.createElement('option', { key: size, value: String(size) }, `${size}px`)
-                )
-              )
-            ),
-            React.createElement(
-              'div',
-              { style: { display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 } },
-              React.createElement('button', {
-                style: {
-                  padding: '4px 8px',
-                  borderRadius: 6,
-                  border: 'none',
-                  background: 'rgba(75,85,99,1)',
-                  color: '#e5e7eb',
-                  cursor: 'pointer',
-                  fontSize: 12,
-                },
-                onClick: cancelTextDraft,
-              }, 'Cancel'),
-              React.createElement('button', {
-                style: {
-                  padding: '4px 8px',
-                  borderRadius: 6,
-                  border: 'none',
-                  background: 'rgba(37,99,235,1)',
-                  color: '#fff',
-                  cursor: 'pointer',
-                  fontSize: 12,
-                },
-                onClick: commitTextDraft,
-              }, 'Add Text'),
-            ),
-          )
+            defaultValue: '',
+            rows: 1,
+            style: {
+              position: 'absolute',
+              left: textDraft.x,
+              top: textDraft.y,
+              minWidth: Math.max(60, liveFontSize * 4),
+              width: Math.max(60, liveFontSize * 4),
+              background: 'transparent',
+              border: 'none',
+              borderBottom: `1px solid ${colorCss}`,
+              outline: 'none',
+              resize: 'none',
+              overflow: 'hidden',
+              fontSize: liveFontSize,
+              lineHeight: 1.2,
+              color: colorCss,
+              caretColor: colorCss,
+              fontFamily: 'sans-serif',
+              padding: 0,
+              margin: 0,
+              zIndex: 20,
+              pointerEvents: 'all',
+            },
+            onInput: (e) => {
+              const el = e.target;
+              // auto-grow height
+              el.style.height = 'auto';
+              el.style.height = el.scrollHeight + 'px';
+              // auto-grow width to longest line
+              const longest = el.value.split('\n').reduce((m, l) => Math.max(m, l.length), 1);
+              el.style.width = Math.max(60, longest * liveFontSize * 0.6 + liveFontSize) + 'px';
+            },
+            onKeyDown: (e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                commitTextDraft();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelTextDraft();
+              }
+            },
+            onBlur: commitTextDraft,
+            onMouseDown: (e) => e.stopPropagation(),
+            onClick: (e) => e.stopPropagation(),
+          })
         );
       }
       return ReactDOM.createPortal(
@@ -1992,13 +2003,25 @@ export const PdfViewer = ({
             whiteSpace: 'nowrap',
           },
           onClick: () => {
+            const nextMode = twoPageMode === 'off' ? 'even-left'
+              : twoPageMode === 'even-left' ? 'odd-left'
+              : 'off';
+            if (pageWrappers.length) {
+              const tpZoom = viewZoomRef.current > 0 ? viewZoomRef.current : 1;
+              const oldW = pageWrappers[0]?.clientWidth || 1;
+              // Reconstruct container width from actual render-time page size (avoids
+              // scrollbar-induced clientWidth drift on the scroll container).
+              const tpBaseW = basePageW(pageWrappers, twoPageMode, viewZoomRef.current);
+              const tpContainerW = tpBaseW + 32;
+              const newPerPage = nextMode !== 'off' ? Math.ceil(tpContainerW / 2) : tpContainerW;
+              const newW = Math.max(100, newPerPage - 32) * tpZoom;
+              if (oldW > 0 && Math.abs(newW - oldW) > 0.5) {
+                setAnnotations((prev) => prev.map((a) => scaleAnnotationByRatio(a, newW / oldW)));
+              }
+            }
             pendingRestorePageRef.current = lastKnownPageRef.current || 1;
             didRestoreScrollRef.current = false;
-            setTwoPageMode((prev) => {
-              if (prev === 'off') return 'even-left';
-              if (prev === 'even-left') return 'odd-left';
-              return 'off';
-            });
+            setTwoPageMode(nextMode);
           },
         },
         twoPageMode === 'off'
@@ -2026,9 +2049,10 @@ export const PdfViewer = ({
               pendingRestorePageRef.current = lastKnownPageRef.current || 1;
               didRestoreScrollRef.current = false;
             }
-            const z = viewZoomRef.current;
-            if (z !== 1) {
-              setAnnotations((prev) => prev.map((a) => scaleAnnotationByRatio(a, 1 / z)));
+            const resetBaseW = basePageW(pageWrappers, twoPageMode, viewZoomRef.current);
+            const resetCurW = pageWrappers[0]?.clientWidth || resetBaseW;
+            if (Math.abs(resetCurW - resetBaseW) > 0.5) {
+              setAnnotations((prev) => prev.map((a) => scaleAnnotationByRatio(a, resetBaseW / resetCurW)));
             }
             setRotationDeg(0);
             setTwoPageMode('off');
@@ -2305,24 +2329,25 @@ export const PdfViewer = ({
             React.createElement('option', { key: opt.id, value: opt.id }, opt.label)
           )
         ),
-        React.createElement(
-          'select',
-          {
-            value: String(textFontSize),
-            style: {
-              borderRadius: 6,
-              border: '1px solid rgba(75,85,99,1)',
-              padding: '4px 6px',
-              fontSize: 12,
-              background: 'rgba(255,255,255,0.95)',
-              color: '#111827',
-            },
-            onChange: (e) => setTextFontSize(Number(e.target.value)),
+        React.createElement('input', {
+          type: 'number',
+          value: textFontSize,
+          min: 6,
+          max: 300,
+          style: {
+            width: 70,
+            borderRadius: 6,
+            border: '1px solid rgba(75,85,99,1)',
+            padding: '4px 6px',
+            fontSize: 12,
+            background: 'rgba(255,255,255,0.95)',
+            color: '#111827',
           },
-          [12, 14, 16, 18, 20, 24, 28, 32].map((size) =>
-            React.createElement('option', { key: size, value: String(size) }, `Size ${size}`)
-          )
-        ),
+          onChange: (e) => {
+            const v = parseInt(e.target.value, 10);
+            if (!isNaN(v) && v >= 1) setTextFontSize(v);
+          },
+        }),
       ),
       panelBtn(
         'Clear All',
