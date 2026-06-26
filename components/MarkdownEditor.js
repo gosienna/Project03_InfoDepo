@@ -519,8 +519,14 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   const htmlPristine         = useRef(true);   // true = contenteditable not yet edited by user
   const htmlSlashRef         = useRef(null);   // { node, offset } — tracks '/' position in contentEditable for slash commands
   const mathRenderTimerRef   = useRef(null);   // setTimeout id for deferred math render
+  const isDirtyRef           = useRef(false);
+  const isSavingRef          = useRef(false);
+  const handleSaveRef        = useRef(null);
+  const autosaveTimerRef     = useRef(null);
 
   useEffect(() => { textRef.current = text; }, [text]);
+  useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
+  useEffect(() => { isSavingRef.current = isSaving; }, [isSaving]);
 
   // Load note text + assets
   useEffect(() => {
@@ -553,6 +559,29 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       }).catch(() => {});
     }
   }, [video.driveId]);
+
+  // Flush on editor close, tab hide, or page unload — backup for the debounced autosave
+  useEffect(() => {
+    const flush = () => { if (isDirtyRef.current && !isSavingRef.current) handleSaveRef.current?.(); };
+    const onHide = () => { if (document.hidden) flush(); };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('beforeunload', flush);
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('beforeunload', flush);
+      flush();
+    };
+  }, []);
+
+  // Debounced autosave: persists the note ~1 s after any edit
+  useEffect(() => {
+    if (!isDirty) return;
+    clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(() => {
+      if (isDirtyRef.current && !isSavingRef.current) handleSaveRef.current?.();
+    }, 1000);
+    return () => clearTimeout(autosaveTimerRef.current);
+  }, [isDirty]);
 
   // Revoke object URLs on cleanup
   useEffect(() => {
@@ -1529,6 +1558,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       setIsSaving(false);
     }
   };
+  handleSaveRef.current = handleSave;
 
   const scrollToHeading = (slug) => {
     setShowToc(false);

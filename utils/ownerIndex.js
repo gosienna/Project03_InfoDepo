@@ -4,6 +4,14 @@
  */
 import { fetchGoogleApisGet } from './googleApisFetch.js';
 
+// Serialize all index writes so concurrent callers don't clobber each other's entries.
+let _indexWriteChain = Promise.resolve();
+function withIndexMutex(fn) {
+  const next = _indexWriteChain.then(fn, fn);
+  _indexWriteChain = next.catch(() => {}); // keep chain alive on errors
+  return next;
+}
+
 const INDEX_FILENAME = '_infodepo_index.json';
 
 /**
@@ -40,7 +48,11 @@ async function uploadIndexPayload(payload, { accessToken, folderId }) {
   }
 }
 
-export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items, channels, desks }) {
+export function writeOwnerIndex(args) {
+  return withIndexMutex(() => _writeOwnerIndex(args));
+}
+
+async function _writeOwnerIndex({ accessToken, folderId, ownerEmail, items, channels, desks }) {
   const entries = [];
   for (const item of items || []) {
     const did = String(item.driveFileId || '').trim();
@@ -91,7 +103,11 @@ export async function writeOwnerIndex({ accessToken, folderId, ownerEmail, items
  * Fetches the current index, updates or inserts the entry, then re-uploads.
  * Used after per-edit desk backup so the index stays current between full syncs.
  */
-export async function updateOwnerIndexEntry(driveId, updatedFields, { accessToken, folderId, ownerEmail }) {
+export function updateOwnerIndexEntry(driveId, updatedFields, options) {
+  return withIndexMutex(() => _updateOwnerIndexEntry(driveId, updatedFields, options));
+}
+
+async function _updateOwnerIndexEntry(driveId, updatedFields, { accessToken, folderId, ownerEmail }) {
   const current = await fetchOwnerIndex({ accessToken, folderId, expectedOwnerEmail: ownerEmail });
   if (!current) return;
   const did = String(driveId || '').trim();

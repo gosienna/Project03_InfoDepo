@@ -10,6 +10,7 @@ import {
   normalizeLayoutPos,
 } from '../utils/deskEntryKeys.js';
 import { makeTempDriveId, migrationTempDriveId, deskLayoutKey } from '../utils/driveRecordKey.js';
+import { mergeDesk } from '../utils/deskMerge.js';
 
 const BOOKS_STORE    = 'books';
 const NOTES_STORE    = 'notes';
@@ -1499,7 +1500,7 @@ export const useIndexedDB = () => {
       req.onsuccess = () => {
         const existing = req.result;
         if (!existing) { reject(new Error('Desk not found')); return; }
-        const putReq = os.put({ ...existing, layout, localModifiedAt: new Date() });
+        const putReq = os.put({ ...existing, layout, localModifiedAt: new Date(), dirty: true, rev: (existing.rev || 0) + 1 });
         putReq.onsuccess = () => { loadDesks('setDeskLayout'); resolve(); };
         putReq.onerror = () => reject(putReq.error);
       };
@@ -1521,6 +1522,8 @@ export const useIndexedDB = () => {
           ...existing,
           connections: Array.isArray(connections) ? connections : [],
           localModifiedAt: new Date(),
+          dirty: true,
+          rev: (existing.rev || 0) + 1,
         });
         putReq.onsuccess = () => { loadDesks('setDeskConnections'); resolve(); };
         putReq.onerror = () => reject(putReq.error);
@@ -1569,6 +1572,8 @@ export const useIndexedDB = () => {
           ...existing,
           textItems: Array.isArray(textItems) ? textItems : [],
           localModifiedAt: new Date(),
+          dirty: true,
+          rev: (existing.rev || 0) + 1,
         });
         putReq.onsuccess = () => { loadDesks('setDeskTextItems'); resolve(); };
         putReq.onerror = () => reject(putReq.error);
@@ -1593,10 +1598,33 @@ export const useIndexedDB = () => {
     return found?.record;
   }, [db]);
 
-  const upsertDriveDesk = useCallback(async (driveFile, deskData, { silent = false } = {}) => {
+  const upsertDriveDesk = useCallback(async (driveFile, deskData, { silent = false, mode = 'replace' } = {}) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
     const googleId = String(driveFile.driveId || '').trim();
     const existing = googleId ? await getDeskByDriveFileId(googleId) : undefined;
+
+    // merge mode: 3-way merge when a local copy exists
+    if (existing && mode === 'merge') {
+      return new Promise((resolve, reject) => {
+        let tx;
+        try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
+        const os = tx.objectStore(DESKS_STORE);
+        const merged = mergeDesk(existing.baseSnapshot, existing, deskData);
+        const putReq = os.put({
+          ...existing,
+          ...merged,
+          driveFileId: googleId || existing.driveFileId,
+          modifiedTime: existing.modifiedTime,
+          localModifiedAt: new Date(),
+          dirty: true,
+          baseSnapshot: deskData,
+          ownerEmail: driveFile.ownerEmail || deskData.ownerEmail || existing.ownerEmail || '',
+        });
+        putReq.onsuccess = () => { if (!silent) loadDesks('upsertDriveDesk/merged'); resolve('merged'); };
+        putReq.onerror = (e) => reject(e.target.error);
+      });
+    }
+
     return new Promise((resolve, reject) => {
       let tx;
       try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
@@ -1614,6 +1642,8 @@ export const useIndexedDB = () => {
           driveFileId: googleId || existing.driveFileId,
           modifiedTime: mt,
           localModifiedAt: mt,
+          dirty: false,
+          baseSnapshot: driveIsNewer ? deskData : existing.baseSnapshot,
           ownerEmail: incomingOwnerEmail || existing.ownerEmail || '',
         });
         putReq.onsuccess = () => { if (!silent) loadDesks('upsertDriveDesk/updated'); resolve('updated'); };
@@ -1629,12 +1659,34 @@ export const useIndexedDB = () => {
           tags: Array.isArray(deskData.tags) ? deskData.tags : [],
           sharedWith: Array.isArray(deskData.sharedWith) ? deskData.sharedWith : [],
           ownerEmail: incomingOwnerEmail,
+          dirty: false,
+          baseSnapshot: deskData,
         });
         putReq.onsuccess = () => { if (!silent) loadDesks('upsertDriveDesk/added'); resolve('added'); };
         putReq.onerror = (e) => reject(e.target.error);
       }
     });
   }, [db, loadDesks, getDeskByDriveFileId]);
+
+  const clearDeskDirty = useCallback((driveId, { baseSnapshot } = {}) => {
+    if (!db) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
+      const os = tx.objectStore(DESKS_STORE);
+      const req = os.get(driveId);
+      req.onsuccess = () => {
+        const existing = req.result;
+        if (!existing) { resolve(); return; }
+        const update = { ...existing, dirty: false };
+        if (baseSnapshot !== undefined) update.baseSnapshot = baseSnapshot;
+        const putReq = os.put(update);
+        putReq.onsuccess = () => resolve();
+        putReq.onerror = () => reject(putReq.error);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }, [db]);
 
   const setRecordTags = useCallback((driveId, storeName, tags) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
@@ -2189,7 +2241,7 @@ export const useIndexedDB = () => {
     deleteItemByDriveId, deleteChannelByDriveId,
     getLocalRecordsByOwnerEmail,
     addDesk, deleteDesk, setDeskLayout, setDeskConnections, setDeskTextItems, migrateDeskLayout,
-    getDeskByDriveId, upsertDriveDesk,
+    getDeskByDriveId, upsertDriveDesk, clearDeskDirty,
     setRecordTags,
     setItemSharedWith,
     mergeItemSharedWithByDriveId,

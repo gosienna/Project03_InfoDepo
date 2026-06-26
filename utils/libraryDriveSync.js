@@ -54,6 +54,7 @@ export async function runOwnerSyncPipeline({
   mergeChannelSharedWithByDriveId,
   mergeDeskSharedWithByDriveId,
   deleteDeskByDriveId,
+  clearDeskDirty,
   onBatchComplete,
 }) {
   // Step 1: fetch the current Drive index and merge any sharedWith differences into
@@ -143,8 +144,32 @@ export async function runOwnerSyncPipeline({
   });
 
   // Step 2: classify changes by comparing index against local state.
-  const { toBackup, toPull } = classifyChanges(driveIndex, syncItems, syncChannels, syncDesks);
-  console.log('[InfoDepo][ownerSync] classify:', { toBackup: toBackup.length, toPull: toPull.length });
+  const classified = classifyChanges(driveIndex, syncItems, syncChannels, syncDesks);
+  const toBackup = [...classified.toBackup];
+  const { toPull, toMerge } = classified;
+  console.log('[InfoDepo][ownerSync] classify:', { toBackup: toBackup.length, toPull: toPull.length, toMerge: toMerge.length });
+
+  // Step 2b: process conflict desks — download remote, 3-way merge, then queue for backup.
+  for (const { record, entry } of toMerge) {
+    const driveId = String(entry.driveId || '').trim();
+    if (!driveId) continue;
+    try {
+      const blobRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveId)}?alt=media`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (!blobRes.ok) { toBackup.push({ record, storeName: 'desks' }); continue; }
+      const parsed = JSON.parse(await blobRes.text());
+      const { _type, ...deskData } = parsed;
+      const driveFile = { driveId, name: entry.name, mimeType: 'application/json', modifiedTime: entry.modifiedTime };
+      await upsertDriveDesk(driveFile, deskData, { silent: true, mode: 'merge' });
+      const mergedDesk = await getDeskByDriveId(record.driveId);
+      if (mergedDesk) toBackup.push({ record: mergedDesk, storeName: 'desks' });
+    } catch (err) {
+      console.warn('[libraryDriveSync] desk merge failed, falling back to backup:', err.message);
+      toBackup.push({ record, storeName: 'desks' });
+    }
+  }
 
   // Step 3: backup only the dirty items.
   const backupResult = await backupChangedItems(toBackup, {
@@ -188,6 +213,15 @@ export async function runOwnerSyncPipeline({
     try {
       onProgress?.('Writing owner index…');
       await writeOwnerIndex({ accessToken, folderId, ownerEmail, items: syncItems, channels: syncChannels, desks: syncDesks });
+      // clear dirty only after both blob upload AND index write succeeded
+      if (clearDeskDirty) {
+        const backedDeskIds = backupResult.updatedEntries
+          .filter(e => e.storeName === 'desks')
+          .map(e => e.localDriveId);
+        for (const id of backedDeskIds) {
+          await clearDeskDirty(id).catch(() => {});
+        }
+      }
     } catch (err) {
       console.warn('[libraryDriveSync] writeOwnerIndex failed:', err);
     }
@@ -350,10 +384,10 @@ export async function runViewerDeskSyncPipeline({
   });
 
   if (backupResult.updatedEntries.length > 0) {
-    const patchById = new Map(backupResult.updatedEntries.map(e => [e.id, e]));
+    const patchById = new Map(backupResult.updatedEntries.map(e => [e.localDriveId, e]));
     syncDesks = syncDesks.map(d => {
-      const p = patchById.get(d.id);
-      return p ? { ...d, driveId: p.driveId, modifiedTime: p.modifiedTime } : d;
+      const p = patchById.get(d.driveId);
+      return p ? { ...d, driveFileId: p.driveFileId, modifiedTime: p.modifiedTime } : d;
     });
   }
 

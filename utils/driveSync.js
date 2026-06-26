@@ -487,7 +487,7 @@ function noteBundleNeedsBackup(item) {
   const isNote = item.type === 'text/markdown' || item.idbStore === 'notes';
   const hasAssets = isNote && Array.isArray(item.assets) && item.assets.length > 0;
   if (hasAssets) {
-    const anyNew = item.assets.some((a) => a?.data && !String(a.driveId || '').trim());
+    const anyNew = item.assets.some((a) => a?.data && (!a.driveId || isTempDriveId(a.driveId)));
     if (anyNew) return true;
   }
   return itemNeedsBackupUpload(item);
@@ -495,11 +495,16 @@ function noteBundleNeedsBackup(item) {
 
 function deskNeedsBackupUpload(desk) {
   if (!hasDriveCopy(desk)) return true;
-  const lm = timeMs(desk.localModifiedAt);
-  const mt = timeMs(desk.modifiedTime);
-  if (lm == null) return false;
-  if (mt == null) return true;
-  return lm > mt;
+  if (desk.dirty === true) return true;
+  if (desk.dirty === undefined) {
+    // legacy: no dirty flag, fall back to clock comparison
+    const lm = timeMs(desk.localModifiedAt);
+    const mt = timeMs(desk.modifiedTime);
+    if (lm == null) return false;
+    if (mt == null) return true;
+    return lm > mt;
+  }
+  return false;
 }
 
 function channelNeedsBackupUpload(ch) {
@@ -777,7 +782,8 @@ export async function backupAllToGDrive({
 
           const assetDriveIds = [];
           for (const asset of item.assets) {
-            if (asset.driveId) {
+            const realAssetId0 = String(asset.driveId || '').trim();
+            if (realAssetId0 && !isTempDriveId(realAssetId0)) {
               assetDriveIds.push({ name: asset.name, driveId: asset.driveId });
               continue;
             }
@@ -799,7 +805,8 @@ export async function backupAllToGDrive({
           const assetDriveIds = [];
           let anyNewAsset = false;
           for (const asset of item.assets) {
-            if (String(asset.driveId || '').trim()) {
+            const realAssetId = String(asset.driveId || '').trim();
+            if (realAssetId && !isTempDriveId(realAssetId)) {
               assetDriveIds.push({ name: asset.name, driveId: asset.driveId });
               continue;
             }
@@ -1019,11 +1026,12 @@ async function listFolderContents(folderId, accessToken) {
  * @param {Array}       items       - Local book/note/video records (IMAGES_STORE excluded)
  * @param {Array}       channels    - Local channel records
  * @param {Array}       desks       - Local desk records
- * @returns {{ toBackup: Array<{record,storeName}>, toPull: Array }}
+ * @returns {{ toBackup: Array<{record,storeName}>, toPull: Array, toMerge: Array<{record,entry,storeName}> }}
  */
 export function classifyChanges(driveIndex, items, channels, desks) {
   const toBackup = [];
   const toPull   = [];
+  const toMerge  = [];
   const localFileIds = new Set();
 
   const indexByDriveId = new Map(
@@ -1039,6 +1047,16 @@ export function classifyChanges(driveIndex, items, channels, desks) {
     const lm = timeMs(record.localModifiedAt);
     const im = timeMs(entry.modifiedTime);
     const dm = timeMs(record.modifiedTime);
+
+    if (storeName === 'desks') {
+      const localDirty  = record.dirty === true || (record.dirty === undefined && lm != null && im != null && lm > im);
+      const remoteNewer = im != null && dm != null && im > dm;
+      if (localDirty && remoteNewer) { toMerge.push({ record, entry, storeName }); return; }
+      if (localDirty)  { toBackup.push({ record, storeName }); return; }
+      if (remoteNewer) { toPull.push(entry); return; }
+      return;
+    }
+
     if (lm != null && im != null && lm > im) { toBackup.push({ record, storeName }); return; }
     if (im != null && dm != null && im > dm) toPull.push(entry);
     // else: clean
@@ -1066,7 +1084,7 @@ export function classifyChanges(driveIndex, items, channels, desks) {
     return true;
   });
 
-  return { toBackup, toPull: toPullDeduped };
+  return { toBackup, toPull: toPullDeduped, toMerge };
 }
 
 /**
@@ -1195,7 +1213,8 @@ export async function backupChangedItems(toBackup, {
 
           const assetDriveIds = [];
           for (const asset of record.assets) {
-            if (asset.driveId) { assetDriveIds.push({ name: asset.name, driveId: asset.driveId }); continue; }
+            const realAssetId0 = String(asset.driveId || '').trim();
+            if (realAssetId0 && !isTempDriveId(realAssetId0)) { assetDriveIds.push({ name: asset.name, driveId: realAssetId0 }); continue; }
             progress(`Backing up asset "${asset.name}" for "${record.name}"...`);
             const af = await postMultipart(asset.data, asset.name, asset.type, folder.id);
             assetDriveIds.push({ name: asset.name, driveId: af.id });
@@ -1215,7 +1234,8 @@ export async function backupChangedItems(toBackup, {
           const assetDriveIds = [];
           let anyNewAsset = false;
           for (const asset of record.assets) {
-            if (String(asset.driveId || '').trim()) { assetDriveIds.push({ name: asset.name, driveId: asset.driveId }); continue; }
+            const realAssetId = String(asset.driveId || '').trim();
+            if (realAssetId && !isTempDriveId(realAssetId)) { assetDriveIds.push({ name: asset.name, driveId: realAssetId }); continue; }
             progress(`Backing up asset "${asset.name}" for "${record.name}"...`);
             const af = await postMultipart(asset.data, asset.name, asset.type, existingFolderId);
             assetDriveIds.push({ name: asset.name, driveId: af.id });

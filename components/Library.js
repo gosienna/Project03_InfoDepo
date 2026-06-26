@@ -72,6 +72,7 @@ export const Library = ({
   mergeChannelSharedWithByDriveId,
   mergeDeskSharedWithByDriveId,
   deleteDeskByDriveId,
+  clearDeskDirty,
   renameItem,
   getMergedLibraryItems,
   getTotalStorageUsed,
@@ -568,7 +569,7 @@ export const Library = ({
             onSetDriveId: (oldDriveId, storeName, newDriveId, syncMeta = null) =>
               onSetDriveId(oldDriveId, storeName, newDriveId, { ...(syncMeta || {}), silent: true }),
             onProgress: setSyncProgress,
-            upsertDriveDesk: (driveFile, deskData) =>
+            upsertDriveDesk: (driveFile, deskData, opts) =>
               upsertDriveDesk(driveFile, deskData, { silent: true }),
             onBatchComplete: loadAll,
           });
@@ -591,7 +592,7 @@ export const Library = ({
             upsertDriveChannel(driveFile, channelData, { silent: true }),
           getDeskByDriveId,
           getDeskByDriveFileId,
-          upsertDriveDesk: (driveFile, deskData) =>
+          upsertDriveDesk: (driveFile, deskData, opts) =>
             upsertDriveDesk(driveFile, deskData, { silent: true }),
           getLocalRecordsByOwnerEmail,
           deleteItemByDriveId,
@@ -729,7 +730,7 @@ export const Library = ({
         upsertDriveBook(driveFile, blob, assets, { silent: true }),
       upsertDriveChannel: (driveFile, channelData) =>
         upsertDriveChannel(driveFile, channelData, { silent: true }),
-      upsertDriveDesk: (driveFile, deskData) =>
+      upsertDriveDesk: (driveFile, deskData, opts) =>
         upsertDriveDesk(driveFile, deskData, { silent: true }),
       lazyBooks: true,
       onProgress: setSyncProgress,
@@ -780,7 +781,7 @@ export const Library = ({
           upsertDriveChannel(driveFile, channelData, { silent: true }),
         getDeskByDriveId,
         getDeskByDriveFileId,
-        upsertDriveDesk: (driveFile, deskData) =>
+        upsertDriveDesk: (driveFile, deskData, opts) =>
           upsertDriveDesk(driveFile, deskData, { silent: true }),
         getLocalRecordsByOwnerEmail,
         deleteItemByDriveId,
@@ -795,6 +796,7 @@ export const Library = ({
         mergeChannelSharedWithByDriveId,
         mergeDeskSharedWithByDriveId,
         deleteDeskByDriveId,
+        clearDeskDirty,
         onBatchComplete: loadAll,
       });
       console.log('[InfoDepo] ownerSync result:', combined);
@@ -840,7 +842,7 @@ export const Library = ({
           onSetDriveId: (oldDriveId, storeName, newDriveId, syncMeta = null) =>
             onSetDriveId(oldDriveId, storeName, newDriveId, { ...(syncMeta || {}), silent: true }),
           onProgress: setSyncProgress,
-          upsertDriveDesk: (driveFile, deskData) =>
+          upsertDriveDesk: (driveFile, deskData, opts) =>
             upsertDriveDesk(driveFile, deskData, { silent: true }),
           onBatchComplete: loadAll,
         });
@@ -861,7 +863,7 @@ export const Library = ({
           upsertDriveChannel(driveFile, channelData, { silent: true }),
         getDeskByDriveId,
         getDeskByDriveFileId,
-        upsertDriveDesk: (driveFile, deskData) =>
+        upsertDriveDesk: (driveFile, deskData, opts) =>
           upsertDriveDesk(driveFile, deskData, { silent: true }),
         getLocalRecordsByOwnerEmail,
         deleteItemByDriveId,
@@ -945,6 +947,8 @@ export const Library = ({
               sharedWith: Array.isArray(desk.sharedWith) ? desk.sharedWith : [],
               tags: Array.isArray(desk.tags) ? desk.tags : [],
             }, { accessToken: token, folderId: driveFolderId, ownerEmail: normalizedUserEmail });
+            // only clear dirty after BOTH blob upload AND index update succeed
+            await clearDeskDirty(deskId).catch(() => {});
           } catch (indexErr) {
             console.warn('[InfoDepo] index update after desk backup failed:', indexErr.message);
           }
@@ -977,7 +981,7 @@ export const Library = ({
         upsertDriveBook(driveFile, blob, assets, { silent: true }),
       upsertDriveChannel: (driveFile, channelData) =>
         upsertDriveChannel(driveFile, channelData, { silent: true }),
-      upsertDriveDesk: (driveFile, deskData) =>
+      upsertDriveDesk: (driveFile, deskData, opts) =>
         upsertDriveDesk(driveFile, deskData, { silent: true }),
       lazyBooks: true,
       onBatchComplete: loadAll,
