@@ -53,7 +53,11 @@ const inlineMarkdown = (text, assetUrls) =>
         `<span style="color:#ef4444;font-size:.8em;font-weight:600">▶ ${escapeHtml(linkText)}</span>` +
         `</a>`
     )
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color:#818cf8;text-decoration:underline">$1</a>');
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, href) => {
+      const isExternal = href.startsWith('http://') || href.startsWith('https://') || href.startsWith('/?open=');
+      const extra = isExternal ? ' target="_blank" rel="noopener noreferrer"' : '';
+      return `<a href="${href}"${extra} style="color:#818cf8;text-decoration:underline">${text}</a>`;
+    });
 
 // Line-based Markdown → HTML renderer
 const renderMarkdown = (text, assetUrls) => {
@@ -440,7 +444,7 @@ function computeSlashMenuFromTextarea(ta) {
   if (slashPos < 0) return null;
   const lineStart = val.lastIndexOf('\n', slashPos - 1) + 1;
   const beforeSlash = val.slice(lineStart, slashPos);
-  return { slashPos, filter: '', activeIdx: 0, atLineStart: beforeSlash.trim() === '' };
+  return { slashPos, filter: '', activeIdx: 0, atLineStart: beforeSlash.trim() === '', layer: 0, group: null };
 }
 
 function setImageWidthInMarkdown(markdown, filename, widthPx) {
@@ -470,25 +474,38 @@ function createCanvasFilename(existing = {}) {
 const MATH_EDIT_INLINE_STYLE = 'display:inline-block;border-bottom:2px solid #fbbf24;padding:1px 6px 1px 4px;background:#1c1917;color:#fde68a;font-family:monospace;font-size:.95em;caret-color:#fbbf24;border-radius:3px 3px 0 0;min-width:8px;line-height:1.5;white-space:pre';
 const MATH_EDIT_BLOCK_STYLE  = 'display:block;border:2px dashed #fbbf24;border-radius:6px;padding:10px 14px;background:#1c1917;color:#fde68a;font-family:monospace;font-size:.95em;caret-color:#fbbf24;margin:8px 0;min-height:2em;white-space:pre-wrap;outline:none';
 
-// Slash command definitions
-const SLASH_COMMANDS = [
-  { id: 'h1',       label: 'Title',          hint: '# Heading',       insert: '# ',   blockOnly: true },
-  { id: 'h2',       label: 'Heading 2',      hint: '## Heading',      insert: '## ',  blockOnly: true },
-  { id: 'h3',       label: 'Heading 3',      hint: '### Heading',     insert: '### ', blockOnly: true },
-  { id: 'ul-dash',  label: 'List — dash',     hint: '- item',          insert: '- ',   blockOnly: true, listMarker: '-'  },
-  { id: 'ul-star',  label: 'List — star',     hint: '* item',          insert: '* ',   blockOnly: true, listMarker: '*'  },
-  { id: 'ul-plus',  label: 'List — plus',     hint: '+ item',          insert: '+ ',   blockOnly: true, listMarker: '+'  },
-  { id: 'ol',       label: 'Numbered list',   hint: '1. item',         insert: '1. ',  blockOnly: true },
-  { id: 'image',    label: 'Image',          hint: 'full width',      insert: null,   imageSize: null  },
-  { id: 'canvas',   label: 'Canvas',         hint: 'blank 800x600',   insert: null,   canvas: true     },
-  { id: 'youtube',  label: 'YouTube embed',  hint: 'paste URL',       insert: '[Video Title](https://youtube.com/watch?v=)' },
-  { id: 'goto',     label: 'Go to section',  hint: 'jump to heading', insert: null,   gotoSection: true },
-  { id: 'table',      label: 'Table',        hint: '3 × 3 grid',    insert: null, table: true },
-  { id: 'math',       label: 'Inline math',  hint: '$ expr $',       insert: null, mathInline: true },
-  { id: 'math-block', label: 'Math block',   hint: '$$ expr $$',     insert: null, mathBlock: true, blockOnly: true },
+// Slash command definitions — split into two groups
+const ITEM_COMMANDS = [
+  { id: 'h1',         label: 'Title',         hint: '# Heading',     insert: '# ',   blockOnly: true },
+  { id: 'h2',         label: 'Heading 2',     hint: '## Heading',    insert: '## ',  blockOnly: true },
+  { id: 'h3',         label: 'Heading 3',     hint: '### Heading',   insert: '### ', blockOnly: true },
+  { id: 'ul',         label: 'Item List',      hint: '- item',        insert: '- ',   blockOnly: true, listMarker: '-' },
+  { id: 'ol',         label: 'Number List',    hint: '1. item',       insert: '1. ',  blockOnly: true },
+  { id: 'image',      label: 'Image',         hint: 'full width',    insert: null,   imageSize: null },
+  { id: 'canvas',     label: 'Canvas',        hint: 'blank 800×600', insert: null,   canvas: true },
+  { id: 'table',      label: 'Table',         hint: '3 × 3 grid',    insert: null,   table: true },
+  { id: 'math',       label: 'Inline math',   hint: '$ expr $',      insert: null,   mathInline: true },
+  { id: 'math-block', label: 'Math block',    hint: '$$ expr $$',    insert: null,   mathBlock: true, blockOnly: true },
 ];
 
-export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, readOnly, onRename }) => {
+const LINK_COMMANDS = [
+  { id: 'youtube', label: 'YouTube embed',  hint: 'paste URL',       insert: '[Video Title](https://youtube.com/watch?v=)' },
+  { id: 'url',     label: 'Insert URL',     hint: 'hyperlink',       insert: null, urlPrompt: true },
+  { id: 'item',    label: 'Link to Item',   hint: 'open in new tab', insert: null, itemPrompt: true },
+  { id: 'goto',    label: 'Go to section',  hint: 'jump to heading', insert: null, gotoSection: true },
+];
+
+const TOP_LEVEL_GROUPS = [
+  { id: 'item', label: 'Insert Item', hint: 'headings, lists, math, images…', isGroup: true },
+  { id: 'link', label: 'Insert Link', hint: 'YouTube embed, section links',   isGroup: true },
+];
+
+const SUBLIST_OPTIONS = [
+  { id: 'ul-dash', label: 'Bullet list',   hint: '- item',  tag: 'ul', marker: '-'  },
+  { id: 'ol',      label: 'Numbered list', hint: '1. item', tag: 'ol', marker: null },
+];
+
+export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, onGetAllItems, onOpenItem, readOnly, onRename }) => {
   const [text,        setText]        = useState('');
   const [isLoading,   setIsLoading]   = useState(true);
   const [isDirty,     setIsDirty]     = useState(false);
@@ -501,6 +518,9 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   const [resizingImg, setResizingImg] = useState(null);
   const [editingImg,  setEditingImg]  = useState(null);
   const [canvasPrompt, setCanvasPrompt] = useState(null); // { filename, width, height }
+  const [urlPrompt,   setUrlPrompt]    = useState(null); // { mode: 'html'|'markdown', insertPos?, url, linkText }
+  const [itemPrompt,  setItemPrompt]   = useState(null); // { mode: 'html'|'markdown', insertPos?, items, query }
+  const [sublistPicker, setSublistPicker] = useState(null); // { top, left, activeIdx } — shown on Tab-indent with no existing sub-list
   const [showToc,     setShowToc]     = useState(false);
   const [headingMenu, setHeadingMenu] = useState(null);
   const [displayName, setDisplayName] = useState(video.name);
@@ -514,8 +534,13 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   const previewRef           = useRef(null);   // read-only preview pane (MD Edit mode)
   const contentEditableRef   = useRef(null);   // editable div (HTML Edit mode)
   const pendingImageSize     = useRef(undefined);
+  const savedRangeRef        = useRef(null);   // saved selection for URL modal in HTML mode
+  const sublistPickerRef     = useRef(null);   // { prevLi, liEl, parentList } — pending sub-list indent
   const historyRef           = useRef([]);
   const historyIdxRef        = useRef(-1);
+  const htmlUndoStack        = useRef([]);     // innerHTML snapshots for HTML-mode undo
+  const htmlUndoIdx          = useRef(-1);
+  const htmlUndoTimer        = useRef(null);
   const htmlPristine         = useRef(true);   // true = contenteditable not yet edited by user
   const htmlSlashRef         = useRef(null);   // { node, offset } — tracks '/' position in contentEditable for slash commands
   const mathRenderTimerRef   = useRef(null);   // setTimeout id for deferred math render
@@ -528,6 +553,41 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
   useEffect(() => { isSavingRef.current = isSaving; }, [isSaving]);
 
+  // Handles clicks on /?open= item links. If the target item is a URL type, opens
+  // the stored URL directly in a new tab instead of loading the app as an intermediary.
+  // Falls back to onOpenItem (which can Drive-fetch) when local data is unavailable.
+  const handleItemLink = async (href) => {
+    const params = new URLSearchParams(href.slice(1)); // strip leading '/'
+    const driveId = params.get('open');
+    if (driveId && onGetAllItems) {
+      try {
+        const allItems = await onGetAllItems();
+        const item = allItems.find(i => i.driveId === driveId);
+        const isUrlItem = item && (item.type === 'application/x-url' || (item.name || '').toLowerCase().endsWith('.url'));
+        if (isUrlItem) {
+          if (item.data) {
+            const { url } = JSON.parse(await item.data.text());
+            if (url) { window.open(url, '_blank', 'noopener,noreferrer'); return; }
+          } else if (onOpenItem) {
+            // data not cached locally — delegate to openItem which can Drive-fetch
+            onOpenItem(item);
+            return;
+          }
+        }
+      } catch {}
+    }
+    window.open(href, '_blank', 'noopener,noreferrer');
+  };
+
+  // Lock page scroll while the slash-command panel is open
+  const slashMenuOpen = slashMenu !== null;
+  useEffect(() => {
+    if (!slashMenuOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [slashMenuOpen]);
+
   // Load note text + assets
   useEffect(() => {
     setIsLoading(true);
@@ -539,14 +599,53 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     htmlPristine.current   = true;
     historyRef.current     = [];
     historyIdxRef.current  = -1;
+    htmlUndoStack.current  = [];
+    htmlUndoIdx.current    = -1;
+    clearTimeout(htmlUndoTimer.current);
 
     const reader = new FileReader();
-    reader.onload = (e) => {
-      const loaded = e.target?.result ?? '';
+    reader.onload = async (e) => {
+      const original = e.target?.result ?? '';
+      let loaded = original;
+
+      // Migrate /?open= links that point to URL items → use the actual stored URL directly.
+      if (onGetAllItems && loaded.includes('/?open=')) {
+        try {
+          const linkRe = /\[([^\]]*)\]\(\/\?open=([^)&]+)(?:&[^)]+)?\)/g;
+          const matches = [...loaded.matchAll(linkRe)];
+          if (matches.length > 0) {
+            const allItems = await onGetAllItems();
+            const urlItems = new Map();
+            for (const it of allItems) {
+              if (it.type === 'application/x-url' || (it.name || '').toLowerCase().endsWith('.url')) {
+                urlItems.set(it.driveId, it);
+              }
+            }
+            const replacements = await Promise.all(matches.map(async (m) => {
+              const driveId = decodeURIComponent(m[2]);
+              const it = urlItems.get(driveId);
+              if (!it || !it.data) return null; // skip if item missing or blob not cached locally
+              try {
+                const { url, title } = JSON.parse(await it.data.text());
+                if (!url) return null;
+                const display = title || m[1].replace(/\.url$/i, '');
+                return { from: m[0], to: `[${display}](${url})` };
+              } catch { return null; }
+            }));
+            let migrated = loaded;
+            for (const r of replacements.filter(Boolean)) {
+              migrated = migrated.split(r.from).join(r.to);
+            }
+            if (migrated !== loaded) { loaded = migrated; }
+          }
+        } catch {}
+      }
+
       setText(loaded);
       historyRef.current    = [{ text: loaded, cursorPos: 0 }];
       historyIdxRef.current = 0;
       setIsLoading(false);
+      if (loaded !== original && !readOnly) setIsDirty(true);
     };
     reader.onerror = () => { setText(''); setIsLoading(false); };
     reader.readAsText(video.data);
@@ -591,7 +690,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
 
   useEffect(() => {
     const style = document.createElement('style');
-    style.textContent = '[contenteditable="true"] a[href^="#"] { cursor: pointer !important; }';
+    style.textContent = '[contenteditable="true"] a[href^="#"], [contenteditable="true"] a[href^="/?open="] { cursor: pointer !important; }';
     document.head.appendChild(style);
     return () => style.remove();
   }, []);
@@ -600,8 +699,21 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
   useEffect(() => {
     if (!isLoading && editMode === 'html' && htmlPristine.current && contentEditableRef.current) {
       contentEditableRef.current.innerHTML = renderMarkdown(textRef.current, assetUrls);
+      // Seed the undo stack with the initial state
+      htmlUndoStack.current = [contentEditableRef.current.innerHTML];
+      htmlUndoIdx.current   = 0;
     }
   }, [isLoading, assetUrls, editMode]);
+
+  const pushHtmlUndo = () => {
+    if (!contentEditableRef.current) return;
+    const html = contentEditableRef.current.innerHTML;
+    htmlUndoStack.current = htmlUndoStack.current.slice(0, htmlUndoIdx.current + 1);
+    if (htmlUndoStack.current.length > 0 && htmlUndoStack.current[htmlUndoStack.current.length - 1] === html) return;
+    htmlUndoStack.current.push(html);
+    if (htmlUndoStack.current.length > 100) htmlUndoStack.current.shift();
+    else htmlUndoIdx.current++;
+  };
 
   const pushHistory = (t, cursorPos) => {
     historyRef.current = historyRef.current.slice(0, historyIdxRef.current + 1);
@@ -676,8 +788,18 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
   }, [resizingImg, editMode]);
 
-  const filteredCommands = (filter, atLineStart = true) => {
-    const pool = atLineStart ? SLASH_COMMANDS : SLASH_COMMANDS.filter(c => c.gotoSection);
+  const filteredCommands = (layer, group, filter, atLineStart = true) => {
+    // Mid-line slash: only the "go to section" command is relevant (no groups)
+    if (!atLineStart) {
+      const gotoCmd = LINK_COMMANDS.find(c => c.gotoSection);
+      if (!filter) return [gotoCmd];
+      const q = filter.toLowerCase();
+      return gotoCmd.label.toLowerCase().includes(q) ? [gotoCmd] : [];
+    }
+    // Layer 0: show the two top-level group buttons
+    if (layer === 0) return TOP_LEVEL_GROUPS;
+    // Layer 1: show commands within the selected group, optionally filtered
+    const pool = group === 'link' ? LINK_COMMANDS : ITEM_COMMANDS;
     if (!filter) return pool;
     const q = filter.toLowerCase();
     return pool.filter(c =>
@@ -736,6 +858,18 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
         const withMath = newText.slice(0, start) + tpl + newText.slice(start);
         setText(withMath); setIsDirty(true);
         requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start + 3; ta.focus(); pushHistory(withMath, start + 3); });
+        return;
+      }
+      if (cmd.urlPrompt) {
+        setUrlPrompt({ mode: 'markdown', insertPos: start, url: '', linkText: '' });
+        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start; ta.focus(); pushHistory(newText, start); });
+        return;
+      }
+      if (cmd.itemPrompt && onGetAllItems) {
+        onGetAllItems().then(allItems => {
+          setItemPrompt({ mode: 'markdown', insertPos: start, items: allItems, query: '', activeIdx: 0 });
+        });
+        requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = start; ta.focus(); pushHistory(newText, start); });
         return;
       }
       pendingImageSize.current = cmd.imageSize;
@@ -831,6 +965,10 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     setIsDirty(true);
     setSaveMsg(null);
 
+    // Debounced undo snapshot — capture state ~500 ms after last keystroke
+    clearTimeout(htmlUndoTimer.current);
+    htmlUndoTimer.current = setTimeout(pushHtmlUndo, 500);
+
     // If cursor is inside a math-pending element, manage the render timer and skip slash detection
     const selNow = window.getSelection();
     if (selNow?.focusNode) {
@@ -879,9 +1017,31 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     if (offset > 0 && node.textContent.charAt(offset - 1) === '/') {
       const before   = node.textContent.slice(0, offset - 1).trim();
       const isFirst  = !node.previousSibling;
+      // Inside a <li> the caret is always in a block context — show the full menu
+      let inListItem = false;
+      let anc = node.parentElement;
+      while (anc && anc !== contentEditableRef.current) {
+        if (anc.tagName === 'LI') { inListItem = true; break; }
+        anc = anc.parentElement;
+      }
       htmlSlashRef.current = { node, offset: offset - 1 };
-      setSlashMenu({ slashPos: 0, filter: '', activeIdx: 0, atLineStart: before === '' && isFirst });
+      setSlashMenu({ slashPos: 0, filter: '', activeIdx: 0, atLineStart: (before === '' && isFirst) || inListItem, layer: 0, group: null });
     }
+  };
+
+  const applySublistPicker = (opt) => {
+    if (!sublistPickerRef.current) return;
+    const { prevLi, liEl, parentList } = sublistPickerRef.current;
+    sublistPickerRef.current = null;
+    setSublistPicker(null);
+    const subList = document.createElement(opt.tag);
+    subList.setAttribute('style', `margin:0;padding-left:20px;list-style-type:${opt.tag === 'ol' ? 'decimal' : 'disc'}`);
+    if (opt.tag === 'ul' && opt.marker) subList.dataset.mdMarker = opt.marker;
+    prevLi.appendChild(subList);
+    subList.appendChild(liEl);
+    placeCursor(liEl, 0);
+    htmlPristine.current = false;
+    setIsDirty(true);
   };
 
   const handleHtmlKeyDown = (e) => {
@@ -889,6 +1049,44 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       e.preventDefault();
       if (isDirty && !isSaving) handleSave();
       return;
+    }
+
+    // Ctrl/Cmd+Z — custom undo for HTML mode (browser native undo is unreliable after autosave re-renders)
+    if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      // Flush any pending debounced snapshot so we can return to current typing state
+      clearTimeout(htmlUndoTimer.current);
+      pushHtmlUndo();
+      const target = htmlUndoIdx.current - 1;
+      if (target < 0) return;
+      htmlUndoIdx.current = target;
+      if (contentEditableRef.current) {
+        contentEditableRef.current.innerHTML = htmlUndoStack.current[target];
+        htmlPristine.current = false;
+        setIsDirty(true);
+      }
+      return;
+    }
+    // Ctrl/Cmd+Shift+Z or Ctrl+Y — redo
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+      e.preventDefault();
+      const target = htmlUndoIdx.current + 1;
+      if (target >= htmlUndoStack.current.length) return;
+      htmlUndoIdx.current = target;
+      if (contentEditableRef.current) {
+        contentEditableRef.current.innerHTML = htmlUndoStack.current[target];
+        htmlPristine.current = false;
+        setIsDirty(true);
+      }
+      return;
+    }
+
+    // Sub-list type picker keyboard navigation
+    if (sublistPicker !== null) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSublistPicker(prev => ({ ...prev, activeIdx: (prev.activeIdx + 1) % SUBLIST_OPTIONS.length })); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); setSublistPicker(prev => ({ ...prev, activeIdx: (prev.activeIdx - 1 + SUBLIST_OPTIONS.length) % SUBLIST_OPTIONS.length })); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applySublistPicker(SUBLIST_OPTIONS[sublistPicker.activeIdx]); return; }
+      if (e.key === 'Escape') { e.preventDefault(); setSublistPicker(null); sublistPickerRef.current = null; return; }
     }
 
     // Math element keyboard handling
@@ -952,15 +1150,43 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     }
 
     if (slashMenu !== null && htmlSlashRef.current) {
-      const visible = filteredCommands(slashMenu.filter, slashMenu.atLineStart);
+      const visible = filteredCommands(slashMenu.layer, slashMenu.group, slashMenu.filter, slashMenu.atLineStart);
       if (visible.length === 0) {
         if (e.key === 'Escape') { e.preventDefault(); setSlashMenu(null); htmlSlashRef.current = null; }
         return;
       }
       if (e.key === 'ArrowDown') { e.preventDefault(); setSlashMenu(prev => ({ ...prev, activeIdx: (prev.activeIdx + 1) % visible.length })); return; }
       if (e.key === 'ArrowUp')   { e.preventDefault(); setSlashMenu(prev => ({ ...prev, activeIdx: (prev.activeIdx - 1 + visible.length) % visible.length })); return; }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applyHtmlSlashCommand(visible[slashMenu.activeIdx]); return; }
-      if (e.key === 'Escape') { e.preventDefault(); setSlashMenu(null); htmlSlashRef.current = null; return; }
+      if (e.key === 'ArrowRight' && slashMenu.layer === 0) {
+        e.preventDefault();
+        setSlashMenu(prev => ({ ...prev, layer: 1, group: visible[prev.activeIdx].id, activeIdx: 0 }));
+        return;
+      }
+      if (e.key === 'ArrowLeft' && slashMenu.layer === 1) {
+        e.preventDefault();
+        setSlashMenu(prev => ({ ...prev, layer: 0, group: null, activeIdx: 0 }));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const selected = visible[slashMenu.activeIdx];
+        if (slashMenu.layer === 0) {
+          setSlashMenu(prev => ({ ...prev, layer: 1, group: selected.id, activeIdx: 0 }));
+        } else {
+          applyHtmlSlashCommand(selected);
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (slashMenu.layer === 1) {
+          setSlashMenu(prev => ({ ...prev, layer: 0, group: null, activeIdx: 0 }));
+        } else {
+          setSlashMenu(null);
+          htmlSlashRef.current = null;
+        }
+        return;
+      }
     }
 
     // Enter key handling in HTML mode
@@ -969,6 +1195,29 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       if (!sel || !sel.isCollapsed || !contentEditableRef.current) return;
       const focusNode = sel.focusNode;
       const lineDiv = getLineDiv(focusNode);
+
+      // Cursor at the very start of a plain div → insert empty line ABOVE and keep content in place
+      if (lineDiv && lineDiv.tagName === 'DIV' && sel.rangeCount > 0) {
+        const lineStartRange = document.createRange();
+        lineStartRange.selectNodeContents(lineDiv);
+        lineStartRange.collapse(true);
+        const atLineStart = sel.getRangeAt(0).compareBoundaryPoints(Range.START_TO_START, lineStartRange) === 0;
+        if (atLineStart) {
+          e.preventDefault();
+          const emptyDiv = document.createElement('div');
+          emptyDiv.style.margin = '0';
+          emptyDiv.appendChild(document.createElement('br'));
+          lineDiv.before(emptyDiv);
+          const afterRange = document.createRange();
+          afterRange.selectNodeContents(lineDiv);
+          afterRange.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(afterRange);
+          htmlPristine.current = false;
+          setIsDirty(true);
+          return;
+        }
+      }
 
       // Enter after a heading → new plain div
       if (lineDiv && /^h[1-3]$/i.test(lineDiv.tagName)) {
@@ -1107,17 +1356,33 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
         // Indent: wrap <li> in a new sub-list inside the previous sibling <li>
         const prevLi = liEl.previousElementSibling;
         if (prevLi && prevLi.tagName === 'LI') {
-          let subList = prevLi.querySelector(':scope > ul, :scope > ol');
-          if (!subList) {
-            subList = document.createElement(parentList.tagName.toLowerCase());
-            subList.setAttribute('style', `margin:0;padding-left:20px;list-style-type:${parentList.tagName === 'OL' ? 'decimal' : 'disc'}`);
-            if (parentList.dataset.mdMarker) subList.dataset.mdMarker = parentList.dataset.mdMarker;
-            prevLi.appendChild(subList);
+          const existingSubList = prevLi.querySelector(':scope > ul, :scope > ol');
+          if (existingSubList) {
+            // Sub-list already exists — add to it directly (preserve its type)
+            existingSubList.appendChild(liEl);
+            placeCursor(liEl, 0);
+            htmlPristine.current = false;
+            setIsDirty(true);
+          } else {
+            // No sub-list yet — ask the user which type to create
+            sublistPickerRef.current = { prevLi, liEl, parentList };
+            const selPick = window.getSelection();
+            let pickTop = 0, pickLeft = 16;
+            if (selPick && selPick.rangeCount > 0) {
+              const rect = selPick.getRangeAt(0).getBoundingClientRect();
+              if (rect.top > 0 || rect.left > 0) { pickTop = rect.bottom + 4; pickLeft = Math.max(8, rect.left); }
+            }
+            if (!pickTop && contentEditableRef.current) {
+              const r = contentEditableRef.current.getBoundingClientRect();
+              pickTop = r.top + 28; pickLeft = r.left + 16;
+            }
+            setSublistPicker({ top: pickTop, left: pickLeft, activeIdx: 0 });
           }
-          subList.appendChild(liEl);
         }
+        return; // both branches handled inline; skip the shared placeCursor below
       }
 
+      // Reached only for Shift-Tab (outdent)
       placeCursor(liEl, 0);
       htmlPristine.current = false;
       setIsDirty(true);
@@ -1153,6 +1418,24 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       if (cmd.canvas) {
         const filename = createCanvasFilename(assetUrls);
         setCanvasPrompt({ filename, width: 800, height: 600 });
+        htmlPristine.current = false;
+        setIsDirty(true);
+        return;
+      }
+      if (cmd.urlPrompt) {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) savedRangeRef.current = sel.getRangeAt(0).cloneRange();
+        setUrlPrompt({ mode: 'html', url: '', linkText: '' });
+        htmlPristine.current = false;
+        setIsDirty(true);
+        return;
+      }
+      if (cmd.itemPrompt && onGetAllItems) {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) savedRangeRef.current = sel.getRangeAt(0).cloneRange();
+        onGetAllItems().then(allItems => {
+          setItemPrompt({ mode: 'html', items: allItems, query: '', activeIdx: 0 });
+        });
         htmlPristine.current = false;
         setIsDirty(true);
         return;
@@ -1407,15 +1690,42 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
     }
 
     if (slashMenu !== null) {
-      const visible = filteredCommands(slashMenu.filter, slashMenu.atLineStart);
+      const visible = filteredCommands(slashMenu.layer, slashMenu.group, slashMenu.filter, slashMenu.atLineStart);
       if (visible.length === 0) {
         if (e.key === 'Escape') { e.preventDefault(); setSlashMenu(null); }
         return;
       }
       if (e.key === 'ArrowDown') { e.preventDefault(); setSlashMenu(prev => ({ ...prev, activeIdx: (prev.activeIdx + 1) % visible.length })); return; }
       if (e.key === 'ArrowUp')   { e.preventDefault(); setSlashMenu(prev => ({ ...prev, activeIdx: (prev.activeIdx - 1 + visible.length) % visible.length })); return; }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applySlashCommand(visible[slashMenu.activeIdx]); return; }
-      if (e.key === 'Escape') { e.preventDefault(); setSlashMenu(null); return; }
+      if (e.key === 'ArrowRight' && slashMenu.layer === 0) {
+        e.preventDefault();
+        setSlashMenu(prev => ({ ...prev, layer: 1, group: visible[prev.activeIdx].id, activeIdx: 0 }));
+        return;
+      }
+      if (e.key === 'ArrowLeft' && slashMenu.layer === 1) {
+        e.preventDefault();
+        setSlashMenu(prev => ({ ...prev, layer: 0, group: null, activeIdx: 0 }));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const selected = visible[slashMenu.activeIdx];
+        if (slashMenu.layer === 0) {
+          setSlashMenu(prev => ({ ...prev, layer: 1, group: selected.id, activeIdx: 0 }));
+        } else {
+          applySlashCommand(selected);
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (slashMenu.layer === 1) {
+          setSlashMenu(prev => ({ ...prev, layer: 0, group: null, activeIdx: 0 }));
+        } else {
+          setSlashMenu(null);
+        }
+        return;
+      }
     }
 
     if (headingMenu !== null) {
@@ -1731,7 +2041,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
 
   // Slash menu — works in both HTML and Markdown modes
   const visibleCmds = slashMenu
-    ? filteredCommands(slashMenu.filter, slashMenu.atLineStart)
+    ? filteredCommands(slashMenu.layer, slashMenu.group, slashMenu.filter, slashMenu.atLineStart)
     : [];
   const dropdownCoords = (() => {
     if (!(slashMenu || headingMenu)) return { top: 0, left: 0 };
@@ -1850,6 +2160,18 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
           onInput: handleHtmlInput,
           onKeyDown: handleHtmlKeyDown,
           onClick: (e) => {
+            const itemAnchor = e.target.closest('a[href^="/?open="]');
+            if (itemAnchor) {
+              e.preventDefault();
+              handleItemLink(itemAnchor.getAttribute('href'));
+              return;
+            }
+            const extAnchor = e.target.closest('a[href^="http://"], a[href^="https://"]');
+            if (extAnchor) {
+              e.preventDefault();
+              window.open(extAnchor.getAttribute('href'), '_blank', 'noopener,noreferrer');
+              return;
+            }
             const anchor = e.target.closest('a[href^="#"]');
             if (anchor) {
               e.preventDefault();
@@ -1860,6 +2182,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
           onBlur: () => setTimeout(() => {
             contentEditableRef.current?.querySelectorAll('[data-math-pending]').forEach(el => commitMathElement(el));
             setSlashMenu(null); setHeadingMenu(null); htmlSlashRef.current = null;
+            setSublistPicker(null); sublistPickerRef.current = null;
           }, 150),
           onDragOver: (e) => e.preventDefault(),
           onDrop: (e) => {
@@ -1916,6 +2239,12 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
           className: 'bg-gray-900 text-gray-100 text-sm leading-relaxed p-6 overflow-auto flex-1',
           style: { minWidth: 0 },
           onClick: (e) => {
+            const itemAnchor = e.target.closest('a[href^="/?open="]');
+            if (itemAnchor) {
+              e.preventDefault();
+              handleItemLink(itemAnchor.getAttribute('href'));
+              return;
+            }
             const anchor = e.target.closest('a[href^="#"]');
             if (anchor) {
               e.preventDefault();
@@ -1976,6 +2305,27 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
         );
       })(),
 
+      // Sub-list type picker (HTML mode, Tab-indent with no existing sub-list)
+      sublistPicker && React.createElement(
+        'div',
+        {
+          style: { position: 'fixed', top: sublistPicker.top, left: sublistPicker.left, zIndex: 9999 },
+          className: 'bg-gray-800 border border-gray-600 rounded-xl shadow-2xl py-1 min-w-44',
+          onMouseDown: (e) => e.preventDefault(),
+        },
+        React.createElement('div', { className: 'px-3 py-1.5 text-xs text-gray-500 border-b border-gray-700' }, 'Sub-list type'),
+        SUBLIST_OPTIONS.map((opt, i) =>
+          React.createElement('button', {
+            key: opt.id,
+            onMouseDown: (e) => { e.preventDefault(); applySublistPicker(opt); },
+            className: `w-full flex items-center justify-between px-3 py-2 text-sm transition-colors text-left ${i === sublistPicker.activeIdx ? 'bg-indigo-600 text-white' : 'text-gray-200 hover:bg-gray-700'}`,
+          },
+            React.createElement('span', { className: 'font-medium' }, opt.label),
+            React.createElement('span', { className: `text-xs font-mono ml-4 ${i === sublistPicker.activeIdx ? 'text-indigo-200' : 'text-gray-500'}` }, opt.hint)
+          )
+        )
+      ),
+
       // Slash command dropdown (both modes)
       slashMenu && visibleCmds.length > 0 && React.createElement(
         'div',
@@ -1984,19 +2334,55 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
           className: 'bg-gray-800 border border-gray-600 rounded-xl shadow-2xl py-1 min-w-52',
           onMouseDown: (e) => e.preventDefault(),
         },
-        React.createElement('div', { className: 'px-3 py-1.5 text-xs text-gray-500 border-b border-gray-700' },
-          slashMenu.filter ? `"${slashMenu.filter}"` : 'Type to filter…'
+        // Header — shows breadcrumb at layer 1 with a back button
+        React.createElement(
+          'div',
+          { className: 'flex items-center gap-1 px-3 py-1.5 border-b border-gray-700' },
+          slashMenu.layer === 1 && React.createElement(
+            'button',
+            {
+              onMouseDown: (e) => { e.preventDefault(); setSlashMenu(prev => ({ ...prev, layer: 0, group: null, activeIdx: 0 })); },
+              className: 'text-gray-400 hover:text-gray-200 mr-1 leading-none transition-colors',
+              title: 'Back',
+            },
+            '←'
+          ),
+          React.createElement(
+            'span',
+            { className: 'text-xs text-gray-500' },
+            slashMenu.layer === 0
+              ? 'Insert…'
+              : slashMenu.group === 'item' ? 'Insert Item' : 'Insert Link'
+          ),
+          slashMenu.layer === 1 && slashMenu.filter && React.createElement(
+            'span',
+            { className: 'text-xs text-gray-600 ml-1' },
+            `"${slashMenu.filter}"`
+          )
         ),
-        visibleCmds.map((cmd, i) =>
-          React.createElement('button', {
+        // Items
+        visibleCmds.map((cmd, i) => {
+          const isActive = i === slashMenu.activeIdx;
+          return React.createElement('button', {
             key: cmd.id,
-            onMouseDown: (e) => { e.preventDefault(); editMode === 'html' ? applyHtmlSlashCommand(cmd) : applySlashCommand(cmd); },
-            className: `w-full flex items-center justify-between px-3 py-2 text-sm transition-colors text-left ${i === slashMenu.activeIdx ? 'bg-indigo-600 text-white' : 'text-gray-200 hover:bg-gray-700'}`,
+            onMouseDown: (e) => {
+              e.preventDefault();
+              if (cmd.isGroup) {
+                setSlashMenu(prev => ({ ...prev, layer: 1, group: cmd.id, activeIdx: 0 }));
+              } else {
+                editMode === 'html' ? applyHtmlSlashCommand(cmd) : applySlashCommand(cmd);
+              }
+            },
+            className: `w-full flex items-center justify-between px-3 py-2 text-sm transition-colors text-left ${isActive ? 'bg-indigo-600 text-white' : 'text-gray-200 hover:bg-gray-700'}`,
           },
             React.createElement('span', { className: 'font-medium' }, cmd.label),
-            React.createElement('span', { className: `text-xs font-mono ml-4 ${i === slashMenu.activeIdx ? 'text-indigo-200' : 'text-gray-500'}` }, cmd.hint)
-          )
-        )
+            React.createElement(
+              'span',
+              { className: `text-xs font-mono ml-4 ${isActive ? 'text-indigo-200' : 'text-gray-500'}` },
+              cmd.isGroup ? '›' : cmd.hint
+            )
+          );
+        })
       )
     ),
 
@@ -2045,6 +2431,268 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, r
       ),
       'Edit'
     ),
+
+    // ── URL prompt modal ─────────────────────────────────────────────
+    urlPrompt && React.createElement(
+      'div',
+      {
+        className: 'fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4',
+        onMouseDown: () => setUrlPrompt(null),
+      },
+      React.createElement(
+        'div',
+        {
+          className: 'w-full max-w-sm bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-4',
+          onMouseDown: (e) => e.stopPropagation(),
+        },
+        React.createElement('h3', { className: 'text-sm font-semibold text-gray-100 mb-3' }, 'Insert hyperlink'),
+        React.createElement(
+          'div',
+          { className: 'flex flex-col gap-3 mb-4' },
+          React.createElement(
+            'label',
+            { className: 'text-xs text-gray-300 flex flex-col gap-1' },
+            'URL',
+            React.createElement('input', {
+              autoFocus: true,
+              type: 'url',
+              placeholder: 'https://',
+              value: urlPrompt.url,
+              onChange: (e) => setUrlPrompt(prev => ({ ...prev, url: e.target.value })),
+              onKeyDown: (e) => { if (e.key === 'Escape') { e.stopPropagation(); setUrlPrompt(null); } },
+              className: 'px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-gray-100 outline-none focus:border-indigo-500 placeholder-gray-600',
+            })
+          ),
+          React.createElement(
+            'label',
+            { className: 'text-xs text-gray-300 flex flex-col gap-1' },
+            React.createElement(
+              'span',
+              null,
+              'Link text ',
+              React.createElement('span', { className: 'text-gray-500' }, '(leave blank to use the URL)')
+            ),
+            React.createElement('input', {
+              type: 'text',
+              placeholder: 'Display text…',
+              value: urlPrompt.linkText,
+              onChange: (e) => setUrlPrompt(prev => ({ ...prev, linkText: e.target.value })),
+              onKeyDown: (e) => {
+                if (e.key === 'Escape') { e.stopPropagation(); setUrlPrompt(null); }
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.target.closest('div.fixed')?.querySelector('button[data-confirm]')?.click();
+                }
+              },
+              className: 'px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-gray-100 outline-none focus:border-indigo-500 placeholder-gray-600',
+            })
+          )
+        ),
+        React.createElement(
+          'div',
+          { className: 'flex justify-end gap-2' },
+          React.createElement(
+            'button',
+            { onClick: () => setUrlPrompt(null), className: 'px-3 py-1.5 rounded-lg text-sm bg-gray-700 hover:bg-gray-600 text-gray-200' },
+            'Cancel'
+          ),
+          React.createElement(
+            'button',
+            {
+              'data-confirm': true,
+              disabled: !urlPrompt.url.trim(),
+              onClick: () => {
+                const url      = urlPrompt.url.trim();
+                const display  = urlPrompt.linkText.trim() || url;
+                if (!url) return;
+
+                if (urlPrompt.mode === 'html' && contentEditableRef.current) {
+                  contentEditableRef.current.focus();
+                  if (savedRangeRef.current) {
+                    const sel = window.getSelection();
+                    sel.removeAllRanges();
+                    sel.addRange(savedRangeRef.current);
+                    savedRangeRef.current = null;
+                  }
+                  document.execCommand('insertHTML', false,
+                    `<a href="${escapeHtml(url)}" style="color:#818cf8;text-decoration:underline">${escapeHtml(display)}</a>`
+                  );
+                  htmlPristine.current = false;
+                  setIsDirty(true);
+                } else if (urlPrompt.mode === 'markdown') {
+                  const link    = `[${display}](${url})`;
+                  const pos     = urlPrompt.insertPos;
+                  const newText = textRef.current.slice(0, pos) + link + textRef.current.slice(pos);
+                  const newCursor = pos + link.length;
+                  setText(newText); setIsDirty(true);
+                  requestAnimationFrame(() => {
+                    if (mdTextareaRef.current) {
+                      mdTextareaRef.current.selectionStart = mdTextareaRef.current.selectionEnd = newCursor;
+                      mdTextareaRef.current.focus();
+                    }
+                    pushHistory(newText, newCursor);
+                  });
+                }
+                setUrlPrompt(null);
+              },
+              className: 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed',
+            },
+            'Insert'
+          )
+        )
+      )
+    ),
+
+    // ── Link-to-Item picker ──────────────────────────────────────────
+    itemPrompt && (() => {
+      const getItemType = (item) => {
+        const ext = (item.name || '').split('.').pop().toLowerCase();
+        if (['epub','mobi','azw','azw3'].includes(ext)) return 'Book';
+        if (ext === 'pdf')  return 'PDF';
+        if (ext === 'md')   return 'Note';
+        if (ext === 'txt')  return 'Text';
+        if (item.idbStore === 'videos') return 'YouTube';
+        if (item.idbStore === 'images') return 'Image';
+        return 'Item';
+      };
+      const typeBadgeColor = (t) => ({
+        Book: 'bg-indigo-900 text-indigo-300',
+        PDF:  'bg-rose-900 text-rose-300',
+        Note: 'bg-emerald-900 text-emerald-300',
+        Text: 'bg-gray-700 text-gray-300',
+        YouTube: 'bg-red-900 text-red-300',
+        Image: 'bg-violet-900 text-violet-300',
+      }[t] || 'bg-gray-700 text-gray-300');
+
+      const q = (itemPrompt.query || '').toLowerCase();
+      const visible = (itemPrompt.items || []).filter(it =>
+        !q || (it.name || '').toLowerCase().includes(q)
+      );
+      const activeIdx = Math.max(0, Math.min(itemPrompt.activeIdx ?? 0, visible.length - 1));
+
+      const insertItem = async (item) => {
+        const mode      = itemPrompt.mode;
+        const insertPos = itemPrompt.insertPos;
+
+        let href    = `/?open=${encodeURIComponent(item.driveId)}&store=${encodeURIComponent(item.idbStore || 'books')}`;
+        let display = (item.name || '').replace(/\.md$/, '');
+
+        // For URL items use the real URL directly so clicks go straight to the target.
+        if ((item.type === 'application/x-url' || (item.name || '').toLowerCase().endsWith('.url')) && item.data) {
+          try {
+            const { url, title } = JSON.parse(await item.data.text());
+            if (url) { href = url; display = title || display.replace(/\.url$/i, ''); }
+          } catch {}
+        }
+
+        if (mode === 'html' && contentEditableRef.current) {
+          contentEditableRef.current.focus();
+          if (savedRangeRef.current) {
+            const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(savedRangeRef.current);
+            savedRangeRef.current = null;
+          }
+          document.execCommand('insertHTML', false,
+            `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" style="color:#818cf8;text-decoration:underline">${escapeHtml(display)}</a>`
+          );
+          htmlPristine.current = false; setIsDirty(true);
+        } else if (mode === 'markdown') {
+          const link    = `[${display}](${href})`;
+          const newText = textRef.current.slice(0, insertPos) + link + textRef.current.slice(insertPos);
+          const newCursor = insertPos + link.length;
+          setText(newText); setIsDirty(true);
+          requestAnimationFrame(() => {
+            if (mdTextareaRef.current) {
+              mdTextareaRef.current.selectionStart = mdTextareaRef.current.selectionEnd = newCursor;
+              mdTextareaRef.current.focus();
+            }
+            pushHistory(newText, newCursor);
+          });
+        }
+        setItemPrompt(null);
+      };
+
+      return React.createElement(
+        'div',
+        {
+          className: 'fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4',
+          onMouseDown: () => setItemPrompt(null),
+        },
+        React.createElement(
+          'div',
+          {
+            className: 'w-full max-w-md bg-gray-900 border border-gray-700 rounded-xl shadow-2xl flex flex-col',
+            style: { maxHeight: '70vh' },
+            onMouseDown: (e) => e.stopPropagation(),
+          },
+          // Header
+          React.createElement(
+            'div',
+            { className: 'px-4 pt-4 pb-3 border-b border-gray-700 shrink-0' },
+            React.createElement('h3', { className: 'text-sm font-semibold text-gray-100 mb-2' }, 'Link to Item'),
+            React.createElement('input', {
+              autoFocus: true,
+              type: 'text',
+              placeholder: 'Search items…',
+              value: itemPrompt.query,
+              onChange: (e) => setItemPrompt(prev => ({ ...prev, query: e.target.value, activeIdx: 0 })),
+              onKeyDown: (e) => {
+                if (e.key === 'Escape') { e.stopPropagation(); setItemPrompt(null); return; }
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setItemPrompt(prev => ({ ...prev, activeIdx: Math.min((prev.activeIdx ?? 0) + 1, visible.length - 1) }));
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setItemPrompt(prev => ({ ...prev, activeIdx: Math.max((prev.activeIdx ?? 0) - 1, 0) }));
+                  return;
+                }
+                if (e.key === 'Enter' && visible.length > 0) { e.preventDefault(); insertItem(visible[activeIdx]); }
+              },
+              className: 'w-full px-3 py-1.5 bg-gray-800 border border-gray-600 rounded-lg text-sm text-gray-100 outline-none focus:border-indigo-500 placeholder-gray-600',
+            })
+          ),
+          // List
+          React.createElement(
+            'div',
+            { className: 'overflow-y-auto flex-1 py-1' },
+            visible.length === 0
+              ? React.createElement('p', { className: 'px-4 py-6 text-xs text-gray-500 text-center' }, 'No items found')
+              : visible.map((item, i) =>
+                  React.createElement(
+                    'button',
+                    {
+                      key: item.driveId,
+                      ref: i === activeIdx ? (el) => el?.scrollIntoView({ block: 'nearest' }) : null,
+                      onMouseDown: (e) => { e.preventDefault(); insertItem(item); },
+                      className: `w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors ${i === activeIdx ? 'bg-indigo-600 text-white' : 'hover:bg-gray-800'}`,
+                    },
+                    React.createElement(
+                      'span',
+                      { className: `shrink-0 text-xs font-mono px-1.5 py-0.5 rounded ${i === activeIdx ? 'bg-indigo-400/30 text-indigo-100' : typeBadgeColor(getItemType(item))}` },
+                      getItemType(item)
+                    ),
+                    React.createElement(
+                      'span',
+                      { className: `truncate ${i === activeIdx ? 'text-white' : 'text-gray-200'}` },
+                      (item.name || '').replace(/\.md$/, '')
+                    )
+                  )
+                )
+          ),
+          // Footer
+          React.createElement(
+            'div',
+            { className: 'px-4 py-2 border-t border-gray-700 shrink-0 flex justify-end' },
+            React.createElement(
+              'button',
+              { onClick: () => setItemPrompt(null), className: 'px-3 py-1.5 rounded-lg text-sm bg-gray-700 hover:bg-gray-600 text-gray-200' },
+              'Cancel'
+            )
+          )
+        )
+      );
+    })(),
 
     // ── Canvas size prompt ────────────────────────────────────────────
     canvasPrompt && React.createElement(

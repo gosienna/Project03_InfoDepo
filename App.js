@@ -256,6 +256,41 @@ const App = () => {
     if (dataReady) checkAndEvict();
   }, [dataReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Handle ?open={driveId}&store={idbStore} URL parameter — used by "Link to Item" markdown links.
+  // Fires once when data is ready; for EPUB/PDF it redirects to the dedicated reader page in the
+  // same tab (we're already in a new tab from clicking the link).
+  const openFromUrlHandledRef = useRef(false);
+  useEffect(() => {
+    if (!dataReady || openFromUrlHandledRef.current) return;
+    const params     = new URLSearchParams(window.location.search);
+    const openDriveId = params.get('open');
+    const openStore   = params.get('store');
+    if (!openDriveId) return;
+    openFromUrlHandledRef.current = true;
+    window.history.replaceState({}, '', window.location.pathname);
+    const item = items.find(i => i.driveId === openDriveId);
+    if (!item) return;
+    const ext  = (item.name || '').split('.').pop().toLowerCase();
+    const mime = item.type || '';
+    const isEpub = ['epub','mobi','azw','azw3'].includes(ext) ||
+      ['application/epub+zip','application/x-mobipocket-ebook',
+       'application/vnd.amazon.ebook','application/vnd.amazon.mobi8-ebook'].includes(mime);
+    const isPdf  = ext === 'pdf' || mime === 'application/pdf';
+    const isUrlItem = ext === 'url' || mime === 'application/x-url';
+    if (isEpub) { window.location.href = `/reader.html?driveId=${encodeURIComponent(openDriveId)}&store=${encodeURIComponent(openStore || item.idbStore || 'books')}`; return; }
+    if (isPdf)  { window.location.href = `/pdf-reader.html?driveId=${encodeURIComponent(openDriveId)}&store=${encodeURIComponent(openStore || item.idbStore || 'books')}`; return; }
+    if (isUrlItem) {
+      if (item.data) {
+        item.data.text().then((text) => {
+          try { const { url } = JSON.parse(text); if (url) window.location.replace(url); } catch {}
+        }).catch(() => {});
+      }
+      return;
+    }
+    setCurrentVideo(item);
+    setView('reader');
+  }, [dataReady, items]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // On startup, silently check every channel for new videos and update IndexedDB.
   useEffect(() => {
     if (!isInitialized || !channels.length) return;
@@ -310,6 +345,33 @@ const App = () => {
     const ext = video.name?.split('.').pop()?.toLowerCase() ?? '';
     const mime = video.type || '';
     const blobKey = video.driveId;
+
+    // URL items open in a new tab — never sent to Reader.
+    const isUrl = ext === 'url' || mime === 'application/x-url';
+    if (isUrl) {
+      const openFromBlob = (blob) => {
+        blob.text().then((text) => {
+          try {
+            const { url } = JSON.parse(text);
+            if (url) window.open(url, '_blank');
+          } catch {}
+        }).catch(() => {});
+      };
+      if (video.data) {
+        openFromBlob(video.data);
+      } else if (hasDriveCopy(video)) {
+        getOwnerDriveAccessToken()
+          .then((token) => fetchWithProgress(
+            `https://www.googleapis.com/drive/v3/files/${video.driveFileId}?alt=media`,
+            { Authorization: `Bearer ${token}` },
+            video.size || 0,
+            () => {},
+          ))
+          .then((blob) => { if (blob) openFromBlob(blob); })
+          .catch((err) => console.warn('[InfoDepo][openItem] url drive fetch failed:', err?.message));
+      }
+      return;
+    }
 
     // EPUB/MOBI/AZW files open in a dedicated tab (reader.html).
     // Strategy for lazy blobs (data == null):
@@ -432,18 +494,6 @@ const App = () => {
       }
     }
 
-    const isUrl = ext === 'url' || mime === 'application/x-url';
-    if (isUrl) {
-      if (video.data) {
-        video.data.text().then((text) => {
-          try {
-            const { url } = JSON.parse(text);
-            if (url) window.open(url, '_blank');
-          } catch {}
-        }).catch(() => {});
-      }
-      return;
-    }
     const isImage = mime.startsWith('image/')
       || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif', 'heic', 'heif'].includes(ext);
     if (isImage && video.data instanceof Blob) {
@@ -983,6 +1033,8 @@ const App = () => {
         putPdfAnnotationsForItem,
         onAddImage: addImage,
         onGetImages: getImagesForNote,
+        onGetAllItems: () => Promise.resolve(items),
+        onOpenItem: openItem,
         readOnly: false,
         onSelectChannel: handleSelectChannel,
         onAddChannel: addChannel,

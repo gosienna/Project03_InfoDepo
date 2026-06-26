@@ -27,6 +27,8 @@ export const Reader = ({
   putPdfAnnotationsForItem,
   onAddImage,
   onGetImages,
+  onGetAllItems,
+  onOpenItem,
   readOnly,
   onSelectChannel,
   onAddChannel,
@@ -138,7 +140,7 @@ export const Reader = ({
         });
       case 'md':
         return React.createElement(MarkdownEditor, {
-          video, onUpdateItem, onAddImage, onGetImages, readOnly,
+          video, onUpdateItem, onAddImage, onGetImages, onGetAllItems, onOpenItem, readOnly,
           onRename: onRename && !readOnly ? (newName) => onRename(video.driveId, video.driveIdbStore, newName) : null,
         });
       case 'youtube':
