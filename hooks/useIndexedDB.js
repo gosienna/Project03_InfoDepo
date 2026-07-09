@@ -49,6 +49,8 @@ const isYoutubeType = (type) =>
   type != null && String(type).trim() === 'application/x-youtube';
 const isNoteType = (type) =>
   type != null && String(type).trim() === 'text/markdown';
+const isMapType = (type) =>
+  type != null && String(type).trim() === 'application/geo+json';
 
 const storeForType = (type) => {
   if (isYoutubeType(type)) return VIDEOS_STORE;
@@ -71,6 +73,8 @@ const storeForNewItem = (name, type) => {
   if (isNoteType(type)) return NOTES_STORE;
   if (mime === 'text/x-markdown' || mime === 'text/md') return NOTES_STORE;
   if (mime.startsWith('image/')) return IMAGES_STORE;
+  if (n.endsWith('.geojson') || n.endsWith('.kml') || n.endsWith('.kmz')) return BOOKS_STORE;
+  if (isMapType(type)) return BOOKS_STORE;
   return BOOKS_STORE;
 };
 

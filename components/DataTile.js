@@ -122,8 +122,9 @@ export const DataTile = ({
   const fileExtension = !isChannel && video?.name ? getFileExtension(video.name) : '';
   const isYoutube = !isChannel && video?.type === 'application/x-youtube';
   const isUrl = !isChannel && video?.type === 'application/x-url';
+  const isMap = !isChannel && video?.type === 'application/geo+json';
   const isStandaloneImage = !isChannel && !isDesk && String(video?.type || '').startsWith('image/');
-  const isBookTile = !isChannel && video?.idbStore === 'books' && !isUrl && !isStandaloneImage;
+  const isBookTile = !isChannel && video?.idbStore === 'books' && !isUrl && !isStandaloneImage && !isMap;
   const isPdfBook =
     isBookTile &&
     (video?.type === 'application/pdf' || (typeof video?.name === 'string' && /\.pdf$/i.test(video.name)));
@@ -999,6 +1000,17 @@ export const DataTile = ({
             })
           )
         )
+    : isMap
+    ? React.createElement(
+        'div',
+        { className: 'flex items-center justify-center w-full h-full' },
+        React.createElement(
+          'svg',
+          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-green-400/70', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+          React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 1.5, d: 'M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z' }),
+          React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 1.5, d: 'M15 11a3 3 0 11-6 0 3 3 0 016 0z' })
+        )
+      )
     : isBookTile && bookFirstPageThumb
       ? React.createElement('img', {
           src: bookFirstPageThumb,
@@ -1027,11 +1039,13 @@ export const DataTile = ({
             ? 'absolute top-2 right-2 bg-red-600 text-white text-xs font-bold px-2 py-1 rounded'
             : isUrl
               ? 'absolute top-2 right-2 bg-cyan-700 text-white text-xs font-bold px-2 py-1 rounded'
-              : isStandaloneImage
-                ? 'absolute top-2 right-2 bg-teal-600 text-white text-xs font-bold px-2 py-1 rounded'
-                : 'absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded',
+              : isMap
+                ? 'absolute top-2 right-2 bg-green-700 text-white text-xs font-bold px-2 py-1 rounded'
+                : isStandaloneImage
+                  ? 'absolute top-2 right-2 bg-teal-600 text-white text-xs font-bold px-2 py-1 rounded'
+                  : 'absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded',
         },
-        isYoutube ? 'YouTube' : isUrl ? 'URL' : isStandaloneImage ? 'Image' : fileExtension.toUpperCase()
+        isYoutube ? 'YouTube' : isUrl ? 'URL' : isMap ? 'MAP' : isStandaloneImage ? 'Image' : fileExtension.toUpperCase()
       ),
       !isChannel && !isDesk && !video.data && hasDriveCopy(video) && (
         dlProgress

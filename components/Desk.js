@@ -701,6 +701,7 @@ export const Desk = ({
   onOpenChannel,
   onOpenFile,
   onOpenUrl,
+  onOpenMap,
   onSetItemDriveId,
   getBookByDriveId,
   onRequestDeleteItem,
@@ -2138,6 +2139,7 @@ export const Desk = ({
         onAddChannel: onOpenChannel,
         onAddFile: onOpenFile,
         onAddUrl: onOpenUrl,
+        onAddMap: onOpenMap,
         onAddDesk: onCreateDesk ? handleCreateDesk : undefined,
       })
     ),

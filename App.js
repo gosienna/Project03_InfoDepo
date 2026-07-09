@@ -8,6 +8,8 @@ import { Reader } from './components/Reader.js';
 import { YoutubeChannelViewer } from './components/YoutubeChannelViewer.js';
 import { Explorer } from './components/Explorer.js';
 import { Desk } from './components/Desk.js';
+import { MapView } from './components/MapView.js';
+import { kmzToGeoJSON } from './utils/kmlToGeoJSON.js';
 import { itemEntryKey, channelEntryKey } from './utils/deskEntryKeys.js';
 import { hasDriveCopy } from './utils/driveRecordKey.js';
 import { useIndexedDB } from './hooks/useIndexedDB.js';
@@ -129,6 +131,7 @@ const App = () => {
   const progressRafRef = useRef(null);
   const fileInputRef = useRef(null);
   const imageInputRef = useRef(null);
+  const mapFileInputRef = useRef(null);
 
   const startProgressRaf = useCallback(() => {
     if (progressRafRef.current !== null) return;
@@ -604,6 +607,25 @@ const App = () => {
     e.target.value = '';
   };
 
+  const handleMapFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+    try {
+      const ext = file.name.split('.').pop().toLowerCase();
+      if (ext === 'kmz' || ext === 'kml') {
+        const { blob, name } = await kmzToGeoJSON(file);
+        await addItem(name, 'application/geo+json', blob, googleUserEmail);
+      } else {
+        // treat as raw GeoJSON
+        await addItem(file.name, 'application/geo+json', file, googleUserEmail);
+      }
+    } catch (err) {
+      console.error('[App] map import failed:', err);
+      window.alert(err?.message || 'Failed to import map file.');
+    }
+  };
+
   const driveCreds = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
   const hasDriveLibrarySetup = !!(
@@ -828,6 +850,13 @@ const App = () => {
       onChange: handleImageFileChange,
       className: 'hidden',
     }),
+    React.createElement('input', {
+      ref: mapFileInputRef,
+      type: 'file',
+      accept: '.kmz,.kml,.geojson,application/geo+json',
+      onChange: handleMapFileChange,
+      className: 'hidden',
+    }),
     isNewNoteOpen && React.createElement(NewNoteModal, {
       onSave: async (name, type, data) => { const id = await addItem(name, type, data, googleUserEmail); addToDeskIfActive('notes', id); },
       onClose: () => setIsNewNoteOpen(false),
@@ -922,6 +951,7 @@ const App = () => {
           onOpenFile: () => fileInputRef.current?.click(),
           onOpenUrl: () => setIsUrlOpen(true),
           onOpenImage: () => imageInputRef.current?.click(),
+          onOpenMap: isEditorOrMaster ? () => mapFileInputRef.current?.click() : undefined,
           setCoverImageDriveSync,
           upsertDriveCoverImage,
           isSyncing,
@@ -942,6 +972,13 @@ const App = () => {
         addItem: (name, type, data) => addItem(name, type, data, googleUserEmail),
         addImage,
         onSaved: () => setMode('library'),
+      }),
+
+      // Map
+      mode === 'map' && view === 'library' && React.createElement(MapView, {
+        items,
+        onAddMap: () => mapFileInputRef.current?.click(),
+        onUpdateItem: updateItem,
       }),
 
       // Desk
@@ -987,6 +1024,7 @@ const App = () => {
               onOpenChannel: isEditor ? () => setIsChannelOpen(true) : undefined,
               onOpenFile: isEditor ? () => fileInputRef.current?.click() : undefined,
               onOpenUrl: isEditor ? () => setIsUrlOpen(true) : undefined,
+              onOpenMap: isEditor ? () => mapFileInputRef.current?.click() : undefined,
               onSetItemDriveId: isEditor ? setItemDriveId : undefined,
               getBookByDriveId,
               onRequestDeleteItem: isEditor ? handleRequestDeleteItem : undefined,

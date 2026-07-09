@@ -104,6 +104,18 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
               }`,
             },
             "Explorer"
+          ),
+          React.createElement(
+            "button",
+            {
+              onClick: () => onModeChange('map'),
+              className: `px-3 py-1 text-sm rounded-md transition-colors duration-150 ${
+                mode === 'map'
+                  ? 'bg-indigo-600 text-white font-medium'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-600'
+              }`,
+            },
+            "Map"
           )
         ),
       React.createElement(

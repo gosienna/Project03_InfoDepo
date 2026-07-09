@@ -7,6 +7,7 @@ import { TxtViewer } from './TxtViewer.js';
 import { MarkdownEditor } from './MarkdownEditor.js';
 import { YoutubeViewer } from './YoutubeViewer.js';
 import { UnsupportedViewer } from './UnsupportedViewer.js';
+import { MapViewer } from './MapViewer.js';
 
 const MIME_TO_EXT = {
   'application/epub+zip': 'epub',
@@ -17,6 +18,7 @@ const MIME_TO_EXT = {
   'text/plain': 'txt',
   'text/markdown': 'md',
   'application/x-youtube': 'youtube',
+  'application/geo+json': 'geojson',
 };
 
 export const Reader = ({
@@ -145,6 +147,9 @@ export const Reader = ({
         });
       case 'youtube':
         return React.createElement(YoutubeViewer, { video, onSelectChannel, onAddChannel });
+      case 'geojson':
+      case 'kml':
+        return React.createElement(MapViewer, { video });
       default:
         return React.createElement(UnsupportedViewer, { filename: video.name });
     }

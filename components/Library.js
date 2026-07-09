@@ -92,6 +92,7 @@ export const Library = ({
   onOpenFile,
   onOpenUrl,
   onOpenImage,
+  onOpenMap,
   isSyncing,
   setIsSyncing,
   syncProgress,
@@ -1243,6 +1244,7 @@ export const Library = ({
           onAddFile: isEditor ? onOpenFile : undefined,
           onAddUrl: isEditor ? onOpenUrl : undefined,
           onAddImage: isEditor ? onOpenImage : undefined,
+          onAddMap: isEditor ? onOpenMap : undefined,
           onAddDesk: onAddDesk ? () => {
             const name = window.prompt('Desk name:', 'New Desk');
             if (name && name.trim()) onAddDesk(name.trim());
