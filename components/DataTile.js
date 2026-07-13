@@ -20,6 +20,7 @@ import { formatBytes, getFileExtension } from '../utils/fileUtils.js';
 import { BookIcon } from './icons/BookIcon.js';
 import { TrashIcon } from './icons/TrashIcon.js';
 import { UploadIcon } from './icons/UploadIcon.js';
+import { DownloadIcon } from './icons/DownloadIcon.js';
 import { normalizeTag } from '../utils/tagUtils.js';
 import { hasDriveCopy } from '../utils/driveRecordKey.js';
 
@@ -929,6 +930,21 @@ export const DataTile = ({
     );
   }
 
+  const isDownloadable = !isYoutube && !isUrl && video?.data instanceof Blob;
+
+  const handleDownload = (e) => {
+    e.stopPropagation();
+    if (!isDownloadable) return;
+    const url = URL.createObjectURL(video.data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = video.name || 'download';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const handleDelete = (e) => {
     e.stopPropagation();
     if (!onDelete) return;
@@ -1103,6 +1119,16 @@ export const DataTile = ({
       React.createElement(
         'div',
         { className: 'absolute bottom-2 right-2 z-10 flex items-center gap-1.5' },
+        isDownloadable && React.createElement(
+          'button',
+          {
+            onClick: handleDownload,
+            className:
+              'p-2 rounded-full bg-emerald-600/50 text-white opacity-0 group-hover:opacity-100 hover:bg-emerald-600 transition-all duration-300',
+            title: 'Download file',
+          },
+          React.createElement(DownloadIcon, { className: 'h-4 w-4' })
+        ),
         !readOnly && onUpload && React.createElement(UploadButton, { status: uploadStatus, onClick: handleUpload }),
         !readOnly &&
           onDelete &&
