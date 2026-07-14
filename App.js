@@ -18,6 +18,7 @@ import { getDriveFolderId } from './utils/driveFolderStorage.js';
 import { DeleteContentModal } from './components/DeleteContentModal.js';
 import { getOwnerDriveAccessToken } from './utils/driveAccessToken.js';
 import { deleteDriveFilesForChannel, deleteDriveFilesForDesk, deleteDriveFilesForMergedItem } from './utils/deleteLibraryContentOnDrive.js';
+import { useUnloadGuard } from './hooks/useUnloadGuard.js';
 
 async function fetchWithProgress(url, headers, fallbackSize, onProgress) {
   const r = await fetch(url, { headers });
@@ -129,6 +130,8 @@ const App = () => {
   const progressRafRef = useRef(null);
   const fileInputRef = useRef(null);
   const imageInputRef = useRef(null);
+
+  useUnloadGuard({ isSyncing, items, channels, desks });
 
   const startProgressRaf = useCallback(() => {
     if (progressRafRef.current !== null) return;
