@@ -563,6 +563,20 @@ async function drivePatchMultipart(accessToken, fileId, blob, name, mimeType) {
   return res.json();
 }
 
+async function findExistingDriveFile(accessToken, name, parentId) {
+  if (!parentId) return null;
+  try {
+    const q = `name='${name.replace(/'/g, "\\'")}' and '${parentId}' in parents and trashed=false`;
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)&pageSize=1`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.files?.[0]?.id || null;
+  } catch { return null; }
+}
+
 /**
  * Pulls a single desk from Drive into IDB if the Drive copy is newer.
  * Used to gate the first desk display so a stale local copy cannot be
@@ -704,7 +718,11 @@ export async function backupSingleDesk(desk, { accessToken, folderId, onSetDrive
   const payload = JSON.stringify({ _type: DESK_JSON_MARKER, ...rest });
   const blob = new Blob([payload], { type: 'application/json' });
   const fileName = `${String(label).replace(/[/\\?%*:|"<>]/g, '-')}.desk.json`;
-  const fileId = String(desk.driveFileId || '').trim();
+  let fileId = String(desk.driveFileId || '').trim();
+  if (!fileId) {
+    const existing = await findExistingDriveFile(accessToken, fileName, folderId);
+    if (existing) fileId = existing;
+  }
   let driveFile;
   if (fileId) {
     try {
@@ -828,17 +846,17 @@ export async function backupAllToGDrive({
         const isYoutube = item.type === 'application/x-youtube';
         const driveName = isYoutube ? item.name.replace(/\.youtube$/i, '.json') : item.name;
         const driveMime = isYoutube ? 'application/json' : item.type;
-        const fileId = String(item.driveFileId || '').trim();
+        let fileId = String(item.driveFileId || '').trim();
+        if (!fileId) {
+          const existing = await findExistingDriveFile(accessToken, driveName, folderId);
+          if (existing) fileId = existing;
+        }
         let driveFile;
         if (fileId) {
           try {
             driveFile = await patchMultipart(fileId, item.data, driveName, driveMime);
           } catch (patchErr) {
             if (patchErr.status === 404 || patchErr.status === 403) {
-              // 404: Drive file was deleted.
-              // 403: file not owned by this OAuth client (e.g. imported from a share).
-              // In both cases, upload a new file so the driveId is updated and the
-              // item is no longer considered dirty on future syncs.
               console.warn(`PATCH ${patchErr.status} for "${item.name}", uploading as new file.`);
               driveFile = await postMultipart(item.data, driveName, driveMime);
             } else {
@@ -962,7 +980,11 @@ export async function backupAllToGDrive({
       const blob = new Blob([payload], { type: 'application/json' });
       const safeName = String(label).replace(/[/\\?%*:|"<>]/g, '-');
       const fileName = `${safeName}.channel.json`;
-      const fileId = String(ch.driveFileId || '').trim();
+      let fileId = String(ch.driveFileId || '').trim();
+      if (!fileId) {
+        const existing = await findExistingDriveFile(accessToken, fileName, folderId);
+        if (existing) fileId = existing;
+      }
       let driveFile;
       if (fileId) {
         try {
@@ -1146,7 +1168,11 @@ export async function backupChangedItems(toBackup, {
         const blob = new Blob([payload], { type: 'application/json' });
         const safeName = String(label).replace(/[/\\?%*:|"<>]/g, '-');
         const fileName = `${safeName}.channel.json`;
-        const fileId = String(record.driveFileId || '').trim();
+        let fileId = String(record.driveFileId || '').trim();
+        if (!fileId) {
+          const existing = await findExistingDriveFile(accessToken, fileName, folderId);
+          if (existing) fileId = existing;
+        }
         let driveFile;
         if (fileId) {
           try {
@@ -1254,7 +1280,11 @@ export async function backupChangedItems(toBackup, {
         const isYoutube = record.type === 'application/x-youtube';
         const driveName = isYoutube ? record.name.replace(/\.youtube$/i, '.json') : record.name;
         const driveMime = isYoutube ? 'application/json' : record.type;
-        const fileId = String(record.driveFileId || '').trim();
+        let fileId = String(record.driveFileId || '').trim();
+        if (!fileId) {
+          const existing = await findExistingDriveFile(accessToken, driveName, folderId);
+          if (existing) fileId = existing;
+        }
         let driveFile;
         if (fileId) {
           try {
