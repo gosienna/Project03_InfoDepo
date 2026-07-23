@@ -799,6 +799,28 @@ export const DataTile = ({
       catch (err) { window.alert(err?.message || 'Could not save cover image.'); }
     };
 
+    const handleDeskCoverPaste = async (e) => {
+      e.stopPropagation();
+      if (!onSetCoverImage) return;
+      try {
+        const items = await navigator.clipboard.read();
+        for (const ci of items) {
+          const imageType = ci.types.find((t) => t.startsWith('image/'));
+          if (imageType) {
+            const blob = await ci.getType(imageType);
+            const ext = imageType.split('/')[1] || 'png';
+            const file = new File([blob], `cover-paste.${ext}`, { type: imageType });
+            await onSetCoverImage(desk, file);
+            return;
+          }
+        }
+        window.alert('No image found in clipboard.');
+      } catch (err) {
+        if (err.name === 'NotAllowedError') window.alert('Clipboard access denied — click the page first, then try again.');
+        else window.alert(err?.message || 'Could not read clipboard.');
+      }
+    };
+
     const deskItemCount = Object.keys(desk?.layout || {}).length;
 
     return React.createElement(
@@ -923,6 +945,16 @@ export const DataTile = ({
               title: 'Set cover from image library',
             },
             'From Library'
+          ),
+          React.createElement(
+            'button',
+            {
+              type: 'button',
+              onClick: handleDeskCoverPaste,
+              className: 'px-2 py-0.5 rounded bg-gray-700 text-xs text-gray-300 hover:bg-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-all',
+              title: 'Paste cover image from clipboard (Ctrl+V)',
+            },
+            'Paste'
           )
         ),
         shareRow
@@ -970,6 +1002,28 @@ export const DataTile = ({
       await onSetNoteCoverImage(video, file);
     } catch (err) {
       window.alert(err?.message || 'Could not save note cover image.');
+    }
+  };
+
+  const handleNoteCoverPaste = async (e) => {
+    e.stopPropagation();
+    if (!onSetNoteCoverImage) return;
+    try {
+      const items = await navigator.clipboard.read();
+      for (const ci of items) {
+        const imageType = ci.types.find((t) => t.startsWith('image/'));
+        if (imageType) {
+          const blob = await ci.getType(imageType);
+          const ext = imageType.split('/')[1] || 'png';
+          const file = new File([blob], `cover-paste.${ext}`, { type: imageType });
+          await onSetNoteCoverImage(video, file);
+          return;
+        }
+      }
+      window.alert('No image found in clipboard.');
+    } catch (err) {
+      if (err.name === 'NotAllowedError') window.alert('Clipboard access denied — click the page first, then try again.');
+      else window.alert(err?.message || 'Could not read clipboard.');
     }
   };
 
@@ -1265,6 +1319,16 @@ export const DataTile = ({
             title: 'Set cover from image library',
           },
           'From Library'
+        ),
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            onClick: handleNoteCoverPaste,
+            className: 'px-2 py-0.5 rounded bg-gray-700 text-xs text-gray-300 hover:bg-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-all',
+            title: 'Paste cover image from clipboard (Ctrl+V)',
+          },
+          'Paste'
         )
       ),
       tagRow,
