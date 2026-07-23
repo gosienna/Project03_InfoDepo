@@ -1194,7 +1194,9 @@ export const Desk = ({
     const nextLayout = { ...layoutRef.current };
     drag.keys.forEach((k) => {
       const base = drag.startPositions[k] || { x: 0, y: 0 };
-      nextLayout[k] = { x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
+      const moved = { x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
+      if (base.driveFileId) moved.driveFileId = base.driveFileId;
+      nextLayout[k] = moved;
     });
     layoutRef.current = nextLayout;
     if (Array.isArray(drag.textIds) && drag.textIds.length > 0) {
@@ -1369,7 +1371,9 @@ export const Desk = ({
       const nextLayout = { ...layoutRef.current };
       drag.itemKeys.forEach((k) => {
         const base = drag.startItemPositions[k] || layoutRef.current[k] || { x: 0, y: 0 };
-        nextLayout[k] = { x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
+        const moved = { x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
+        if (base.driveFileId) moved.driveFileId = base.driveFileId;
+        nextLayout[k] = moved;
       });
       layoutRef.current = nextLayout;
     }
