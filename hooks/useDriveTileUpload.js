@@ -84,7 +84,23 @@ export function useDriveTileUpload({ onSetDriveId, getRecordByDriveId, scheduleS
         const isYoutube = uploadItem.type === 'application/x-youtube';
         const driveName = isYoutube ? uploadItem.name.replace(/\.youtube$/i, '.json') : uploadItem.name;
         const driveMime = isYoutube ? 'application/json' : (uploadItem.type || 'application/octet-stream');
-        const existingFileId = String(uploadItem.driveFileId || '').trim();
+        let existingFileId = String(uploadItem.driveFileId || '').trim();
+
+        if (!existingFileId && driveFolderId) {
+          try {
+            const q = `name='${driveName.replace(/'/g, "\\'")}' and '${driveFolderId}' in parents and trashed=false`;
+            const searchRes = await fetch(
+              `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)&pageSize=1`,
+              { headers: { Authorization: `Bearer ${token}` } },
+            );
+            if (searchRes.ok) {
+              const searchData = await searchRes.json();
+              const found = searchData?.files?.[0]?.id;
+              if (found) existingFileId = found;
+            }
+          } catch { /* dedup check is best-effort */ }
+        }
+
         const hasFileOnDrive = Boolean(existingFileId);
         const metadata = hasFileOnDrive
           ? { name: driveName, mimeType: driveMime }

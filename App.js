@@ -559,6 +559,23 @@ const App = () => {
     return owner === normalizedUserEmail;
   }, [isEditor, normalizedUserEmail]);
 
+  const promotingSetItemDriveId = useCallback(async (localDriveId, storeName, driveFileId, syncMeta) => {
+    const result = await setItemDriveId(localDriveId, storeName, driveFileId, syncMeta);
+    if (result?.promoted) {
+      const { oldDriveId, newDriveId } = result;
+      if (currentVideo && currentVideo.driveId === oldDriveId) {
+        setCurrentVideo((prev) => prev?.driveId === oldDriveId ? { ...prev, driveId: newDriveId, driveFileId } : prev);
+      }
+      if (currentChannel && currentChannel.driveId === oldDriveId) {
+        setCurrentChannel((prev) => prev?.driveId === oldDriveId ? { ...prev, driveId: newDriveId, driveFileId } : prev);
+      }
+      if (currentDesk && currentDesk.driveId === oldDriveId) {
+        setCurrentDesk((prev) => prev?.driveId === oldDriveId ? { ...prev, driveId: newDriveId, driveFileId } : prev);
+      }
+    }
+    return result;
+  }, [setItemDriveId, currentVideo, currentChannel, currentDesk]);
+
   const handleAddDesk = async (name) => {
     const driveId = await addDesk(name, googleUserEmail);
     const newDesk = { driveId, name, layout: {}, connections: [] };
@@ -872,7 +889,7 @@ const App = () => {
           onSetNoteCoverImage: setNoteCoverImage,
           onDeleteItem: deleteItem,
           onClearLibrary: clearAll,
-          onSetDriveId: setItemDriveId,
+          onSetDriveId: promotingSetItemDriveId,
           onSetNoteFolderData: setNoteFolderData,
           onGetAllImages: getAllImages,
           getImagesForNote,
@@ -990,7 +1007,7 @@ const App = () => {
               onOpenChannel: isEditor ? () => setIsChannelOpen(true) : undefined,
               onOpenFile: isEditor ? () => fileInputRef.current?.click() : undefined,
               onOpenUrl: isEditor ? () => setIsUrlOpen(true) : undefined,
-              onSetItemDriveId: isEditor ? setItemDriveId : undefined,
+              onSetItemDriveId: isEditor ? promotingSetItemDriveId : undefined,
               getBookByDriveId,
               onRequestDeleteItem: isEditor ? handleRequestDeleteItem : undefined,
               onRequestDeleteChannel: isEditor ? handleRequestDeleteChannel : undefined,

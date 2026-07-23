@@ -9,7 +9,7 @@ import {
   normalizeDeskLayoutV11,
   normalizeLayoutPos,
 } from '../utils/deskEntryKeys.js';
-import { makeTempDriveId, migrationTempDriveId, deskLayoutKey } from '../utils/driveRecordKey.js';
+import { makeTempDriveId, migrationTempDriveId, deskLayoutKey, isTempDriveId } from '../utils/driveRecordKey.js';
 import { mergeDesk } from '../utils/deskMerge.js';
 
 const BOOKS_STORE    = 'books';
@@ -999,8 +999,11 @@ export const useIndexedDB = () => {
   }, [db]);
 
   /**
-   * Set Google Drive file id on a record (local driveId unchanged).
-   * @param {object} [syncMeta] - If `modifiedTime` is set, updates modifiedTime and localModifiedAt.
+   * Set Google Drive file id on a record.
+   * When the record has a temp local driveId (local:…), promotes it: deletes the old
+   * record and inserts a new one keyed by the Drive file id. Desk layout keys,
+   * connections, and PDF annotation sidecars are re-keyed to match.
+   * Returns { promoted, oldDriveId, newDriveId } so callers can update view state.
    */
   const setItemDriveId = useCallback((localDriveId, storeName, driveFileId, syncMeta = null) => {
     if (!db) return Promise.reject(new Error('Database not initialized'));
@@ -1012,9 +1015,9 @@ export const useIndexedDB = () => {
 
     const mt = syncMeta?.modifiedTime != null ? new Date(syncMeta.modifiedTime) : undefined;
     const metaPatch = mt ? { modifiedTime: mt, localModifiedAt: mt } : {};
+    const shouldPromote = isTempDriveId(trimmedLocal) && trimmedFileId !== trimmedLocal;
 
-    const patchDeskLayoutValues = () => new Promise((resolve) => {
-      const layoutKey = deskLayoutKey(trimmedLocal);
+    const patchDesks = (oldKey, newKey) => new Promise((resolve) => {
       let tx2;
       try { tx2 = db.transaction(DESKS_STORE, 'readwrite'); } catch { resolve(false); return; }
       const dos = tx2.objectStore(DESKS_STORE);
@@ -1024,9 +1027,31 @@ export const useIndexedDB = () => {
         const toPut = [];
         for (const desk of rows) {
           const layout = desk.layout && typeof desk.layout === 'object' ? { ...desk.layout } : {};
-          if (!(layoutKey in layout)) continue;
-          layout[layoutKey] = normalizeLayoutPos(layout[layoutKey], trimmedFileId);
-          toPut.push({ ...desk, layout });
+          const conns = Array.isArray(desk.connections) ? desk.connections : [];
+          let changed = false;
+
+          if (oldKey in layout) {
+            const pos = normalizeLayoutPos(layout[oldKey], trimmedFileId);
+            if (newKey !== oldKey) {
+              delete layout[oldKey];
+              layout[newKey] = pos;
+            } else {
+              layout[oldKey] = pos;
+            }
+            changed = true;
+          }
+
+          const newConns = conns.map((c) => {
+            const from = c.fromKey === oldKey ? newKey : c.fromKey;
+            const to = c.toKey === oldKey ? newKey : c.toKey;
+            if (from !== c.fromKey || to !== c.toKey) {
+              changed = true;
+              return { ...c, fromKey: from, toKey: to };
+            }
+            return c;
+          });
+
+          if (changed) toPut.push({ ...desk, layout, connections: newConns });
         }
         if (!toPut.length) { resolve(false); return; }
         let left = toPut.length;
@@ -1037,6 +1062,25 @@ export const useIndexedDB = () => {
         });
       };
       ga.onerror = () => resolve(false);
+    });
+
+    const rekeyPdfAnnotation = (oldDriveId, newDriveId, idbStore) => new Promise((resolve) => {
+      const oldSk = pdfAnnotationSidecarKey(oldDriveId, idbStore);
+      const newSk = pdfAnnotationSidecarKey(newDriveId, idbStore);
+      if (oldSk === newSk) { resolve(); return; }
+      let tx3;
+      try { tx3 = db.transaction(PDF_ANNOTATIONS_STORE, 'readwrite'); } catch { resolve(); return; }
+      const os3 = tx3.objectStore(PDF_ANNOTATIONS_STORE);
+      const gr = os3.get(oldSk);
+      gr.onsuccess = () => {
+        if (!gr.result) { resolve(); return; }
+        const updated = { ...gr.result, sidecarKey: newSk, itemDriveId: newDriveId };
+        os3.delete(oldSk);
+        const pr = os3.put(updated);
+        pr.onsuccess = () => resolve();
+        pr.onerror = () => resolve();
+      };
+      gr.onerror = () => resolve();
     });
 
     const notify = (actualStore, patchedDesks) => {
@@ -1058,23 +1102,52 @@ export const useIndexedDB = () => {
         const actualStore = found.store;
         const existing = found.record;
 
-        return new Promise((resolve, reject) => {
+        const oldLayoutKey = deskLayoutKey(trimmedLocal);
+        const newDriveId = shouldPromote ? trimmedFileId : trimmedLocal;
+        const newLayoutKey = deskLayoutKey(newDriveId);
+
+        const writeRecord = () => new Promise((resolve, reject) => {
           let tx;
           try { tx = db.transaction(actualStore, 'readwrite'); } catch (err) { reject(err); return; }
           const os = tx.objectStore(actualStore);
-          const putRequest = os.put({
-            ...existing,
-            driveFileId: trimmedFileId,
-            ...metaPatch,
-          });
-          putRequest.onsuccess = () => {
-            patchDeskLayoutValues().then((patched) => {
-              notify(actualStore, patched);
-              resolve();
-            });
-          };
-          putRequest.onerror = () => reject(putRequest.error);
+
+          if (shouldPromote) {
+            const checkExisting = os.get(newDriveId);
+            checkExisting.onsuccess = () => {
+              if (checkExisting.result) {
+                const delOld = os.delete(trimmedLocal);
+                delOld.onsuccess = () => resolve();
+                delOld.onerror = () => reject(delOld.error);
+                return;
+              }
+              const delReq = os.delete(trimmedLocal);
+              delReq.onsuccess = () => {
+                const newRecord = { ...existing, driveId: newDriveId, driveFileId: trimmedFileId, ...metaPatch };
+                const putReq = os.put(newRecord);
+                putReq.onsuccess = () => resolve();
+                putReq.onerror = () => reject(putReq.error);
+              };
+              delReq.onerror = () => reject(delReq.error);
+            };
+            checkExisting.onerror = () => reject(checkExisting.error);
+          } else {
+            const putReq = os.put({ ...existing, driveFileId: trimmedFileId, ...metaPatch });
+            putReq.onsuccess = () => resolve();
+            putReq.onerror = () => reject(putReq.error);
+          }
         });
+
+        return writeRecord()
+          .then(() => patchDesks(oldLayoutKey, newLayoutKey))
+          .then((patchedDesks) => {
+            const afterPdf = shouldPromote
+              ? rekeyPdfAnnotation(trimmedLocal, newDriveId, actualStore)
+              : Promise.resolve();
+            return afterPdf.then(() => {
+              notify(actualStore, patchedDesks);
+              return { promoted: shouldPromote, oldDriveId: trimmedLocal, newDriveId };
+            });
+          });
       });
   }, [db, loadAll, loadItems, loadChannels, loadDesks]);
 
@@ -1265,7 +1338,7 @@ export const useIndexedDB = () => {
           name: driveFile.name, type: driveFile.mimeType,
           data: blob ?? null,
           size: blob?.size ?? (driveFile.size || 0),
-          driveId: makeTempDriveId(targetStore),
+          driveId: googleId || makeTempDriveId(targetStore),
           driveFileId: googleId || undefined,
           modifiedTime: mtNew,
           localModifiedAt: mtNew,
@@ -1451,7 +1524,7 @@ export const useIndexedDB = () => {
         const putReq = os.put({
           ...channelData,
           tags: normalizeTagsList(channelData.tags),
-          driveId: makeTempDriveId(CHANNELS_STORE),
+          driveId: googleId || makeTempDriveId(CHANNELS_STORE),
           driveFileId: googleId || undefined,
           modifiedTime: mtAdd,
           localModifiedAt: mtAdd,
@@ -1652,7 +1725,7 @@ export const useIndexedDB = () => {
         const mt = new Date(driveFile.modifiedTime);
         const putReq = os.put({
           ...deskData,
-          driveId: makeTempDriveId(DESKS_STORE),
+          driveId: googleId || makeTempDriveId(DESKS_STORE),
           driveFileId: googleId || undefined,
           modifiedTime: mt,
           localModifiedAt: mt,
