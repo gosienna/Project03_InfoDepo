@@ -12,12 +12,12 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
   const roleLabel = normalizedRole ? normalizedRole[0].toUpperCase() + normalizedRole.slice(1) : '';
   const roleBadgeClass =
     normalizedRole === 'master'
-      ? 'bg-yellow-900/40 text-yellow-300 border-yellow-700/50'
+      ? 'bg-yellow-100 text-yellow-700 border-yellow-200'
       : normalizedRole === 'editor'
-        ? 'bg-blue-900/40 text-blue-300 border-blue-700/50'
+        ? 'bg-blue-100 text-blue-700 border-blue-200'
         : normalizedRole === 'viewer'
-          ? 'bg-emerald-900/40 text-emerald-300 border-emerald-700/50'
-          : 'bg-gray-700/40 text-gray-300 border-gray-600/50';
+          ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+          : 'bg-gray-100 text-gray-700 border-gray-200';
 
   const openUserConfig = async () => {
     try {
@@ -36,7 +36,7 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
     null,
     React.createElement(
       "header",
-      { className: "sticky top-0 z-[100] bg-gray-800 shadow-xl p-4 flex items-center justify-between gap-4 border-b border-gray-700/50" },
+      { className: "sticky top-0 z-[100] bg-theme-50 shadow-xl p-4 flex items-center justify-between gap-4 border-b border-gray-200" },
       React.createElement(
         "div",
         { className: "flex items-center min-w-0 flex-1" },
@@ -45,7 +45,7 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
             "button",
             {
               onClick: () => onBack(),
-              className: "p-2 -ml-2 mr-2 text-gray-400 hover:text-white transition-colors duration-200 rounded-full hover:bg-gray-700 cursor-pointer flex-shrink-0",
+              className: "p-2 -ml-2 mr-2 text-gray-600 hover:text-gray-900 transition-colors duration-200 rounded-full hover:bg-gray-100 cursor-pointer flex-shrink-0",
               "aria-label": "Back to Library"
             },
             React.createElement(
@@ -57,10 +57,10 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
         React.createElement(
           "div",
           { className: "flex items-center space-x-2 min-w-0" },
-          React.createElement(BookIcon, { className: "h-8 w-8 text-indigo-400 pointer-events-none flex-shrink-0" }),
+          React.createElement(BookIcon, { className: "h-8 w-8 text-theme-600 pointer-events-none flex-shrink-0" }),
           React.createElement(
             "h1",
-            { className: "text-xl sm:text-2xl font-bold text-white tracking-tight pointer-events-none truncate" },
+            { className: "text-xl sm:text-2xl font-bold text-theme-900 tracking-tight pointer-events-none truncate" },
             "Personal Information Depository"
           )
         )
@@ -68,15 +68,15 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
       showModeToggle &&
         React.createElement(
           "div",
-          { className: "flex items-center gap-1 bg-gray-700 rounded-lg p-1 flex-shrink-0" },
+          { className: "flex items-center gap-1 bg-gray-200 rounded-lg p-1 flex-shrink-0" },
           React.createElement(
             "button",
             {
               onClick: () => onModeChange('library'),
               className: `px-3 py-1 text-sm rounded-md transition-colors duration-150 ${
                 mode === 'library'
-                  ? 'bg-indigo-600 text-white font-medium'
-                  : 'text-gray-400 hover:text-white hover:bg-gray-600'
+                  ? 'bg-theme-500 text-buttontext font-medium'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-300'
               }`,
             },
             "Library"
@@ -87,8 +87,8 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
               onClick: () => onModeChange('desk'),
               className: `px-3 py-1 text-sm rounded-md transition-colors duration-150 ${
                 mode === 'desk'
-                  ? 'bg-indigo-600 text-white font-medium'
-                  : 'text-gray-400 hover:text-white hover:bg-gray-600'
+                  ? 'bg-theme-500 text-buttontext font-medium'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-300'
               }`,
             },
             "Desk"
@@ -99,8 +99,8 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
               onClick: () => onModeChange('explorer'),
               className: `px-3 py-1 text-sm rounded-md transition-colors duration-150 ${
                 mode === 'explorer'
-                  ? 'bg-indigo-600 text-white font-medium'
-                  : 'text-gray-400 hover:text-white hover:bg-gray-600'
+                  ? 'bg-theme-500 text-buttontext font-medium'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-300'
               }`,
             },
             "Explorer"
@@ -132,7 +132,7 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
             "button",
             {
               onClick: onSystemSettings,
-              className: "text-gray-400 hover:text-gray-200 p-2 rounded-xl hover:bg-gray-700 transition-colors",
+              className: "text-gray-600 hover:text-gray-800 p-2 rounded-xl hover:bg-gray-100 transition-colors",
               title: "System settings",
             },
             React.createElement(
@@ -147,7 +147,7 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
             "button",
             {
               onClick: openUserConfig,
-              className: "flex items-center gap-1.5 text-xs font-medium text-yellow-400 hover:text-yellow-300 bg-yellow-400/10 hover:bg-yellow-400/20 px-3 py-1.5 rounded-lg transition-colors",
+              className: "flex items-center gap-1.5 text-xs font-medium text-yellow-700 hover:text-yellow-800 bg-yellow-100 hover:bg-yellow-200 px-3 py-1.5 rounded-lg transition-colors",
               title: "Manage users",
             },
             React.createElement(
@@ -173,7 +173,7 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
             React.createElement(
               "span",
               {
-                className: "text-xs sm:text-sm text-gray-400 block truncate max-w-[10rem] sm:max-w-xs",
+                className: "text-xs sm:text-sm text-gray-600 block truncate max-w-[10rem] sm:max-w-xs",
                 title: userEmail,
               },
               userEmail

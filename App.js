@@ -754,12 +754,12 @@ const App = () => {
   if (!isInitialized || !dataReady) {
     return React.createElement(
       "div",
-      { className: "flex items-center justify-center h-screen bg-gray-900 text-white font-sans" },
+      { className: "flex items-center justify-center h-screen bg-theme-100 text-theme-900 font-sans" },
       React.createElement(
         "div",
         { className: "flex flex-col items-center gap-4" },
-        React.createElement("div", { className: "animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500" }),
-        React.createElement("p", { className: "text-gray-400" }, "Initializing…")
+        React.createElement("div", { className: "animate-spin rounded-full h-12 w-12 border-b-2 border-theme-500" }),
+        React.createElement("p", { className: "text-theme-700" }, "Initializing…")
       )
     );
   }
@@ -778,26 +778,26 @@ const App = () => {
   if (userType === 'unauthorized') {
     return React.createElement(
       'div',
-      { className: 'min-h-screen bg-gray-900 flex items-center justify-center font-sans' },
+      { className: 'min-h-screen bg-theme-100 flex items-center justify-center font-sans' },
       React.createElement(
         'div',
         { className: 'text-center px-6' },
         React.createElement(
           'svg',
-          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-red-500 mx-auto mb-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-red-600 mx-auto mb-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
           React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 1.5, d: 'M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z' })
         ),
-        React.createElement('p', { className: 'text-xl font-semibold text-red-400 mb-2' }, 'Access Denied'),
+        React.createElement('p', { className: 'text-xl font-semibold text-red-700 mb-2' }, 'Access Denied'),
         React.createElement(
           'p',
-          { className: 'text-gray-400 text-sm mb-6' },
+          { className: 'text-theme-700 text-sm mb-6' },
           googleUserEmail,
           ' is not authorized to use this app.'
         ),
         React.createElement(
           'button',
           {
-            className: 'text-indigo-400 hover:underline text-sm',
+            className: 'text-theme-600 hover:underline text-sm',
             onClick: () => { clearAllStoredAccessTokens(); window.location.reload(); },
           },
           'Sign in with a different account'
@@ -809,19 +809,19 @@ const App = () => {
   if (userType === 'loading' && googleUserEmail) {
     return React.createElement(
       'div',
-      { className: 'flex items-center justify-center h-screen bg-gray-900 text-white font-sans' },
+      { className: 'flex items-center justify-center h-screen bg-theme-100 text-theme-900 font-sans' },
       React.createElement(
         'div',
         { className: 'flex flex-col items-center gap-4' },
-        React.createElement('div', { className: 'animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500' }),
-        React.createElement('p', { className: 'text-gray-400' }, 'Checking access…')
+        React.createElement('div', { className: 'animate-spin rounded-full h-12 w-12 border-b-2 border-theme-500' }),
+        React.createElement('p', { className: 'text-theme-700' }, 'Checking access…')
       )
     );
   }
 
   return React.createElement(
     "div",
-    { className: "min-h-screen bg-gray-900 text-gray-100 font-sans flex flex-col" },
+    { className: "min-h-screen bg-theme-100 text-theme-900 font-sans flex flex-col" },
     React.createElement(Header, {
       onBack: view !== 'library' ? handleBackToLibrary : undefined,
       userEmail: googleUserEmail,
@@ -969,7 +969,7 @@ const App = () => {
         initialDeskSyncing
           ? React.createElement(
               'div',
-              { className: 'flex flex-col items-center justify-center h-full gap-3 text-gray-400' },
+              { className: 'flex flex-col items-center justify-center h-full gap-3 text-theme-700' },
               React.createElement('div', { className: 'w-6 h-6 border-2 border-gray-400 border-t-transparent rounded-full animate-spin' }),
               React.createElement('span', { className: 'text-sm' }, 'Syncing desk…')
             )
@@ -1020,12 +1020,12 @@ const App = () => {
           : React.createElement(
               'div',
               { className: 'flex flex-col items-center justify-center h-full gap-4' },
-              React.createElement('p', { className: 'text-gray-400 text-lg' }, 'No desk selected.'),
+              React.createElement('p', { className: 'text-theme-700 text-lg' }, 'No desk selected.'),
               React.createElement(
                 'button',
                 {
                   onClick: () => handleAddDesk('New Desk'),
-                  className: 'bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 px-6 rounded-xl transition-all',
+                  className: 'bg-theme-500 hover:bg-theme-600 text-buttontext font-semibold py-2 px-6 rounded-xl transition-all',
                 },
                 'Create First Desk'
               )
@@ -1066,10 +1066,10 @@ const App = () => {
         React.createElement(
           "div",
           { className: "flex flex-col items-center justify-center h-64 p-4" },
-          React.createElement("p", { className: "text-gray-400" }, "No item selected."),
+          React.createElement("p", { className: "text-theme-700" }, "No item selected."),
           React.createElement(
             "button",
-            { onClick: handleBackToLibrary, className: "mt-4 text-indigo-400 hover:underline" },
+            { onClick: handleBackToLibrary, className: "mt-4 text-theme-600 hover:underline" },
             "Return to Library"
           )
         )

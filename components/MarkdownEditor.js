@@ -1996,7 +1996,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
     ? React.createElement('input', {
         autoFocus: true,
         defaultValue: displayName.replace(/\.md$/, ''),
-        className: 'text-sm text-gray-200 font-mono bg-gray-700 border border-indigo-500 rounded px-2 py-0.5 outline-none focus:ring-1 focus:ring-indigo-400 max-w-xs',
+        className: 'text-sm text-theme-900 font-mono bg-theme-50 border border-theme-500 rounded px-2 py-0.5 outline-none focus:ring-1 focus:ring-theme-400 max-w-xs',
         onBlur: (e) => commitNameEdit(e.target.value),
         onKeyDown: (e) => {
           if (e.key === 'Enter') { e.preventDefault(); commitNameEdit(e.target.value); }
@@ -2007,7 +2007,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
     : React.createElement(
         'span',
         {
-          className: `text-sm text-gray-400 font-mono truncate max-w-xs ${!readOnly && onRename ? 'cursor-pointer hover:text-gray-200 transition-colors' : ''}`,
+          className: `text-sm text-theme-700 font-mono truncate max-w-xs ${!readOnly && onRename ? 'cursor-pointer hover:text-theme-900 transition-colors' : ''}`,
           title: readOnly || !onRename ? displayName : 'Click to rename',
           onClick: !readOnly && onRename ? () => setIsEditingName(true) : undefined,
         },
@@ -2018,22 +2018,22 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
     return React.createElement(
       'div',
       { className: 'flex items-center justify-center h-full' },
-      React.createElement('div', { className: 'animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-400' })
+      React.createElement('div', { className: 'animate-spin rounded-full h-6 w-6 border-b-2 border-theme-400' })
     );
   }
 
   if (readOnly) {
     return React.createElement(
       'div',
-      { className: 'w-full h-full flex flex-col bg-gray-800 rounded-lg shadow-lg overflow-hidden' },
+      { className: 'w-full h-full flex flex-col bg-theme-50 rounded-lg shadow-lg overflow-hidden' },
       React.createElement(
         'div',
-        { className: 'flex items-center justify-between px-4 py-2 border-b border-gray-700 bg-gray-800/80 shrink-0' },
+        { className: 'flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-theme-50/80 shrink-0' },
         nameDisplay,
-        React.createElement('span', { className: 'text-xs text-amber-400 font-medium' }, 'Read-only')
+        React.createElement('span', { className: 'text-xs text-amber-700 font-medium' }, 'Read-only')
       ),
       React.createElement('div', {
-        className: 'bg-gray-900 text-gray-100 text-sm leading-relaxed p-6 overflow-auto flex-1',
+        className: 'bg-theme-50 text-theme-900 text-sm leading-relaxed p-6 overflow-auto flex-1',
         dangerouslySetInnerHTML: { __html: text ? renderMarkdown(text, assetUrls) : '<p class="text-gray-500">Empty note</p>' },
       })
     );
@@ -2064,12 +2064,12 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
 
   return React.createElement(
     'div',
-    { className: 'w-full h-full flex flex-col bg-gray-800 rounded-lg shadow-lg overflow-hidden' },
+    { className: 'w-full h-full flex flex-col bg-theme-50 rounded-lg shadow-lg overflow-hidden' },
 
     // ── Toolbar ─────────────────────────────────────────────────────
     React.createElement(
       'div',
-      { className: 'flex items-center justify-between px-4 py-2 border-b border-gray-700 bg-gray-800/80 shrink-0' },
+      { className: 'flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-theme-50/80 shrink-0' },
 
       nameDisplay,
 
@@ -2077,9 +2077,9 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
         'div',
         { className: 'flex items-center gap-3' },
 
-        saveMsg === 'saved' && React.createElement('span', { className: 'text-xs text-emerald-400 font-medium' }, 'Saved'),
-        saveMsg === 'error' && React.createElement('span', { className: 'text-xs text-red-400 font-medium' }, 'Save failed'),
-        isDirty && !saveMsg && React.createElement('span', { className: 'text-xs text-gray-500' }, 'Unsaved changes'),
+        saveMsg === 'saved' && React.createElement('span', { className: 'text-xs text-emerald-700 font-medium' }, 'Saved'),
+        saveMsg === 'error' && React.createElement('span', { className: 'text-xs text-red-700 font-medium' }, 'Save failed'),
+        isDirty && !saveMsg && React.createElement('span', { className: 'text-xs text-theme-500' }, 'Unsaved changes'),
 
 
         // Mode toggle
@@ -2092,7 +2092,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
             className: `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
               editMode === 'html'
                 ? 'bg-violet-700 hover:bg-violet-600 text-white'
-                : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+                : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
             }`,
           },
           React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', className: 'h-3.5 w-3.5', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
@@ -2107,7 +2107,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
           {
             onClick: handleExport,
             title: 'Export as ZIP (note + images)',
-            className: 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors',
+            className: 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-200 hover:bg-gray-300 text-gray-700 transition-colors',
           },
           React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', className: 'h-3.5 w-3.5', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
             React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4' })
@@ -2155,7 +2155,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
           ref: contentEditableRef,
           contentEditable: true,
           suppressContentEditableWarning: true,
-          className: 'bg-gray-900 text-gray-100 text-sm leading-relaxed p-6 overflow-auto flex-1 outline-none',
+          className: 'bg-theme-50 text-theme-900 text-sm leading-relaxed p-6 overflow-auto flex-1 outline-none',
           style: { minWidth: 0, wordBreak: 'break-word' },
           onInput: handleHtmlInput,
           onKeyDown: handleHtmlKeyDown,
@@ -2230,13 +2230,13 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
           },
           spellCheck: false,
           placeholder: 'Type markdown here… or press / to insert',
-          className: 'bg-gray-950 text-gray-300 text-sm font-mono leading-relaxed p-4 resize-none focus:outline-none border-r border-gray-700 overflow-auto',
-          style: { width: '40%', flexShrink: 0, caretColor: '#a5b4fc' },
+          className: 'bg-theme-50 text-theme-900 text-sm font-mono leading-relaxed p-4 resize-none focus:outline-none border-r border-gray-200 overflow-auto',
+          style: { width: '40%', flexShrink: 0, caretColor: 'rgb(var(--theme-600))' },
         }),
 
         React.createElement('div', {
           ref: previewRef,
-          className: 'bg-gray-900 text-gray-100 text-sm leading-relaxed p-6 overflow-auto flex-1',
+          className: 'bg-theme-50 text-theme-900 text-sm leading-relaxed p-6 overflow-auto flex-1',
           style: { minWidth: 0 },
           onClick: (e) => {
             const itemAnchor = e.target.closest('a[href^="/?open="]');
@@ -2287,19 +2287,19 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
           'div',
           {
             style: { position: 'fixed', top: dropdownCoords.top, left: dropdownCoords.left, zIndex: 9999 },
-            className: 'bg-gray-800 border border-gray-600 rounded-xl shadow-2xl py-1 min-w-56 max-h-80 overflow-y-auto',
+            className: 'bg-theme-50 border border-gray-200 rounded-xl shadow-2xl py-1 min-w-56 max-h-80 overflow-y-auto',
             onMouseDown: (e) => e.preventDefault(),
           },
-          React.createElement('div', { className: 'px-3 py-1.5 text-xs text-gray-500 border-b border-gray-700' }, 'Insert link to section'),
+          React.createElement('div', { className: 'px-3 py-1.5 text-xs text-theme-500 border-b border-gray-200' }, 'Insert link to section'),
           headings.map((h, i) =>
             React.createElement('button', {
               key: h.slug,
               onMouseDown: (e) => { e.preventDefault(); applyFn(h); },
-              className: `w-full flex items-center px-3 py-2 text-sm transition-colors text-left ${i === headingMenu.activeIdx ? 'bg-indigo-600 text-white' : 'text-gray-200 hover:bg-gray-700'}`,
+              className: `w-full flex items-center px-3 py-2 text-sm transition-colors text-left ${i === headingMenu.activeIdx ? 'bg-theme-600 text-buttontext' : 'text-gray-700 hover:bg-gray-100'}`,
               style: { paddingLeft: `${(h.level - 1) * 16 + 12}px` },
             },
-              React.createElement('span', { className: h.level === 1 ? 'font-bold' : h.level === 2 ? 'font-medium' : 'text-gray-400' }, h.title),
-              React.createElement('span', { className: `text-xs font-mono ml-auto pl-4 ${i === headingMenu.activeIdx ? 'text-indigo-200' : 'text-gray-600'}` }, `#${h.slug}`)
+              React.createElement('span', { className: h.level === 1 ? 'font-bold' : h.level === 2 ? 'font-medium' : 'text-gray-600' }, h.title),
+              React.createElement('span', { className: `text-xs font-mono ml-auto pl-4 ${i === headingMenu.activeIdx ? 'text-buttontext' : 'text-gray-500'}` }, `#${h.slug}`)
             )
           )
         );
@@ -2310,18 +2310,18 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
         'div',
         {
           style: { position: 'fixed', top: sublistPicker.top, left: sublistPicker.left, zIndex: 9999 },
-          className: 'bg-gray-800 border border-gray-600 rounded-xl shadow-2xl py-1 min-w-44',
+          className: 'bg-theme-50 border border-gray-200 rounded-xl shadow-2xl py-1 min-w-44',
           onMouseDown: (e) => e.preventDefault(),
         },
-        React.createElement('div', { className: 'px-3 py-1.5 text-xs text-gray-500 border-b border-gray-700' }, 'Sub-list type'),
+        React.createElement('div', { className: 'px-3 py-1.5 text-xs text-theme-500 border-b border-gray-200' }, 'Sub-list type'),
         SUBLIST_OPTIONS.map((opt, i) =>
           React.createElement('button', {
             key: opt.id,
             onMouseDown: (e) => { e.preventDefault(); applySublistPicker(opt); },
-            className: `w-full flex items-center justify-between px-3 py-2 text-sm transition-colors text-left ${i === sublistPicker.activeIdx ? 'bg-indigo-600 text-white' : 'text-gray-200 hover:bg-gray-700'}`,
+            className: `w-full flex items-center justify-between px-3 py-2 text-sm transition-colors text-left ${i === sublistPicker.activeIdx ? 'bg-theme-600 text-buttontext' : 'text-gray-700 hover:bg-gray-100'}`,
           },
             React.createElement('span', { className: 'font-medium' }, opt.label),
-            React.createElement('span', { className: `text-xs font-mono ml-4 ${i === sublistPicker.activeIdx ? 'text-indigo-200' : 'text-gray-500'}` }, opt.hint)
+            React.createElement('span', { className: `text-xs font-mono ml-4 ${i === sublistPicker.activeIdx ? 'text-buttontext' : 'text-gray-500'}` }, opt.hint)
           )
         )
       ),
@@ -2331,25 +2331,25 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
         'div',
         {
           style: { position: 'fixed', top: dropdownCoords.top, left: dropdownCoords.left, zIndex: 9999 },
-          className: 'bg-gray-800 border border-gray-600 rounded-xl shadow-2xl py-1 min-w-52',
+          className: 'bg-theme-50 border border-gray-200 rounded-xl shadow-2xl py-1 min-w-52',
           onMouseDown: (e) => e.preventDefault(),
         },
         // Header — shows breadcrumb at layer 1 with a back button
         React.createElement(
           'div',
-          { className: 'flex items-center gap-1 px-3 py-1.5 border-b border-gray-700' },
+          { className: 'flex items-center gap-1 px-3 py-1.5 border-b border-gray-200' },
           slashMenu.layer === 1 && React.createElement(
             'button',
             {
               onMouseDown: (e) => { e.preventDefault(); setSlashMenu(prev => ({ ...prev, layer: 0, group: null, activeIdx: 0 })); },
-              className: 'text-gray-400 hover:text-gray-200 mr-1 leading-none transition-colors',
+              className: 'text-gray-500 hover:text-gray-700 mr-1 leading-none transition-colors',
               title: 'Back',
             },
             '←'
           ),
           React.createElement(
             'span',
-            { className: 'text-xs text-gray-500' },
+            { className: 'text-xs text-theme-500' },
             slashMenu.layer === 0
               ? 'Insert…'
               : slashMenu.group === 'item' ? 'Insert Item' : 'Insert Link'
@@ -2373,12 +2373,12 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
                 editMode === 'html' ? applyHtmlSlashCommand(cmd) : applySlashCommand(cmd);
               }
             },
-            className: `w-full flex items-center justify-between px-3 py-2 text-sm transition-colors text-left ${isActive ? 'bg-indigo-600 text-white' : 'text-gray-200 hover:bg-gray-700'}`,
+            className: `w-full flex items-center justify-between px-3 py-2 text-sm transition-colors text-left ${isActive ? 'bg-theme-600 text-buttontext' : 'text-gray-700 hover:bg-gray-100'}`,
           },
             React.createElement('span', { className: 'font-medium' }, cmd.label),
             React.createElement(
               'span',
-              { className: `text-xs font-mono ml-4 ${isActive ? 'text-indigo-200' : 'text-gray-500'}` },
+              { className: `text-xs font-mono ml-4 ${isActive ? 'text-buttontext' : 'text-gray-500'}` },
               cmd.isGroup ? '›' : cmd.hint
             )
           );
@@ -2399,7 +2399,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
           if (!rect) return { display: 'none' };
           return { position: 'fixed', top: rect.top + rect.height / 2 - 16, left: rect.right - 8, zIndex: 120, width: 16, height: 32, pointerEvents: 'auto', cursor: 'ew-resize' };
         })(),
-        className: 'rounded-md bg-indigo-500/90 border border-indigo-200 shadow-lg hover:bg-indigo-400',
+        className: 'rounded-md bg-theme-500/90 border border-theme-200 shadow-lg hover:bg-theme-400',
         title: resizingImg ? `Width: ${resizingImg.width}px` : 'Drag to resize image',
         onMouseEnter: () => { if (hoveredImgClearTimer.current) { clearTimeout(hoveredImgClearTimer.current); hoveredImgClearTimer.current = null; } },
         onMouseLeave: () => { if (resizingImg) return; hoveredImgClearTimer.current = setTimeout(() => setHoveredImg(null), 120); },
@@ -2416,7 +2416,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
       'button',
       {
         style: { position: 'fixed', top: hoveredImg.rect.top + 6, left: hoveredImg.rect.right - 80, zIndex: 100, pointerEvents: 'auto' },
-        className: 'flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg transition-colors',
+        className: 'flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-theme-600 hover:bg-theme-500 text-buttontext shadow-lg transition-colors',
         onMouseEnter: () => { if (hoveredImgClearTimer.current) { clearTimeout(hoveredImgClearTimer.current); hoveredImgClearTimer.current = null; } },
         onMouseLeave: () => { hoveredImgClearTimer.current = setTimeout(() => setHoveredImg(null), 80); },
         onClick: (e) => {
@@ -2442,16 +2442,16 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
       React.createElement(
         'div',
         {
-          className: 'w-full max-w-sm bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-4',
+          className: 'w-full max-w-sm bg-theme-50 border border-gray-200 rounded-xl shadow-2xl p-4',
           onMouseDown: (e) => e.stopPropagation(),
         },
-        React.createElement('h3', { className: 'text-sm font-semibold text-gray-100 mb-3' }, 'Insert hyperlink'),
+        React.createElement('h3', { className: 'text-sm font-semibold text-theme-900 mb-3' }, 'Insert hyperlink'),
         React.createElement(
           'div',
           { className: 'flex flex-col gap-3 mb-4' },
           React.createElement(
             'label',
-            { className: 'text-xs text-gray-300 flex flex-col gap-1' },
+            { className: 'text-xs text-theme-700 flex flex-col gap-1' },
             'URL',
             React.createElement('input', {
               autoFocus: true,
@@ -2460,17 +2460,17 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
               value: urlPrompt.url,
               onChange: (e) => setUrlPrompt(prev => ({ ...prev, url: e.target.value })),
               onKeyDown: (e) => { if (e.key === 'Escape') { e.stopPropagation(); setUrlPrompt(null); } },
-              className: 'px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-gray-100 outline-none focus:border-indigo-500 placeholder-gray-600',
+              className: 'px-2 py-1.5 bg-theme-50 border border-gray-300 rounded text-theme-900 outline-none focus:border-theme-500 placeholder-theme-500',
             })
           ),
           React.createElement(
             'label',
-            { className: 'text-xs text-gray-300 flex flex-col gap-1' },
+            { className: 'text-xs text-theme-700 flex flex-col gap-1' },
             React.createElement(
               'span',
               null,
               'Link text ',
-              React.createElement('span', { className: 'text-gray-500' }, '(leave blank to use the URL)')
+              React.createElement('span', { className: 'text-theme-500' }, '(leave blank to use the URL)')
             ),
             React.createElement('input', {
               type: 'text',
@@ -2484,7 +2484,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
                   e.target.closest('div.fixed')?.querySelector('button[data-confirm]')?.click();
                 }
               },
-              className: 'px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-gray-100 outline-none focus:border-indigo-500 placeholder-gray-600',
+              className: 'px-2 py-1.5 bg-theme-50 border border-gray-300 rounded text-theme-900 outline-none focus:border-theme-500 placeholder-theme-500',
             })
           )
         ),
@@ -2493,7 +2493,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
           { className: 'flex justify-end gap-2' },
           React.createElement(
             'button',
-            { onClick: () => setUrlPrompt(null), className: 'px-3 py-1.5 rounded-lg text-sm bg-gray-700 hover:bg-gray-600 text-gray-200' },
+            { onClick: () => setUrlPrompt(null), className: 'px-3 py-1.5 rounded-lg text-sm bg-gray-200 hover:bg-gray-300 text-gray-700' },
             'Cancel'
           ),
           React.createElement(
@@ -2535,7 +2535,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
                 }
                 setUrlPrompt(null);
               },
-              className: 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed',
+              className: 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-theme-500 hover:bg-theme-600 text-buttontext disabled:opacity-40 disabled:cursor-not-allowed',
             },
             'Insert'
           )
@@ -2556,13 +2556,13 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
         return 'Item';
       };
       const typeBadgeColor = (t) => ({
-        Book: 'bg-indigo-900 text-indigo-300',
-        PDF:  'bg-rose-900 text-rose-300',
-        Note: 'bg-emerald-900 text-emerald-300',
-        Text: 'bg-gray-700 text-gray-300',
-        YouTube: 'bg-red-900 text-red-300',
-        Image: 'bg-violet-900 text-violet-300',
-      }[t] || 'bg-gray-700 text-gray-300');
+        Book: 'bg-theme-100 text-theme-700',
+        PDF:  'bg-rose-100 text-rose-700',
+        Note: 'bg-emerald-100 text-emerald-700',
+        Text: 'bg-gray-200 text-gray-700',
+        YouTube: 'bg-red-100 text-red-700',
+        Image: 'bg-violet-100 text-violet-700',
+      }[t] || 'bg-gray-200 text-gray-700');
 
       const q = (itemPrompt.query || '').toLowerCase();
       const visible = (itemPrompt.items || []).filter(it =>
@@ -2620,15 +2620,15 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
         React.createElement(
           'div',
           {
-            className: 'w-full max-w-md bg-gray-900 border border-gray-700 rounded-xl shadow-2xl flex flex-col',
+            className: 'w-full max-w-md bg-theme-50 border border-gray-200 rounded-xl shadow-2xl flex flex-col',
             style: { maxHeight: '70vh' },
             onMouseDown: (e) => e.stopPropagation(),
           },
           // Header
           React.createElement(
             'div',
-            { className: 'px-4 pt-4 pb-3 border-b border-gray-700 shrink-0' },
-            React.createElement('h3', { className: 'text-sm font-semibold text-gray-100 mb-2' }, 'Link to Item'),
+            { className: 'px-4 pt-4 pb-3 border-b border-gray-200 shrink-0' },
+            React.createElement('h3', { className: 'text-sm font-semibold text-theme-900 mb-2' }, 'Link to Item'),
             React.createElement('input', {
               autoFocus: true,
               type: 'text',
@@ -2649,7 +2649,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
                 }
                 if (e.key === 'Enter' && visible.length > 0) { e.preventDefault(); insertItem(visible[activeIdx]); }
               },
-              className: 'w-full px-3 py-1.5 bg-gray-800 border border-gray-600 rounded-lg text-sm text-gray-100 outline-none focus:border-indigo-500 placeholder-gray-600',
+              className: 'w-full px-3 py-1.5 bg-theme-50 border border-gray-300 rounded-lg text-sm text-theme-900 outline-none focus:border-theme-500 placeholder-theme-500',
             })
           ),
           // List
@@ -2657,7 +2657,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
             'div',
             { className: 'overflow-y-auto flex-1 py-1' },
             visible.length === 0
-              ? React.createElement('p', { className: 'px-4 py-6 text-xs text-gray-500 text-center' }, 'No items found')
+              ? React.createElement('p', { className: 'px-4 py-6 text-xs text-theme-500 text-center' }, 'No items found')
               : visible.map((item, i) =>
                   React.createElement(
                     'button',
@@ -2665,16 +2665,16 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
                       key: item.driveId,
                       ref: i === activeIdx ? (el) => el?.scrollIntoView({ block: 'nearest' }) : null,
                       onMouseDown: (e) => { e.preventDefault(); insertItem(item); },
-                      className: `w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors ${i === activeIdx ? 'bg-indigo-600 text-white' : 'hover:bg-gray-800'}`,
+                      className: `w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors ${i === activeIdx ? 'bg-theme-600 text-buttontext' : 'hover:bg-theme-100'}`,
                     },
                     React.createElement(
                       'span',
-                      { className: `shrink-0 text-xs font-mono px-1.5 py-0.5 rounded ${i === activeIdx ? 'bg-indigo-400/30 text-indigo-100' : typeBadgeColor(getItemType(item))}` },
+                      { className: `shrink-0 text-xs font-mono px-1.5 py-0.5 rounded ${i === activeIdx ? 'bg-theme-400/30 text-buttontext' : typeBadgeColor(getItemType(item))}` },
                       getItemType(item)
                     ),
                     React.createElement(
                       'span',
-                      { className: `truncate ${i === activeIdx ? 'text-white' : 'text-gray-200'}` },
+                      { className: `truncate ${i === activeIdx ? 'text-buttontext' : 'text-theme-900'}` },
                       (item.name || '').replace(/\.md$/, '')
                     )
                   )
@@ -2683,10 +2683,10 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
           // Footer
           React.createElement(
             'div',
-            { className: 'px-4 py-2 border-t border-gray-700 shrink-0 flex justify-end' },
+            { className: 'px-4 py-2 border-t border-gray-200 shrink-0 flex justify-end' },
             React.createElement(
               'button',
-              { onClick: () => setItemPrompt(null), className: 'px-3 py-1.5 rounded-lg text-sm bg-gray-700 hover:bg-gray-600 text-gray-200' },
+              { onClick: () => setItemPrompt(null), className: 'px-3 py-1.5 rounded-lg text-sm bg-gray-200 hover:bg-gray-300 text-gray-700' },
               'Cancel'
             )
           )
@@ -2704,17 +2704,17 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
       React.createElement(
         'div',
         {
-          className: 'w-full max-w-sm bg-gray-900 border border-gray-700 rounded-xl shadow-2xl p-4',
+          className: 'w-full max-w-sm bg-theme-50 border border-gray-200 rounded-xl shadow-2xl p-4',
           onMouseDown: (e) => e.stopPropagation(),
         },
-        React.createElement('h3', { className: 'text-sm font-semibold text-gray-100 mb-3' }, 'Create canvas'),
-        React.createElement('p', { className: 'text-xs text-gray-400 mb-4' }, 'Set width and height before opening the editor.'),
+        React.createElement('h3', { className: 'text-sm font-semibold text-theme-900 mb-3' }, 'Create canvas'),
+        React.createElement('p', { className: 'text-xs text-theme-700 mb-4' }, 'Set width and height before opening the editor.'),
         React.createElement(
           'div',
           { className: 'grid grid-cols-2 gap-3 mb-4' },
           React.createElement(
             'label',
-            { className: 'text-xs text-gray-300 flex flex-col gap-1' },
+            { className: 'text-xs text-theme-700 flex flex-col gap-1' },
             'Width',
             React.createElement('input', {
               type: 'number',
@@ -2725,12 +2725,12 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
                 const next = Math.max(64, Math.min(4096, Number(e.target.value) || 64));
                 setCanvasPrompt(prev => prev ? { ...prev, width: next } : prev);
               },
-              className: 'px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-gray-100 outline-none focus:border-indigo-500',
+              className: 'px-2 py-1.5 bg-theme-50 border border-gray-300 rounded text-theme-900 outline-none focus:border-theme-500',
             })
           ),
           React.createElement(
             'label',
-            { className: 'text-xs text-gray-300 flex flex-col gap-1' },
+            { className: 'text-xs text-theme-700 flex flex-col gap-1' },
             'Height',
             React.createElement('input', {
               type: 'number',
@@ -2741,7 +2741,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
                 const next = Math.max(64, Math.min(4096, Number(e.target.value) || 64));
                 setCanvasPrompt(prev => prev ? { ...prev, height: next } : prev);
               },
-              className: 'px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-gray-100 outline-none focus:border-indigo-500',
+              className: 'px-2 py-1.5 bg-theme-50 border border-gray-300 rounded text-theme-900 outline-none focus:border-theme-500',
             })
           )
         ),
@@ -2752,7 +2752,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
             'button',
             {
               onClick: () => setCanvasPrompt(null),
-              className: 'px-3 py-1.5 rounded-lg text-sm bg-gray-700 hover:bg-gray-600 text-gray-200',
+              className: 'px-3 py-1.5 rounded-lg text-sm bg-gray-200 hover:bg-gray-300 text-gray-700',
             },
             'Cancel'
           ),
@@ -2770,7 +2770,7 @@ export const MarkdownEditor = ({ video, onUpdateItem, onAddImage, onGetImages, o
                 });
                 setCanvasPrompt(null);
               },
-              className: 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white',
+              className: 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-theme-500 hover:bg-theme-600 text-buttontext',
             },
             'Open editor'
           )

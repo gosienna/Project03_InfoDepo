@@ -55,7 +55,7 @@ export const GoogleOAuthGate = ({ onSuccess, onGoogleUserEmail }) => {
     'div',
     {
       className:
-        'flex flex-col items-center justify-center min-h-screen bg-gray-900 text-gray-100 font-sans px-6',
+        'flex flex-col items-center justify-center min-h-screen bg-theme-100 text-theme-900 font-sans px-6',
     },
     React.createElement(
       'div',
@@ -63,10 +63,10 @@ export const GoogleOAuthGate = ({ onSuccess, onGoogleUserEmail }) => {
       React.createElement(
         'div',
         { className: 'text-center' },
-        React.createElement('h1', { className: 'text-2xl font-semibold text-white' }, 'Google Drive setup'),
+        React.createElement('h1', { className: 'text-2xl font-semibold text-theme-900' }, 'Google Drive setup'),
         React.createElement(
           'p',
-          { className: 'text-gray-400 text-sm leading-relaxed mt-2' },
+          { className: 'text-theme-700 text-sm leading-relaxed mt-2' },
           'Choose the Drive folder for sync and backup, then sign in with Google.',
         ),
       ),
@@ -75,7 +75,7 @@ export const GoogleOAuthGate = ({ onSuccess, onGoogleUserEmail }) => {
         { className: 'text-left space-y-2' },
         React.createElement(
           'label',
-          { htmlFor: 'infodepo-gate-folder', className: 'block text-sm font-medium text-gray-300' },
+          { htmlFor: 'infodepo-gate-folder', className: 'block text-sm font-medium text-theme-700' },
           'Drive folder',
         ),
         React.createElement('input', {
@@ -85,13 +85,13 @@ export const GoogleOAuthGate = ({ onSuccess, onGoogleUserEmail }) => {
           onChange: (e) => setFolderInput(e.target.value),
           placeholder: 'Folder ID or https://drive.google.com/drive/folders/…',
           className:
-            'w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 font-mono',
+            'w-full bg-theme-50 border border-gray-300 rounded-lg px-3 py-2.5 text-sm text-theme-900 placeholder-theme-500 focus:outline-none focus:border-theme-500 font-mono',
           autoComplete: 'off',
           disabled: busy,
         }),
         React.createElement(
           'p',
-          { className: 'text-xs text-gray-500' },
+          { className: 'text-xs text-theme-500' },
           'Saved in this browser only. Open the folder in Google Drive and copy the link from the address bar.',
         ),
       ),
@@ -102,14 +102,14 @@ export const GoogleOAuthGate = ({ onSuccess, onGoogleUserEmail }) => {
           disabled: busy,
           onClick: runContinue,
           className:
-            'w-full px-6 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium transition-colors',
+            'w-full px-6 py-3 rounded-lg bg-theme-500 hover:bg-theme-600 disabled:opacity-50 disabled:cursor-not-allowed text-buttontext font-medium transition-colors',
         },
         busy ? 'Working…' : 'Save folder & continue with Google',
       ),
       error &&
         React.createElement(
           'p',
-          { className: 'text-sm text-red-400 text-center', role: 'alert' },
+          { className: 'text-sm text-red-700 text-center', role: 'alert' },
           error,
         ),
     ),

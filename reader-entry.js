@@ -1,5 +1,6 @@
 import './utils/mapGetOrInsertComputedPolyfill.js';
 import './utils/safariDeferredBlobUrlRevoke.js';
+import './utils/theme.js';
 
 import React, { useEffect, useState, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -104,10 +105,10 @@ function DownloadProgress({ name, loaded, total }) {
 
   return React.createElement(
     'div',
-    { className: 'flex flex-col items-center justify-center h-full gap-6 px-10 bg-gray-900' },
+    { className: 'flex flex-col items-center justify-center h-full gap-6 px-10 bg-theme-100' },
     React.createElement(
       'p',
-      { className: 'text-gray-200 text-sm font-medium text-center max-w-xs leading-snug', style: { wordBreak: 'break-word' } },
+      { className: 'text-theme-900 text-sm font-medium text-center max-w-xs leading-snug', style: { wordBreak: 'break-word' } },
       name || 'Loading…'
     ),
     React.createElement(
@@ -116,23 +117,23 @@ function DownloadProgress({ name, loaded, total }) {
       React.createElement(
         'div',
         { className: 'flex justify-between text-xs' },
-        React.createElement('span', { className: 'text-gray-400' },
+        React.createElement('span', { className: 'text-theme-700' },
           known ? `${fmtBytes(loaded)} / ${fmtBytes(total)}` : (loaded > 0 ? fmtBytes(loaded) : '')
         ),
-        React.createElement('span', { className: 'text-indigo-400 font-semibold tabular-nums' },
+        React.createElement('span', { className: 'text-theme-700 font-semibold tabular-nums' },
           known ? `${pct}%` : ''
         ),
       ),
       React.createElement(
         'div',
-        { className: 'h-1.5 rounded-full bg-gray-700 overflow-hidden' },
+        { className: 'h-1.5 rounded-full bg-gray-200 overflow-hidden' },
         React.createElement('div', {
-          className: known ? 'h-full rounded-full bg-indigo-500' : 'h-full rounded-full bg-indigo-500 animate-pulse',
+          className: known ? 'h-full rounded-full bg-theme-500' : 'h-full rounded-full bg-theme-500 animate-pulse',
           style: { width: known ? `${pct}%` : '40%', transition: 'width 120ms ease-out' },
         }),
       ),
     ),
-    React.createElement('p', { className: 'text-gray-500 text-xs tracking-wide' }, 'Downloading from Google Drive…'),
+    React.createElement('p', { className: 'text-theme-500 text-xs tracking-wide' }, 'Downloading from Google Drive…'),
   );
 }
 
@@ -221,10 +222,10 @@ function EpubReaderApp() {
     return React.createElement(
       'div',
       { className: 'flex flex-col items-center justify-center h-full gap-3 px-6 text-center' },
-      React.createElement('p', { className: 'text-red-400 text-sm max-w-sm' }, error),
+      React.createElement('p', { className: 'text-red-700 text-sm max-w-sm' }, error),
       React.createElement('a', {
         href: '/',
-        className: 'text-indigo-400 text-sm underline',
+        className: 'text-theme-600 text-sm underline',
       }, '← Back to library'),
     );
   }
@@ -236,7 +237,7 @@ function EpubReaderApp() {
   if (!book) {
     return React.createElement(
       'div',
-      { className: 'flex items-center justify-center h-full text-gray-400 text-sm' },
+      { className: 'flex items-center justify-center h-full text-theme-700 text-sm' },
       'Loading…',
     );
   }

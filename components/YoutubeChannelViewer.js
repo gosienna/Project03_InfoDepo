@@ -173,7 +173,7 @@ export const YoutubeChannelViewer = ({
         'button',
         {
           onClick: onBack,
-          className: 'p-2 text-gray-400 hover:text-white transition-colors rounded-full hover:bg-gray-700',
+          className: 'p-2 text-gray-600 hover:text-gray-900 transition-colors rounded-full hover:bg-gray-100',
           'aria-label': 'Back to Library',
         },
         React.createElement(
@@ -186,16 +186,16 @@ export const YoutubeChannelViewer = ({
       channel.thumbnailUrl && React.createElement('img', {
         src: channel.thumbnailUrl,
         alt: channel.name,
-        className: 'h-12 w-12 rounded-full object-cover border-2 border-gray-600',
+        className: 'h-12 w-12 rounded-full object-cover border-2 border-gray-300',
       }),
       // Channel info
       React.createElement(
         'div',
         { className: 'flex-1 min-w-0' },
-        React.createElement('h2', { className: 'text-2xl font-bold text-gray-100 truncate' }, channel.name),
+        React.createElement('h2', { className: 'text-2xl font-bold text-theme-900 truncate' }, channel.name),
         React.createElement(
           'p',
-          { className: 'text-sm text-gray-400' },
+          { className: 'text-sm text-theme-700' },
           channel.handle,
           ' \u00B7 ',
           rawCount,
@@ -212,10 +212,10 @@ export const YoutubeChannelViewer = ({
           {
             className:
               refreshStatus === 'checking'
-                ? 'text-xs text-gray-400 animate-pulse'
+                ? 'text-xs text-gray-500 animate-pulse'
                 : refreshStatus === 'found'
-                ? 'text-xs text-green-400 font-medium'
-                : 'text-xs text-red-400',
+                ? 'text-xs text-green-700 font-medium'
+                : 'text-xs text-red-700',
           },
           REFRESH_STATUS_LABELS[refreshStatus]
         ),
@@ -225,7 +225,7 @@ export const YoutubeChannelViewer = ({
         'button',
         {
           onClick: handleDeleteChannel,
-          className: 'p-2 rounded-xl text-red-500 hover:text-white hover:bg-red-600 transition-colors border border-red-900/50',
+          className: 'p-2 rounded-xl text-red-600 hover:text-white hover:bg-red-600 transition-colors border border-red-200',
           title: 'Remove channel',
         },
         React.createElement(
@@ -248,7 +248,7 @@ export const YoutubeChannelViewer = ({
             'svg',
             {
               xmlns: 'http://www.w3.org/2000/svg',
-              className: 'absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 pointer-events-none',
+              className: 'absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none',
               fill: 'none',
               viewBox: '0 0 24 24',
               stroke: 'currentColor',
@@ -262,7 +262,7 @@ export const YoutubeChannelViewer = ({
             placeholder: 'Search by video title...',
             'aria-label': 'Filter videos by title',
             className:
-              'w-full bg-gray-800 border border-gray-700 rounded-xl pl-10 pr-10 py-2.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-red-600 focus:ring-1 focus:ring-red-600 transition-colors',
+              'w-full bg-theme-50 border border-gray-200 rounded-xl pl-10 pr-10 py-2.5 text-sm text-theme-900 placeholder-theme-500 focus:outline-none focus:border-red-600 focus:ring-1 focus:ring-red-600 transition-colors',
           }),
           titleSearch &&
             React.createElement(
@@ -270,7 +270,7 @@ export const YoutubeChannelViewer = ({
               {
                 type: 'button',
                 onClick: () => setTitleSearch(''),
-                className: 'absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors',
+                className: 'absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 transition-colors',
                 'aria-label': 'Clear search',
               },
               React.createElement(
@@ -283,7 +283,7 @@ export const YoutubeChannelViewer = ({
         React.createElement(
           'div',
           { className: 'flex items-center gap-2 flex-wrap' },
-          React.createElement('span', { className: 'text-sm text-gray-500 font-medium' }, 'Sort by:'),
+          React.createElement('span', { className: 'text-sm text-theme-500 font-medium' }, 'Sort by:'),
           ...SORT_MODES.map(({ key, label }) =>
             React.createElement(
               'button',
@@ -292,7 +292,7 @@ export const YoutubeChannelViewer = ({
                 onClick: () => setSortMode(key),
                 className: sortMode === key
                   ? 'px-3 py-1.5 rounded-lg text-sm font-medium bg-red-700 text-white transition-colors'
-                  : 'px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-800 text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors border border-gray-700',
+                  : 'px-3 py-1.5 rounded-lg text-sm font-medium bg-theme-50 text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors border border-gray-200',
               },
               label
             )
@@ -304,13 +304,13 @@ export const YoutubeChannelViewer = ({
     rawCount === 0
       ? React.createElement(
           'div',
-          { className: 'text-center py-20 text-gray-500' },
+          { className: 'text-center py-20 text-theme-500' },
           'No videos found for this channel (Shorts are excluded).'
         )
       : sortedVideos.length === 0
         ? React.createElement(
             'div',
-            { className: 'text-center py-20 text-gray-500' },
+            { className: 'text-center py-20 text-theme-500' },
             titleSearch.trim()
               ? `No videos matching "${titleSearch.trim()}"`
               : 'No videos found for this channel (Shorts are excluded).'
@@ -336,10 +336,10 @@ export const YoutubeChannelViewer = ({
             totalPages > 1 &&
               React.createElement(
                 'div',
-                { className: 'flex flex-col sm:flex-row items-center justify-center gap-4 mt-10 pt-6 border-t border-gray-800' },
+                { className: 'flex flex-col sm:flex-row items-center justify-center gap-4 mt-10 pt-6 border-t border-gray-200' },
                 React.createElement(
                   'p',
-                  { className: 'text-sm text-gray-400 order-2 sm:order-1' },
+                  { className: 'text-sm text-theme-700 order-2 sm:order-1' },
                   'Showing ',
                   pageIndex * VIDEOS_PER_PAGE + 1,
                   '\u2013',
@@ -359,14 +359,14 @@ export const YoutubeChannelViewer = ({
                       className:
                         'px-4 py-2 rounded-lg text-sm font-medium border transition-colors ' +
                         (pageIndex <= 0
-                          ? 'border-gray-800 text-gray-600 cursor-not-allowed'
-                          : 'border-gray-600 text-gray-200 hover:bg-gray-800'),
+                          ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                          : 'border-gray-300 text-gray-700 hover:bg-theme-100'),
                     },
                     'Previous'
                   ),
                   React.createElement(
                     'span',
-                    { className: 'text-sm text-gray-500 px-2 min-w-[5rem] text-center' },
+                    { className: 'text-sm text-theme-500 px-2 min-w-[5rem] text-center' },
                     'Page ',
                     pageIndex + 1,
                     ' / ',
@@ -381,8 +381,8 @@ export const YoutubeChannelViewer = ({
                       className:
                         'px-4 py-2 rounded-lg text-sm font-medium border transition-colors ' +
                         (pageIndex >= totalPages - 1
-                          ? 'border-gray-800 text-gray-600 cursor-not-allowed'
-                          : 'border-gray-600 text-gray-200 hover:bg-gray-800'),
+                          ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                          : 'border-gray-300 text-gray-700 hover:bg-theme-100'),
                     },
                     'Next'
                   )

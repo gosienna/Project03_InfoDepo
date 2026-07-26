@@ -44,14 +44,14 @@ export const DeleteContentModal = ({
         role: 'dialog',
         'aria-modal': true,
         'aria-labelledby': 'delete-content-modal-title',
-        className: 'bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md flex flex-col border border-gray-700',
+        className: 'bg-theme-50 rounded-2xl shadow-2xl w-full max-w-md flex flex-col border border-gray-200',
       },
       React.createElement(
         'div',
-        { className: 'flex items-center justify-between px-6 py-4 border-b border-gray-700' },
+        { className: 'flex items-center justify-between px-6 py-4 border-b border-gray-200' },
         React.createElement(
           'h2',
-          { id: 'delete-content-modal-title', className: 'text-lg font-bold text-gray-100' },
+          { id: 'delete-content-modal-title', className: 'text-lg font-bold text-theme-900' },
           title || 'Remove from library'
         ),
         React.createElement(
@@ -60,7 +60,7 @@ export const DeleteContentModal = ({
             type: 'button',
             onClick: () => { if (!busy) onClose(); },
             disabled: busy,
-            className: 'text-gray-400 hover:text-gray-200 p-1 rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-50',
+            className: 'text-gray-500 hover:text-gray-700 p-1 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-50',
             title: 'Close',
           },
           React.createElement(
@@ -75,8 +75,8 @@ export const DeleteContentModal = ({
         { className: 'px-6 py-4 flex flex-col gap-4' },
         React.createElement(
           'p',
-          { className: 'text-sm text-gray-300' },
-          React.createElement('span', { className: 'font-medium text-gray-100' }, name || 'This item'),
+          { className: 'text-sm text-theme-700' },
+          React.createElement('span', { className: 'font-medium text-theme-900' }, name || 'This item'),
           hasDriveCopy
             ? ' is stored on this device. It also has a copy on Google Drive from backup or sync.'
             : ' will be removed from this device only.'
@@ -85,13 +85,13 @@ export const DeleteContentModal = ({
           !canDeleteFromDrive &&
           React.createElement(
             'p',
-            { className: 'text-xs text-amber-400/90' },
+            { className: 'text-xs text-amber-700' },
             'Google Drive sign-in is not available, so only local removal is possible. The file on Drive will stay until you delete it in Drive.'
           ),
         error &&
           React.createElement(
             'p',
-            { className: 'text-sm text-red-400' },
+            { className: 'text-sm text-red-700' },
             error
           ),
         React.createElement(
@@ -116,7 +116,7 @@ export const DeleteContentModal = ({
               disabled: busy,
               onClick: () => run(onRemoveLocal),
               className: showDrive
-                ? 'w-full py-2.5 px-4 rounded-xl text-sm font-medium bg-gray-700 hover:bg-gray-600 text-gray-100 transition-colors disabled:opacity-50'
+                ? 'w-full py-2.5 px-4 rounded-xl text-sm font-medium bg-gray-200 hover:bg-gray-300 text-gray-900 transition-colors disabled:opacity-50'
                 : 'w-full py-2.5 px-4 rounded-xl text-sm font-medium bg-red-700 hover:bg-red-600 text-white transition-colors disabled:opacity-50',
             },
             busy && !showDrive
@@ -133,7 +133,7 @@ export const DeleteContentModal = ({
               type: 'button',
               disabled: busy,
               onClick: onClose,
-              className: 'w-full py-2 px-4 rounded-xl text-sm text-gray-400 hover:text-gray-200 transition-colors disabled:opacity-50',
+              className: 'w-full py-2 px-4 rounded-xl text-sm text-gray-500 hover:text-gray-800 transition-colors disabled:opacity-50',
             },
             'Cancel'
           )

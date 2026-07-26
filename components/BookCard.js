@@ -10,7 +10,7 @@ const UploadButton = ({ status, onClick }) => {
   if (status === 'uploading') {
     return React.createElement(
       "div",
-      { className: "p-2 rounded-full bg-indigo-600/50 text-white", title: "Uploading..." },
+      { className: "p-2 rounded-full bg-theme-600/50 text-white", title: "Uploading..." },
       React.createElement("div", { className: "h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" })
     );
   }
@@ -38,7 +38,7 @@ const UploadButton = ({ status, onClick }) => {
   }
   return React.createElement(
     "button",
-    { onClick, title: "Upload to Google Drive", className: "p-2 rounded-full bg-indigo-600/50 text-white opacity-0 group-hover:opacity-100 hover:bg-indigo-600 transition-all duration-300" },
+    { onClick, title: "Upload to Google Drive", className: "p-2 rounded-full bg-theme-600/50 text-white opacity-0 group-hover:opacity-100 hover:bg-theme-600 transition-all duration-300" },
     React.createElement(UploadIcon, { className: "h-4 w-4" })
   );
 };
@@ -63,28 +63,28 @@ export const BookCard = ({ book, onSelect, onDelete, onUpload, uploadStatus }) =
     "div",
     {
       className: isCloudOnly
-        ? "bg-gray-800/40 rounded-lg shadow-lg overflow-hidden cursor-pointer group transition-all duration-300 transform hover:-translate-y-1 border-2 border-dashed border-gray-600"
-        : "bg-gray-800 rounded-lg shadow-lg overflow-hidden cursor-pointer group transition-all duration-300 transform hover:-translate-y-1 hover:shadow-indigo-500/30",
+        ? "bg-theme-100 rounded-lg shadow-lg overflow-hidden cursor-pointer group transition-all duration-300 transform hover:-translate-y-1 border-2 border-dashed border-gray-300"
+        : "bg-theme-50 rounded-lg shadow-lg overflow-hidden cursor-pointer group transition-all duration-300 transform hover:-translate-y-1 hover:shadow-theme-500/30",
       onClick: () => onSelect(book)
     },
     React.createElement(
       "div",
-      { className: "relative p-4 bg-gray-700 h-40 flex items-center justify-center" },
+      { className: "relative p-4 bg-gray-100 h-40 flex items-center justify-center" },
       React.createElement(BookIcon, {
         className: isCloudOnly
-          ? "h-20 w-20 text-gray-600"
-          : "h-20 w-20 text-gray-500 group-hover:text-indigo-400 transition-colors duration-300"
+          ? "h-20 w-20 text-gray-400"
+          : "h-20 w-20 text-gray-400 group-hover:text-theme-600 transition-colors duration-300"
       }),
       // File type badge (top-right)
       React.createElement(
         "span",
-        { className: "absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded" },
+        { className: "absolute top-2 right-2 bg-theme-600 text-white text-xs font-bold px-2 py-1 rounded" },
         fileExtension.toUpperCase()
       ),
       // Cloud-only badge (top-left)
       isCloudOnly && React.createElement(
         "span",
-        { className: "absolute top-2 left-2 flex items-center gap-1 bg-blue-900/80 text-blue-200 text-xs font-bold px-2 py-1 rounded border border-blue-700/50" },
+        { className: "absolute top-2 left-2 flex items-center gap-1 bg-blue-100 text-blue-700 text-xs font-bold px-2 py-1 rounded border border-blue-200" },
         "☁ Cloud"
       ),
       // Bottom action row
@@ -108,17 +108,17 @@ export const BookCard = ({ book, onSelect, onDelete, onUpload, uploadStatus }) =
       { className: "p-4" },
       React.createElement(
         "h3",
-        { className: "font-bold text-md text-gray-100 truncate", title: book.name },
+        { className: "font-bold text-md text-theme-900 truncate", title: book.name },
         book.name
       ),
       React.createElement(
         "p",
-        { className: "text-sm text-gray-400" },
+        { className: "text-sm text-theme-700" },
         formatBytes(book.size)
       ),
       isCloudOnly && React.createElement(
         "p",
-        { className: "text-xs text-blue-400 mt-1" },
+        { className: "text-xs text-blue-700 mt-1" },
         "Click to download & read"
       )
     )

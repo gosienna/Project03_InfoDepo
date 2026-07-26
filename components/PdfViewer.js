@@ -1894,7 +1894,7 @@ export const PdfViewer = ({
 
   return React.createElement(
     'div',
-    { className: 'relative w-full flex-1 min-h-0 bg-gray-800 rounded-lg shadow-lg flex flex-col' },
+    { className: 'relative w-full flex-1 min-h-0 bg-theme-100 rounded-lg shadow-lg flex flex-col' },
 
     // Top tab for display controls — visible pill that hangs from the top edge
     React.createElement('div', {
@@ -2091,19 +2091,19 @@ export const PdfViewer = ({
     // PDF scroll area
     status === 'loading' && React.createElement(
       'div',
-      { className: 'absolute inset-0 z-10 flex items-center justify-center bg-gray-800/80 rounded-lg pointer-events-none' },
-      React.createElement('p', { className: 'text-gray-200' }, 'Loading PDF…')
+      { className: 'absolute inset-0 z-10 flex items-center justify-center bg-theme-100/80 rounded-lg pointer-events-none' },
+      React.createElement('p', { className: 'text-theme-900' }, 'Loading PDF…')
     ),
     status === 'error' && React.createElement(
       'div',
       { className: 'flex flex-1 items-center justify-center p-4 min-h-[120px]' },
-      React.createElement('p', { className: 'text-red-300 text-center' }, errorText)
+      React.createElement('p', { className: 'text-red-700 text-center' }, errorText)
     ),
     React.createElement('div', {
       ref: containerRef,
       tabIndex: -1,
       title: 'Mouse wheel: zoom only (no scroll). Middle-click drag or WASD: pan.',
-      className: 'flex-1 min-h-0 overflow-auto rounded-lg bg-gray-900 outline-none ' + (status === 'error' ? 'hidden' : ''),
+      className: 'flex-1 min-h-0 overflow-auto rounded-lg bg-theme-100 outline-none ' + (status === 'error' ? 'hidden' : ''),
       style: {
         cursor: tool === 'none' ? 'default' : undefined,
         overscrollBehavior: 'none',

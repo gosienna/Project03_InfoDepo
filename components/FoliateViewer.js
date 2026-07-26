@@ -400,14 +400,14 @@ export const FoliateViewer = ({ data, name, type, itemDriveId, itemId, initialRe
 
   return React.createElement(
     'div',
-    { className: 'relative flex flex-col flex-1 min-h-0 w-full bg-gray-900' },
+    { className: 'relative flex flex-col flex-1 min-h-0 w-full bg-theme-100' },
 
     (isLoading || error) && React.createElement(
       'div',
-      { className: 'absolute inset-0 flex items-center justify-center bg-gray-900 z-[80]' },
+      { className: 'absolute inset-0 flex items-center justify-center bg-theme-100 z-[80]' },
       error
-        ? React.createElement('p', { className: 'text-red-400 text-sm text-center max-w-sm px-4' }, error)
-        : React.createElement('p', { className: 'text-gray-400 text-sm' }, 'Loading book…')
+        ? React.createElement('p', { className: 'text-red-700 text-sm text-center max-w-sm px-4' }, error)
+        : React.createElement('p', { className: 'text-theme-700 text-sm' }, 'Loading book…')
     ),
 
     React.createElement(
@@ -449,15 +449,15 @@ export const FoliateViewer = ({ data, name, type, itemDriveId, itemId, initialRe
     React.createElement(
       'div',
       {
-        className: 'flex shrink-0 flex-wrap justify-center items-center gap-3 sm:gap-4 bg-gray-800 px-3 py-3 sm:py-2.5 border-t border-gray-700/80',
+        className: 'flex shrink-0 flex-wrap justify-center items-center gap-3 sm:gap-4 bg-theme-50 px-3 py-3 sm:py-2.5 border-t border-gray-200',
         style: { paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' },
       },
       !isFixedLayout && !isLoading && !error && React.createElement(
         'label',
-        { className: 'flex min-h-[44px] items-center gap-2 text-gray-300 text-xs sm:text-sm shrink-0' },
+        { className: 'flex min-h-[44px] items-center gap-2 text-gray-700 text-xs sm:text-sm shrink-0' },
         'Spread',
         React.createElement('select', {
-          className: 'max-w-[10.5rem] sm:max-w-[14rem] rounded-md border border-gray-600 bg-gray-900 px-2 py-2 text-sm text-white',
+          className: 'max-w-[10.5rem] sm:max-w-[14rem] rounded-md border border-gray-300 bg-theme-50 px-2 py-2 text-sm text-theme-900',
           value: spreadLayout,
           title: flowMode === 'scrolled' ? 'Switch to paginated mode to use spread layout.' : undefined,
           disabled: flowMode === 'scrolled',
@@ -471,12 +471,12 @@ export const FoliateViewer = ({ data, name, type, itemDriveId, itemId, initialRe
       (flowMode === 'paginated') && React.createElement('button', {
         type: 'button',
         onClick: prevPage,
-        className: 'min-h-[44px] min-w-[44px] px-4 py-2.5 sm:py-2 bg-indigo-600 text-white text-sm sm:text-base rounded-lg hover:bg-indigo-700 transition-colors touch-manipulation',
+        className: 'min-h-[44px] min-w-[44px] px-4 py-2.5 sm:py-2 bg-theme-500 text-buttontext text-sm sm:text-base rounded-lg hover:bg-theme-600 transition-colors touch-manipulation',
       }, 'Previous'),
       (flowMode === 'paginated') && React.createElement('button', {
         type: 'button',
         onClick: nextPage,
-        className: 'min-h-[44px] min-w-[44px] px-4 py-2.5 sm:py-2 bg-indigo-600 text-white text-sm sm:text-base rounded-lg hover:bg-indigo-700 transition-colors touch-manipulation',
+        className: 'min-h-[44px] min-w-[44px] px-4 py-2.5 sm:py-2 bg-theme-500 text-buttontext text-sm sm:text-base rounded-lg hover:bg-theme-600 transition-colors touch-manipulation',
       }, 'Next'),
       !isFixedLayout && React.createElement('button', {
         type: 'button',

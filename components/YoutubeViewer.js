@@ -182,8 +182,8 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
       { className: 'flex items-center justify-center w-full h-full' },
       React.createElement(
         'div',
-        { className: 'bg-gray-800 rounded-xl p-6 text-center max-w-sm' },
-        React.createElement('p', { className: 'text-red-400 font-medium' }, error)
+        { className: 'bg-theme-50 rounded-xl p-6 text-center max-w-sm' },
+        React.createElement('p', { className: 'text-red-700 font-medium' }, error)
       )
     );
   }
@@ -198,7 +198,7 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
         {
           onClick: () => onSelectChannel(cachedChannel),
           title: `Go to channel: ${cachedChannel.name || channelTitle}`,
-          className: 'flex items-center gap-1.5 bg-gray-800/90 hover:bg-gray-700 text-gray-200 text-sm font-medium px-3 py-1.5 rounded-lg transition-colors border border-gray-700',
+          className: 'flex items-center gap-1.5 bg-theme-50/90 hover:bg-gray-100 text-gray-700 text-sm font-medium px-3 py-1.5 rounded-lg transition-colors border border-gray-200',
         },
         React.createElement(
           'svg',
@@ -213,7 +213,7 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
       if (addChState === 'loading') {
         return React.createElement(
           'div',
-          { className: 'flex items-center gap-2 bg-gray-800/90 text-gray-300 text-sm px-3 py-1.5 rounded-lg border border-gray-700' },
+          { className: 'flex items-center gap-2 bg-theme-50/90 text-gray-700 text-sm px-3 py-1.5 rounded-lg border border-gray-200' },
           React.createElement('div', { className: 'h-3.5 w-3.5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin' }),
           React.createElement('span', { className: 'max-w-[180px] truncate' }, addChProgress || 'Adding…')
         );
@@ -234,7 +234,7 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
         {
           onClick: handleAddChannel,
           title: `Add "${channelTitle}" to your library`,
-          className: 'flex items-center gap-1.5 bg-gray-800/90 hover:bg-gray-700 text-gray-200 text-sm font-medium px-3 py-1.5 rounded-lg transition-colors border border-gray-700',
+          className: 'flex items-center gap-1.5 bg-theme-50/90 hover:bg-gray-100 text-gray-700 text-sm font-medium px-3 py-1.5 rounded-lg transition-colors border border-gray-200',
         },
         React.createElement(
           'svg',
@@ -250,7 +250,7 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
 
   return React.createElement(
     'div',
-    { className: 'relative w-full h-full flex flex-col items-center bg-gray-900 p-6 overflow-y-auto' },
+    { className: 'relative w-full h-full flex flex-col items-center bg-theme-100 p-6 overflow-y-auto' },
 
     // Channel button — upper left corner
     channelButton && React.createElement(
@@ -262,7 +262,7 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
     // Title
     React.createElement(
       'h1',
-      { className: 'text-xl font-bold text-gray-100 mb-4 text-center max-w-2xl w-full' },
+      { className: 'text-xl font-bold text-theme-900 mb-4 text-center max-w-2xl w-full' },
       title
     ),
 
@@ -312,7 +312,7 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
             // Recommendations: loading state
             recsState === 'loading' && React.createElement(
               'div',
-              { className: 'mt-8 text-center text-gray-400 text-sm' },
+              { className: 'mt-8 text-center text-theme-700 text-sm' },
               'Loading recommendations…'
             ),
 
@@ -330,12 +330,12 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
                   { className: 'flex items-center justify-between mb-3' },
                   React.createElement(
                     'h2',
-                    { className: 'text-sm font-semibold text-gray-400 uppercase tracking-wider' },
+                    { className: 'text-sm font-semibold text-gray-500 uppercase tracking-wider' },
                     `From this channel${channelTitle ? ': ' + channelTitle : ''}`
                   ),
                   totalPages > 1 && React.createElement(
                     'span',
-                    { className: 'text-xs text-gray-500' },
+                    { className: 'text-xs text-theme-500' },
                     `Page ${recsPage + 1} of ${totalPages}`
                   )
                 ),
@@ -365,7 +365,7 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
                     {
                       onClick: () => setRecsPage(p => p - 1),
                       disabled: recsPage === 0,
-                      className: 'px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 text-sm font-medium hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors',
+                      className: 'px-3 py-1.5 rounded-lg bg-gray-200 text-gray-700 text-sm font-medium hover:bg-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors',
                     },
                     '← Prev'
                   ),
@@ -380,7 +380,7 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
                           onClick: () => setRecsPage(i),
                           className: i === recsPage
                             ? 'px-3 py-1.5 rounded-lg bg-red-600 text-white text-sm font-bold'
-                            : 'px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 text-sm font-medium hover:bg-gray-600 transition-colors',
+                            : 'px-3 py-1.5 rounded-lg bg-gray-200 text-gray-700 text-sm font-medium hover:bg-gray-300 transition-colors',
                         },
                         i + 1
                       )
@@ -390,7 +390,7 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
                     {
                       onClick: () => setRecsPage(p => p + 1),
                       disabled: recsPage === totalPages - 1,
-                      className: 'px-3 py-1.5 rounded-lg bg-gray-700 text-gray-200 text-sm font-medium hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors',
+                      className: 'px-3 py-1.5 rounded-lg bg-gray-200 text-gray-700 text-sm font-medium hover:bg-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors',
                     },
                     'Next →'
                   )
@@ -402,13 +402,13 @@ export const YoutubeViewer = ({ video, onSelectChannel, onAddChannel }) => {
         // Channel / unrecognised URL — link fallback
         : React.createElement(
             'div',
-            { className: 'flex flex-col items-center justify-center gap-6 py-12 bg-gray-800 rounded-2xl border border-gray-700' },
+            { className: 'flex flex-col items-center justify-center gap-6 py-12 bg-theme-50 rounded-2xl border border-gray-200' },
             React.createElement(
               'svg',
-              { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-red-500/70', fill: 'currentColor', viewBox: '0 0 24 24' },
+              { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-red-600/70', fill: 'currentColor', viewBox: '0 0 24 24' },
               React.createElement('path', { d: 'M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z' })
             ),
-            React.createElement('p', { className: 'text-gray-400 text-sm' }, 'Channel or playlist link — opens in YouTube'),
+            React.createElement('p', { className: 'text-gray-600 text-sm' }, 'Channel or playlist link — opens in YouTube'),
             React.createElement(
               'a',
               {

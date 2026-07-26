@@ -271,8 +271,8 @@ export const ImageEditor = ({
         title: label,
         className: `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
           tool === id
-            ? 'bg-indigo-600 text-white'
-            : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+            ? 'bg-theme-600 text-buttontext'
+            : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
         }`,
       },
       icon,
@@ -291,7 +291,7 @@ export const ImageEditor = ({
     React.createElement(
       'div',
       {
-        className: 'flex flex-col bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden',
+        className: 'flex flex-col bg-theme-50 rounded-2xl shadow-2xl border border-gray-200 overflow-hidden',
         style: { maxWidth: '92vw', maxHeight: 'calc(100vh - 6rem)', width: 'max-content' },
         onMouseDown: (e) => e.stopPropagation(),
       },
@@ -299,24 +299,24 @@ export const ImageEditor = ({
       // ── Header / Toolbar ────────────────────────────────────────
       React.createElement(
         'div',
-        { className: 'flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-700 bg-gray-800 shrink-0' },
+        { className: 'flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-200 bg-theme-50 shrink-0' },
 
         // Title
         React.createElement(
           'span',
-          { className: 'text-sm font-semibold text-gray-200 mr-2 max-w-40 truncate', title: filename },
+          { className: 'text-sm font-semibold text-gray-900 mr-2 max-w-40 truncate', title: filename },
           filename
         ),
 
         // Divider
-        React.createElement('div', { className: 'w-px h-5 bg-gray-600' }),
+        React.createElement('div', { className: 'w-px h-5 bg-gray-300' }),
 
         // Tool toggles
         toolBtn('pen',  'Pen',  React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', className: 'h-3.5 w-3.5', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' }, React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z' }))),
         toolBtn('text', 'Text', React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', className: 'h-3.5 w-3.5', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' }, React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M4 6h16M4 12h8m-8 6h16' }))),
 
         // Divider
-        React.createElement('div', { className: 'w-px h-5 bg-gray-600' }),
+        React.createElement('div', { className: 'w-px h-5 bg-gray-300' }),
 
         // Color swatches
         ...COLOR_SWATCHES.map(c =>
@@ -326,7 +326,7 @@ export const ImageEditor = ({
               key: c,
               onClick: () => setColor(c),
               title: c,
-              style: { background: c, width: 20, height: 20, borderRadius: '50%', border: color === c ? '2px solid white' : '2px solid transparent', outline: color === c ? '2px solid #6366f1' : 'none', flexShrink: 0 },
+              style: { background: c, width: 20, height: 20, borderRadius: '50%', border: color === c ? '2px solid white' : '2px solid transparent', outline: color === c ? '2px solid rgb(var(--theme-500))' : 'none', flexShrink: 0 },
             }
           )
         ),
@@ -335,7 +335,7 @@ export const ImageEditor = ({
           'label',
           {
             title: 'Custom color',
-            className: 'flex items-center justify-center w-5 h-5 rounded-full bg-gray-700 hover:bg-gray-600 cursor-pointer overflow-hidden border-2',
+            className: 'flex items-center justify-center w-5 h-5 rounded-full bg-gray-200 hover:bg-gray-300 cursor-pointer overflow-hidden border-2',
             style: { borderColor: '#6b7280' },
           },
           React.createElement('input', {
@@ -344,33 +344,33 @@ export const ImageEditor = ({
             onChange: (e) => setColor(e.target.value),
             className: 'opacity-0 w-0 h-0 absolute',
           }),
-          React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', className: 'h-3 w-3 text-gray-300', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' }, React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M12 4v16m8-8H4' }))
+          React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', className: 'h-3 w-3 text-gray-700', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' }, React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M12 4v16m8-8H4' }))
         ),
 
         // Divider
-        React.createElement('div', { className: 'w-px h-5 bg-gray-600' }),
+        React.createElement('div', { className: 'w-px h-5 bg-gray-300' }),
 
         // Line width (pen) or font size (text)
         tool === 'pen'
           ? React.createElement(
               'label',
-              { className: 'flex items-center gap-1.5 text-xs text-gray-300' },
+              { className: 'flex items-center gap-1.5 text-xs text-gray-700' },
               'Width',
               React.createElement('input', {
                 type: 'range', min: 1, max: 16, value: lineWidth,
                 onChange: (e) => setLineWidth(Number(e.target.value)),
-                className: 'w-20 accent-indigo-500',
+                className: 'w-20 accent-theme-500',
               }),
               React.createElement('span', { className: 'w-5 text-center font-mono' }, lineWidth)
             )
           : React.createElement(
               'label',
-              { className: 'flex items-center gap-1.5 text-xs text-gray-300' },
+              { className: 'flex items-center gap-1.5 text-xs text-gray-700' },
               'Size',
               React.createElement('input', {
                 type: 'range', min: 10, max: 72, value: fontSize,
                 onChange: (e) => setFontSize(Number(e.target.value)),
-                className: 'w-20 accent-indigo-500',
+                className: 'w-20 accent-theme-500',
               }),
               React.createElement('span', { className: 'w-6 text-center font-mono' }, fontSize)
             ),
@@ -380,7 +380,7 @@ export const ImageEditor = ({
 
         React.createElement(
           'span',
-          { className: 'text-xs text-gray-400 font-mono mr-1', title: 'Mouse wheel to zoom' },
+          { className: 'text-xs text-gray-600 font-mono mr-1', title: 'Mouse wheel to zoom' },
           `${Math.round(zoom * 100)}%`
         ),
 
@@ -391,7 +391,7 @@ export const ImageEditor = ({
             onClick: handleUndo,
             disabled: undoStack.length <= 1,
             title: 'Undo (⌘Z)',
-            className: 'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-sm text-gray-200 bg-gray-700 hover:bg-gray-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+            className: 'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-sm text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
           },
           React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', className: 'h-3.5 w-3.5', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' }, React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6' })),
           'Undo'
@@ -403,7 +403,7 @@ export const ImageEditor = ({
           {
             onClick: handleClear,
             title: 'Clear all annotations',
-            className: 'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-sm text-gray-200 bg-gray-700 hover:bg-gray-600 transition-colors',
+            className: 'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-sm text-gray-700 bg-gray-200 hover:bg-gray-300 transition-colors',
           },
           React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', className: 'h-3.5 w-3.5', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' }, React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16' })),
           'Clear'
@@ -430,7 +430,7 @@ export const ImageEditor = ({
           {
             onClick: onClose,
             title: 'Cancel (Esc)',
-            className: 'flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:bg-gray-700 hover:text-gray-200 transition-colors',
+            className: 'flex items-center justify-center w-8 h-8 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors',
           },
           React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' }, React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M6 18L18 6M6 6l12 12' }))
         ),
@@ -454,7 +454,7 @@ export const ImageEditor = ({
         !loaded && React.createElement(
           'div',
           { className: 'flex items-center justify-center h-48 text-gray-500 text-sm' },
-          React.createElement('div', { className: 'h-6 w-6 border-2 border-gray-500 border-t-indigo-400 rounded-full animate-spin mr-2' }),
+          React.createElement('div', { className: 'h-6 w-6 border-2 border-gray-500 border-t-theme-400 rounded-full animate-spin mr-2' }),
           'Loading image…'
         ),
 
@@ -535,7 +535,7 @@ export const ImageEditor = ({
                 width: 14,
                 height: 14,
                 borderRadius: '50%',
-                background: '#6366f1',
+                background: 'rgb(var(--theme-500))',
                 border: '2px solid white',
                 cursor: 'grab',
                 transform: 'translateY(-50%)',
@@ -582,7 +582,7 @@ export const ImageEditor = ({
       // ── Hint bar ─────────────────────────────────────────────────
       React.createElement(
         'div',
-        { className: 'px-4 py-1.5 text-xs text-gray-600 border-t border-gray-800 shrink-0 bg-gray-900' },
+        { className: 'px-4 py-1.5 text-xs text-gray-600 border-t border-gray-200 shrink-0 bg-theme-50' },
         tool === 'pen'
           ? 'Click and drag to draw. Mouse wheel to zoom. Middle-click drag to pan. ⌘Z to undo.'
           : 'Click to place text, drag dot to tilt, Shift+Enter for new line, Enter to stamp. Mouse wheel to zoom. Middle-click drag to pan. ⌘Z to undo.'

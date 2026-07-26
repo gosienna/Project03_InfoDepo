@@ -41,16 +41,16 @@ export const GoogleLoginGate = ({ onSuccess }) => {
 
   return React.createElement(
     'div',
-    { className: 'flex flex-col items-center justify-center min-h-screen bg-gray-900 text-gray-100 font-sans px-6' },
+    { className: 'flex flex-col items-center justify-center min-h-screen bg-theme-100 text-theme-900 font-sans px-6' },
     React.createElement(
       'div',
       { className: 'max-w-sm w-full flex flex-col items-stretch gap-6' },
       React.createElement(
         'div',
         { className: 'text-center flex flex-col items-center gap-3' },
-        React.createElement(BookIcon, { className: 'h-12 w-12 text-indigo-400' }),
-        React.createElement('h1', { className: 'text-2xl font-semibold text-white' }, 'Personal Information Depository'),
-        React.createElement('p', { className: 'text-gray-400 text-sm' }, 'Sign in with your Google account to continue.')
+        React.createElement(BookIcon, { className: 'h-12 w-12 text-theme-600' }),
+        React.createElement('h1', { className: 'text-2xl font-semibold text-theme-900' }, 'Personal Information Depository'),
+        React.createElement('p', { className: 'text-theme-700 text-sm' }, 'Sign in with your Google account to continue.')
       ),
       React.createElement(
         'button',
@@ -58,7 +58,7 @@ export const GoogleLoginGate = ({ onSuccess }) => {
           type: 'button',
           disabled: busy,
           onClick: runSignIn,
-          className: 'w-full flex items-center justify-center gap-3 px-6 py-3 rounded-lg bg-white hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed text-gray-800 font-medium transition-colors',
+          className: 'w-full flex items-center justify-center gap-3 px-6 py-3 rounded-lg bg-white hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed text-gray-800 font-medium transition-colors border border-gray-300',
         },
         !busy && React.createElement(
           'svg',
@@ -70,7 +70,7 @@ export const GoogleLoginGate = ({ onSuccess }) => {
         ),
         busy ? 'Signing in…' : 'Sign in with Google'
       ),
-      error && React.createElement('p', { className: 'text-sm text-red-400 text-center', role: 'alert' }, error)
+      error && React.createElement('p', { className: 'text-sm text-red-700 text-center', role: 'alert' }, error)
     )
   );
 };

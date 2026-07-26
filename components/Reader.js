@@ -112,7 +112,7 @@ export const Reader = ({
         if (!pdfAnnotationsReady) {
           return React.createElement(
             'div',
-            { className: 'flex flex-1 items-center justify-center p-8 text-gray-400' },
+            { className: 'flex flex-1 items-center justify-center p-8 text-theme-700' },
             'Loading annotations…'
           );
         }

@@ -50,27 +50,27 @@ export const NewUrlModal = ({ onSave, onClose }) => {
     },
     React.createElement(
       'div',
-      { className: 'bg-gray-800 rounded-2xl shadow-2xl w-full max-w-md flex flex-col border border-gray-700' },
+      { className: 'bg-theme-50 rounded-2xl shadow-2xl w-full max-w-md flex flex-col border border-gray-200' },
 
       // Header
       React.createElement(
         'div',
-        { className: 'flex items-center justify-between px-6 py-4 border-b border-gray-700' },
+        { className: 'flex items-center justify-between px-6 py-4 border-b border-gray-200' },
         React.createElement(
           'div',
           { className: 'flex items-center gap-2' },
           React.createElement(
             'svg',
-            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-5 w-5 text-cyan-400', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-5 w-5 text-cyan-600', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
             React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' })
           ),
-          React.createElement('h2', { className: 'text-lg font-bold text-gray-100' }, 'Add URL')
+          React.createElement('h2', { className: 'text-lg font-bold text-theme-900' }, 'Add URL')
         ),
         React.createElement(
           'button',
           {
             onClick: onClose,
-            className: 'text-gray-400 hover:text-gray-200 p-1 rounded-lg hover:bg-gray-700 transition-colors',
+            className: 'text-gray-500 hover:text-gray-700 p-1 rounded-lg hover:bg-gray-100 transition-colors',
           },
           React.createElement(
             'svg',
@@ -87,7 +87,7 @@ export const NewUrlModal = ({ onSave, onClose }) => {
         React.createElement(
           'div',
           { className: 'flex flex-col gap-1' },
-          React.createElement('label', { className: 'text-sm font-medium text-gray-400', htmlFor: 'url-input' }, 'URL'),
+          React.createElement('label', { className: 'text-sm font-medium text-theme-700', htmlFor: 'url-input' }, 'URL'),
           React.createElement('input', {
             id: 'url-input',
             ref: urlRef,
@@ -95,21 +95,21 @@ export const NewUrlModal = ({ onSave, onClose }) => {
             value: url,
             onChange: (e) => { setUrl(e.target.value); setError(null); },
             placeholder: 'https://example.com',
-            className: 'bg-gray-700 border border-gray-600 text-gray-100 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-cyan-500 placeholder-gray-500',
+            className: 'bg-theme-50 border border-gray-300 text-theme-900 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-cyan-500 placeholder-theme-500',
           }),
-          error && React.createElement('p', { className: 'text-xs text-red-400 mt-1' }, error)
+          error && React.createElement('p', { className: 'text-xs text-red-700 mt-1' }, error)
         ),
         React.createElement(
           'div',
           { className: 'flex flex-col gap-1' },
-          React.createElement('label', { className: 'text-sm font-medium text-gray-400', htmlFor: 'url-title' }, 'Title (optional)'),
+          React.createElement('label', { className: 'text-sm font-medium text-theme-700', htmlFor: 'url-title' }, 'Title (optional)'),
           React.createElement('input', {
             id: 'url-title',
             type: 'text',
             value: title,
             onChange: (e) => setTitle(e.target.value),
             placeholder: 'My bookmark',
-            className: 'bg-gray-700 border border-gray-600 text-gray-100 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-cyan-500 placeholder-gray-500',
+            className: 'bg-theme-50 border border-gray-300 text-theme-900 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-cyan-500 placeholder-theme-500',
           })
         )
       ),
@@ -117,12 +117,12 @@ export const NewUrlModal = ({ onSave, onClose }) => {
       // Footer
       React.createElement(
         'div',
-        { className: 'flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-700' },
+        { className: 'flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200' },
         React.createElement(
           'button',
           {
             onClick: onClose,
-            className: 'px-5 py-2 rounded-xl text-sm font-medium text-gray-300 hover:text-gray-100 hover:bg-gray-700 transition-colors',
+            className: 'px-5 py-2 rounded-xl text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-100 transition-colors',
           },
           'Cancel'
         ),

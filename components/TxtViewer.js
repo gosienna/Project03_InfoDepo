@@ -58,7 +58,7 @@ export const TxtViewer = ({ data, itemId, initialReadingPosition, onSaveReadingP
 
   return React.createElement(
     "div",
-    { ref: containerRef, className: "w-full h-full bg-gray-800 p-6 rounded-lg shadow-lg overflow-y-auto" },
+    { ref: containerRef, className: "w-full h-full bg-theme-50 p-6 rounded-lg shadow-lg overflow-y-auto" },
     isLoading ? (
       React.createElement(
         "div",
@@ -68,7 +68,7 @@ export const TxtViewer = ({ data, itemId, initialReadingPosition, onSaveReadingP
     ) : (
       React.createElement(
         "pre",
-        { className: "whitespace-pre-wrap text-gray-200 font-serif text-lg leading-relaxed" },
+        { className: "whitespace-pre-wrap text-theme-900 font-serif text-lg leading-relaxed" },
         text
       )
     )

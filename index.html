@@ -6,7 +6,30 @@
     
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>InfoDepo</title>
+    <style>
+      :root {
+        --theme-50: 238 242 255; --theme-100: 224 231 255; --theme-200: 199 210 254; --theme-300: 165 180 252;
+        --theme-400: 129 140 248; --theme-500: 99 102 241; --theme-600: 79 70 229;
+        --theme-700: 67 56 202; --theme-900: 49 46 129; --theme-950: 30 27 75; --theme-button-text: 238 242 255;
+      }
+    </style>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: { extend: { colors: { theme: {
+          50: 'rgb(var(--theme-50) / <alpha-value>)',
+          100: 'rgb(var(--theme-100) / <alpha-value>)',
+          200: 'rgb(var(--theme-200) / <alpha-value>)',
+          300: 'rgb(var(--theme-300) / <alpha-value>)',
+          400: 'rgb(var(--theme-400) / <alpha-value>)',
+          500: 'rgb(var(--theme-500) / <alpha-value>)',
+          600: 'rgb(var(--theme-600) / <alpha-value>)',
+          700: 'rgb(var(--theme-700) / <alpha-value>)',
+          900: 'rgb(var(--theme-900) / <alpha-value>)',
+          950: 'rgb(var(--theme-950) / <alpha-value>)',
+        }, buttontext: 'rgb(var(--theme-button-text) / <alpha-value>)' } } }
+      };
+    </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous" />
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
@@ -24,7 +47,7 @@
 }
 </script>
 </head>
-  <body class="bg-gray-900 text-gray-100">
+  <body class="bg-theme-100 text-theme-900">
     <div id="root"></div>
     <script type="module" src="./index.js"></script>
   </body>

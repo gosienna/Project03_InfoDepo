@@ -40,13 +40,13 @@ function formatViewCount(n) {
 /** Shared by `item` and `channel` tiles so width/height track the same layout (grid column + `h-40` hero). */
 
 const DATA_TILE_SHELL =
-  'bg-gray-800 rounded-lg shadow-lg overflow-hidden cursor-pointer w-full group transition-all duration-300 transform hover:-translate-y-1 hover:shadow-indigo-500/30';
+  'bg-theme-50 rounded-lg shadow-lg overflow-hidden cursor-pointer w-full group transition-all duration-300 transform hover:-translate-y-1 hover:shadow-theme-500/30';
 
 const UploadButton = ({ status, onClick }) => {
   if (status === 'uploading') {
     return React.createElement(
       'div',
-      { className: 'p-2 rounded-full bg-indigo-600/50 text-white', title: 'Uploading...' },
+      { className: 'p-2 rounded-full bg-theme-600/50 text-white', title: 'Uploading...' },
       React.createElement('div', { className: 'h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin' })
     );
   }
@@ -81,7 +81,7 @@ const UploadButton = ({ status, onClick }) => {
     {
       onClick,
       title: 'Upload to Google Drive',
-      className: 'p-2 rounded-full bg-indigo-600/50 text-white opacity-0 group-hover:opacity-100 hover:bg-indigo-600 transition-all duration-300',
+      className: 'p-2 rounded-full bg-theme-600/50 text-white opacity-0 group-hover:opacity-100 hover:bg-theme-600 transition-all duration-300',
     },
     React.createElement(UploadIcon, { className: 'h-4 w-4' })
   );
@@ -110,7 +110,9 @@ export const DataTile = ({
   readOnly,
   availableTags,
   itemDownloadProgress,
+  hideTitleUntilHover,
 }) => {
+  const titleClassName = (base) => hideTitleUntilHover ? `${base} opacity-0 group-hover:opacity-100 transition-opacity` : base;
   const isChannel = tileType === 'channel';
   const isDesk = tileType === 'desk';
   const video = item;
@@ -443,7 +445,7 @@ export const DataTile = ({
           'span',
           {
             key: tag,
-            className: 'inline-flex items-center gap-0.5 pl-2 pr-1 py-0.5 rounded-md bg-gray-700 text-[10px] text-gray-300 font-mono',
+            className: 'inline-flex items-center gap-0.5 pl-2 pr-1 py-0.5 rounded-md bg-gray-200 text-[10px] text-gray-700 font-mono',
           },
           tag,
           !readOnly &&
@@ -487,7 +489,7 @@ export const DataTile = ({
                   placeholder: 'Type tag…',
                   title: 'Enter to save, Esc to cancel',
                   className:
-                    'min-w-[7rem] max-w-[12rem] bg-gray-900 border border-indigo-600/60 rounded px-2 py-1 text-sm text-gray-200 placeholder-gray-600',
+                    'min-w-[7rem] max-w-[12rem] bg-theme-50 border border-theme-300 rounded px-2 py-1 text-sm text-theme-900 placeholder-theme-500',
                   'aria-label': 'New tag name',
                   autoComplete: 'off',
                 }),
@@ -496,7 +498,7 @@ export const DataTile = ({
                   {
                     type: 'button',
                     onClick: cancelNewTagInput,
-                    className: 'text-xs text-gray-500 hover:text-gray-300 px-1',
+                    className: 'text-xs text-gray-500 hover:text-gray-700 px-1',
                     title: 'Cancel',
                   },
                   '✕'
@@ -512,7 +514,7 @@ export const DataTile = ({
                   onClick: (e) => e.stopPropagation(),
                   title: 'Choose a tag (adds immediately), or New tag to type one',
                   className:
-                    'min-w-[7.5rem] max-w-[12rem] bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200 cursor-pointer shrink-0',
+                    'min-w-[7.5rem] max-w-[12rem] bg-theme-50 border border-gray-200 rounded px-2 py-1 text-sm text-theme-900 cursor-pointer shrink-0',
                   'aria-label': 'Add tag',
                 },
                 React.createElement('option', { value: '' }, 'Choose tag…'),
@@ -533,7 +535,7 @@ export const DataTile = ({
       React.createElement(
         'span',
         {
-          className: 'inline-flex items-center px-2 py-0.5 rounded-md bg-indigo-900/40 text-[10px] text-indigo-200 font-semibold',
+          className: 'inline-flex items-center px-2 py-0.5 rounded-md bg-theme-100 text-[10px] text-theme-700 font-semibold',
         },
         'Shared with'
       ),
@@ -542,7 +544,7 @@ export const DataTile = ({
           'span',
           {
             key: email,
-            className: 'inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md bg-gray-700 text-[10px] text-gray-200 font-mono',
+            className: 'inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md bg-gray-200 text-[10px] text-gray-700 font-mono',
             title: email,
           },
           email,
@@ -576,7 +578,7 @@ export const DataTile = ({
           onClick: (e) => e.stopPropagation(),
           title: 'Choose a user to share this item with',
           className:
-            'min-w-[8rem] max-w-[16rem] bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-gray-200 cursor-pointer shrink-0',
+            'min-w-[8rem] max-w-[16rem] bg-theme-50 border border-gray-200 rounded px-2 py-1 text-sm text-theme-900 cursor-pointer shrink-0',
           'aria-label': 'Share with user',
         },
         React.createElement('option', { value: '' }, 'Share with…'),
@@ -604,10 +606,10 @@ export const DataTile = ({
         })
       : React.createElement(
           'div',
-          { className: 'h-16 w-16 rounded-full bg-gray-800/90 border-2 border-gray-100/60 shadow-lg flex items-center justify-center' },
+          { className: 'h-16 w-16 rounded-full bg-theme-100/90 border-2 border-gray-100/60 shadow-lg flex items-center justify-center' },
           React.createElement(
             'svg',
-            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-8 w-8 text-red-500/80', fill: 'currentColor', viewBox: '0 0 24 24' },
+            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-8 w-8 text-red-600/80', fill: 'currentColor', viewBox: '0 0 24 24' },
             React.createElement('path', {
               d: 'M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z',
             })
@@ -626,7 +628,7 @@ export const DataTile = ({
           { className: 'flex items-center justify-center w-full h-full' },
           React.createElement(
             'svg',
-            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-red-500/70', fill: 'currentColor', viewBox: '0 0 24 24' },
+            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-red-600/70', fill: 'currentColor', viewBox: '0 0 24 24' },
             React.createElement('path', {
               d: 'M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z',
             })
@@ -654,7 +656,7 @@ export const DataTile = ({
         ),
       React.createElement(
         'div',
-        { className: 'relative p-4 bg-gray-700 h-40 flex items-center justify-center overflow-hidden' },
+        { className: 'relative p-4 bg-gray-100 h-40 flex items-center justify-center overflow-hidden' },
         channelHero,
         React.createElement('div', { className: 'absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none' }),
         React.createElement(
@@ -708,14 +710,14 @@ export const DataTile = ({
                   }
                 },
                 className:
-                  'flex-1 min-w-0 bg-gray-900 border border-indigo-600/60 rounded px-2 py-1 text-sm text-gray-100 placeholder-gray-500',
+                  'flex-1 min-w-0 bg-theme-50 border border-theme-300 rounded px-2 py-1 text-sm text-theme-900 placeholder-theme-500',
                 placeholder: 'Enter channel name',
                 'aria-label': 'Rename channel',
                 disabled: isSavingName,
               })
             : React.createElement(
                 'h3',
-                { className: 'font-bold text-md text-gray-100 whitespace-normal break-words flex-1 min-w-0', title: ch.name },
+                { className: titleClassName('font-bold text-md text-theme-900 whitespace-normal break-words flex-1 min-w-0'), title: ch.name },
                 ch.name
               ),
           !readOnly &&
@@ -734,7 +736,7 @@ export const DataTile = ({
                         onClick: commitRename,
                         disabled: isSavingName || !String(nameInput || '').trim(),
                         className:
-                          'text-xs px-2 py-1 rounded bg-indigo-600/80 text-white hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed',
+                          'text-xs px-2 py-1 rounded bg-theme-500 text-buttontext hover:bg-theme-600 disabled:opacity-50 disabled:cursor-not-allowed',
                         title: 'Save name',
                       },
                       isSavingName ? 'Saving…' : 'Save'
@@ -745,7 +747,7 @@ export const DataTile = ({
                         type: 'button',
                         onClick: cancelRename,
                         disabled: isSavingName,
-                        className: 'text-xs px-2 py-1 rounded bg-gray-700 text-gray-200 hover:bg-gray-600',
+                        className: 'text-xs px-2 py-1 rounded bg-gray-200 text-gray-700 hover:bg-gray-300',
                         title: 'Cancel rename',
                       },
                       'Cancel'
@@ -757,7 +759,7 @@ export const DataTile = ({
                       type: 'button',
                       onClick: beginRename,
                       className:
-                        'text-xs px-2 py-1 rounded bg-gray-700/80 text-gray-200 hover:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity',
+                        'text-xs px-2 py-1 rounded bg-gray-200/80 text-gray-700 hover:bg-gray-300 opacity-0 group-hover:opacity-100 transition-opacity',
                       title: 'Rename channel',
                     },
                     'Rename'
@@ -766,13 +768,13 @@ export const DataTile = ({
         ),
         React.createElement(
           'p',
-          { className: 'text-sm text-gray-400' },
+          { className: 'text-sm text-theme-700' },
           (ch.videos || []).length,
           ' video',
           (ch.videos || []).length === 1 ? '' : 's'
         ),
         ch.handle &&
-          React.createElement('p', { className: 'text-xs text-gray-500 truncate mt-0.5', title: ch.handle }, ch.handle),
+          React.createElement('p', { className: 'text-xs text-theme-500 truncate mt-0.5', title: ch.handle }, ch.handle),
         tagRow,
         shareRow
       )
@@ -828,7 +830,7 @@ export const DataTile = ({
       { className: DATA_TILE_SHELL, onClick: () => onSelect(desk) },
       React.createElement(
         'div',
-        { className: 'relative p-4 bg-gray-700 h-40 flex items-center justify-center overflow-hidden' },
+        { className: 'relative p-4 bg-gray-100 h-40 flex items-center justify-center overflow-hidden' },
         noteCoverUrl
           ? React.createElement('img', { src: noteCoverUrl, alt: desk.name, className: 'absolute inset-0 w-full h-full object-cover' })
           : React.createElement(
@@ -838,20 +840,20 @@ export const DataTile = ({
                 { className: 'absolute inset-0 w-full h-full opacity-10', xmlns: 'http://www.w3.org/2000/svg' },
                 React.createElement('defs', null,
                   React.createElement('pattern', { id: `grid-${String(desk.driveId || '').replace(/[^a-zA-Z0-9_-]/g, '_')}`, x: 0, y: 0, width: 20, height: 20, patternUnits: 'userSpaceOnUse' },
-                    React.createElement('circle', { cx: 0, cy: 0, r: 1, fill: '#818cf8' })
+                    React.createElement('circle', { cx: 0, cy: 0, r: 1, fill: 'rgb(var(--theme-600))' })
                   )
                 ),
                 React.createElement('rect', { width: '100%', height: '100%', fill: `url(#grid-${String(desk.driveId || '').replace(/[^a-zA-Z0-9_-]/g, '_')})` })
               ),
               React.createElement(
                 'svg',
-                { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-indigo-400/70 group-hover:text-indigo-400 transition-colors duration-300', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+                { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-theme-600/70 group-hover:text-theme-600 transition-colors duration-300', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
                 React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 1.5, d: 'M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z' })
               )
             ),
         React.createElement(
           'span',
-          { className: 'absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded' },
+          { className: 'absolute top-2 right-2 bg-theme-600 text-white text-xs font-bold px-2 py-1 rounded' },
           'Desk'
         ),
         !readOnly && onDelete && React.createElement(
@@ -882,11 +884,11 @@ export const DataTile = ({
                   if (e.key === 'Enter') { e.preventDefault(); commitRename(e); }
                   if (e.key === 'Escape') { e.preventDefault(); cancelRename(e); }
                 },
-                className: 'flex-1 min-w-0 bg-gray-900 border border-indigo-600/60 rounded px-2 py-1 text-sm text-gray-100',
+                className: 'flex-1 min-w-0 bg-theme-50 border border-theme-300 rounded px-2 py-1 text-sm text-theme-900',
                 placeholder: 'Desk name',
                 disabled: isSavingName,
               })
-            : React.createElement('h3', { className: 'font-bold text-md text-gray-100 truncate flex-1 min-w-0', title: desk.name }, desk.name || 'Untitled Desk'),
+            : React.createElement('h3', { className: titleClassName('font-bold text-md text-theme-900 truncate flex-1 min-w-0'), title: desk.name }, desk.name || 'Untitled Desk'),
           !readOnly && onRename && React.createElement(
             'div',
             { className: 'shrink-0 flex items-center gap-1' },
@@ -896,23 +898,23 @@ export const DataTile = ({
                   React.createElement('button', {
                     type: 'button', onClick: commitRename,
                     disabled: isSavingName || !String(nameInput || '').trim(),
-                    className: 'text-xs px-2 py-1 rounded bg-indigo-600/80 text-white hover:bg-indigo-600 disabled:opacity-50',
+                    className: 'text-xs px-2 py-1 rounded bg-theme-500 text-buttontext hover:bg-theme-600 disabled:opacity-50',
                   }, isSavingName ? 'Saving…' : 'Save'),
                   React.createElement('button', {
                     type: 'button', onClick: cancelRename, disabled: isSavingName,
-                    className: 'text-xs px-2 py-1 rounded bg-gray-700 text-gray-200 hover:bg-gray-600',
+                    className: 'text-xs px-2 py-1 rounded bg-gray-200 text-gray-700 hover:bg-gray-300',
                   }, 'Cancel')
                 )
               : React.createElement('button', {
                   type: 'button', onClick: beginRename,
-                  className: 'text-xs px-2 py-1 rounded bg-gray-700/80 text-gray-200 hover:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity',
+                  className: 'text-xs px-2 py-1 rounded bg-gray-200/80 text-gray-700 hover:bg-gray-300 opacity-0 group-hover:opacity-100 transition-opacity',
                   title: 'Rename desk',
                 }, 'Rename')
           )
         ),
         React.createElement(
           'p',
-          { className: 'text-sm text-gray-400 mt-0.5' },
+          { className: 'text-sm text-theme-700 mt-0.5' },
           deskItemCount, ' ', deskItemCount === 1 ? 'item' : 'items'
         ),
         !readOnly && onSetCoverImage && React.createElement(
@@ -931,7 +933,7 @@ export const DataTile = ({
             {
               type: 'button',
               onClick: handleDeskPickCover,
-              className: 'px-2 py-0.5 rounded bg-gray-700 text-xs text-gray-300 hover:bg-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-all',
+              className: 'px-2 py-0.5 rounded bg-gray-200 text-xs text-gray-700 hover:bg-gray-300 hover:text-gray-900 opacity-0 group-hover:opacity-100 transition-all',
               title: noteCoverUrl ? 'Change cover image' : 'Set cover image',
             },
             noteCoverUrl ? 'Cover' : 'Set Cover'
@@ -941,7 +943,7 @@ export const DataTile = ({
             {
               type: 'button',
               onClick: () => onSetCoverFromLibrary(desk),
-              className: 'px-2 py-0.5 rounded bg-gray-700 text-xs text-gray-300 hover:bg-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-all',
+              className: 'px-2 py-0.5 rounded bg-gray-200 text-xs text-gray-700 hover:bg-gray-300 hover:text-gray-900 opacity-0 group-hover:opacity-100 transition-all',
               title: 'Set cover from image library',
             },
             'From Library'
@@ -951,7 +953,7 @@ export const DataTile = ({
             {
               type: 'button',
               onClick: handleDeskCoverPaste,
-              className: 'px-2 py-0.5 rounded bg-gray-700 text-xs text-gray-300 hover:bg-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-all',
+              className: 'px-2 py-0.5 rounded bg-gray-200 text-xs text-gray-700 hover:bg-gray-300 hover:text-gray-900 opacity-0 group-hover:opacity-100 transition-all',
               title: 'Paste cover image from clipboard (Ctrl+V)',
             },
             'Paste'
@@ -1047,7 +1049,7 @@ export const DataTile = ({
         { className: 'flex items-center justify-center w-full h-full' },
         React.createElement(
           'svg',
-          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-cyan-400/70', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-cyan-600/70', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
           React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 1.5, d: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' })
         )
       )
@@ -1063,7 +1065,7 @@ export const DataTile = ({
           { className: 'flex items-center justify-center w-full h-full' },
           React.createElement(
             'svg',
-            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-red-500/70', fill: 'currentColor', viewBox: '0 0 24 24' },
+            { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 text-red-600/70', fill: 'currentColor', viewBox: '0 0 24 24' },
             React.createElement('path', {
               d: 'M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z',
             })
@@ -1077,7 +1079,7 @@ export const DataTile = ({
           loading: 'lazy',
         })
       : React.createElement(BookIcon, {
-          className: 'h-20 w-20 text-gray-500 group-hover:text-indigo-400 transition-colors duration-300',
+          className: 'h-20 w-20 text-gray-400 group-hover:text-theme-600 transition-colors duration-300',
         });
 
   return React.createElement(
@@ -1088,7 +1090,7 @@ export const DataTile = ({
     },
     React.createElement(
       'div',
-      { className: 'relative p-4 bg-gray-700 h-40 flex items-center justify-center overflow-hidden' },
+      { className: 'relative p-4 bg-gray-100 h-40 flex items-center justify-center overflow-hidden' },
       thumbnailContent,
       React.createElement(
         'span',
@@ -1099,7 +1101,7 @@ export const DataTile = ({
               ? 'absolute top-2 right-2 bg-cyan-700 text-white text-xs font-bold px-2 py-1 rounded'
               : isStandaloneImage
                 ? 'absolute top-2 right-2 bg-teal-600 text-white text-xs font-bold px-2 py-1 rounded'
-                : 'absolute top-2 right-2 bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded',
+                : 'absolute top-2 right-2 bg-theme-600 text-white text-xs font-bold px-2 py-1 rounded',
         },
         isYoutube ? 'YouTube' : isUrl ? 'URL' : isStandaloneImage ? 'Image' : fileExtension.toUpperCase()
       ),
@@ -1107,7 +1109,7 @@ export const DataTile = ({
         dlProgress
           ? React.createElement(
               'div',
-              { className: 'absolute inset-x-0 bottom-0 z-10 bg-gray-900/85 px-3 pt-2 pb-2.5 flex flex-col gap-1.5' },
+              { className: 'absolute inset-x-0 bottom-0 z-10 bg-theme-950/85 px-3 pt-2 pb-2.5 flex flex-col gap-1.5' },
               React.createElement(
                 'div',
                 { className: 'flex justify-between items-center text-xs' },
@@ -1120,7 +1122,7 @@ export const DataTile = ({
                 ),
                 React.createElement(
                   'span',
-                  { className: 'text-indigo-400 font-semibold tabular-nums ml-2 shrink-0' },
+                  { className: 'text-theme-400 font-semibold tabular-nums ml-2 shrink-0' },
                   dlProgress.total > 0
                     ? `${Math.min(100, Math.round((dlProgress.loaded / dlProgress.total) * 100))}%`
                     : ''
@@ -1131,8 +1133,8 @@ export const DataTile = ({
                 { className: 'h-1 rounded-full bg-gray-600 overflow-hidden' },
                 React.createElement('div', {
                   className: dlProgress.total > 0
-                    ? 'h-full rounded-full bg-indigo-500'
-                    : 'h-full rounded-full bg-indigo-500 animate-pulse',
+                    ? 'h-full rounded-full bg-theme-500'
+                    : 'h-full rounded-full bg-theme-500 animate-pulse',
                   style: {
                     width: dlProgress.total > 0
                       ? `${Math.min(100, Math.round((dlProgress.loaded / dlProgress.total) * 100))}%`
@@ -1222,14 +1224,14 @@ export const DataTile = ({
                 }
               },
               className:
-                'flex-1 min-w-0 bg-gray-900 border border-indigo-600/60 rounded px-2 py-1 text-sm text-gray-100 placeholder-gray-500',
+                'flex-1 min-w-0 bg-theme-50 border border-theme-300 rounded px-2 py-1 text-sm text-theme-900 placeholder-theme-500',
               placeholder: 'Enter item name',
               'aria-label': 'Rename item',
               disabled: isSavingName,
             })
           : React.createElement(
               'h3',
-              { className: 'font-bold text-md text-gray-100 whitespace-normal break-words flex-1 min-w-0', title: video.name },
+              { className: titleClassName('font-bold text-md text-theme-900 whitespace-normal break-words flex-1 min-w-0'), title: video.name },
               isYoutube ? video.name.replace(/\.youtube$/i, '') : video.name
             ),
         !readOnly &&
@@ -1248,7 +1250,7 @@ export const DataTile = ({
                       onClick: commitRename,
                       disabled: isSavingName || !String(nameInput || '').trim(),
                       className:
-                        'text-xs px-2 py-1 rounded bg-indigo-600/80 text-white hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed',
+                        'text-xs px-2 py-1 rounded bg-theme-500 text-buttontext hover:bg-theme-600 disabled:opacity-50 disabled:cursor-not-allowed',
                       title: 'Save name',
                     },
                     isSavingName ? 'Saving…' : 'Save'
@@ -1259,7 +1261,7 @@ export const DataTile = ({
                       type: 'button',
                       onClick: cancelRename,
                       disabled: isSavingName,
-                      className: 'text-xs px-2 py-1 rounded bg-gray-700 text-gray-200 hover:bg-gray-600',
+                      className: 'text-xs px-2 py-1 rounded bg-gray-200 text-gray-700 hover:bg-gray-300',
                       title: 'Cancel rename',
                     },
                     'Cancel'
@@ -1271,7 +1273,7 @@ export const DataTile = ({
                     type: 'button',
                     onClick: beginRename,
                     className:
-                      'text-xs px-2 py-1 rounded bg-gray-700/80 text-gray-200 hover:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity',
+                      'text-xs px-2 py-1 rounded bg-gray-200/80 text-gray-700 hover:bg-gray-300 opacity-0 group-hover:opacity-100 transition-opacity',
                     title: 'Rename item',
                   },
                   'Rename'
@@ -1281,14 +1283,14 @@ export const DataTile = ({
       isYoutube && video._channelVideo
         ? React.createElement(
             'p',
-            { className: 'text-xs text-gray-500 mt-0.5' },
+            { className: 'text-xs text-theme-500 mt-0.5' },
             formatViewCount(video._channelVideo.viewCount),
             ' views',
             video._channelVideo.publishedAt
               ? ` · ${new Date(video._channelVideo.publishedAt).toLocaleDateString()}`
               : ''
           )
-        : React.createElement('p', { className: 'text-sm text-gray-400' }, formatBytes(video.size)),
+        : React.createElement('p', { className: 'text-sm text-theme-700' }, formatBytes(video.size)),
       !readOnly && onSetNoteCoverImage && React.createElement(
         'div',
         { className: 'mt-1 flex items-center gap-1.5', onClick: (e) => e.stopPropagation() },
@@ -1305,7 +1307,7 @@ export const DataTile = ({
           {
             type: 'button',
             onClick: handlePickNoteCover,
-            className: 'px-2 py-0.5 rounded bg-gray-700 text-xs text-gray-300 hover:bg-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-all',
+            className: 'px-2 py-0.5 rounded bg-gray-200 text-xs text-gray-700 hover:bg-gray-300 hover:text-gray-900 opacity-0 group-hover:opacity-100 transition-all',
             title: noteCoverUrl ? 'Change cover image' : 'Set cover image',
           },
           noteCoverUrl ? 'Cover' : 'Set Cover'
@@ -1315,7 +1317,7 @@ export const DataTile = ({
           {
             type: 'button',
             onClick: () => onSetCoverFromLibrary(video),
-            className: 'px-2 py-0.5 rounded bg-gray-700 text-xs text-gray-300 hover:bg-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-all',
+            className: 'px-2 py-0.5 rounded bg-gray-200 text-xs text-gray-700 hover:bg-gray-300 hover:text-gray-900 opacity-0 group-hover:opacity-100 transition-all',
             title: 'Set cover from image library',
           },
           'From Library'
@@ -1325,7 +1327,7 @@ export const DataTile = ({
           {
             type: 'button',
             onClick: handleNoteCoverPaste,
-            className: 'px-2 py-0.5 rounded bg-gray-700 text-xs text-gray-300 hover:bg-gray-600 hover:text-white opacity-0 group-hover:opacity-100 transition-all',
+            className: 'px-2 py-0.5 rounded bg-gray-200 text-xs text-gray-700 hover:bg-gray-300 hover:text-gray-900 opacity-0 group-hover:opacity-100 transition-all',
             title: 'Paste cover image from clipboard (Ctrl+V)',
           },
           'Paste'
@@ -1343,7 +1345,7 @@ export const DataTile = ({
           React.createElement(
             'p',
             {
-              className: 'text-[10px] text-gray-500 mt-1 font-mono',
+              className: 'text-[10px] text-theme-500 mt-1 font-mono',
               title:
                 'Chrome: Application → Storage → IndexedDB → InfoDepo → object store "' +
                 video.idbStore +

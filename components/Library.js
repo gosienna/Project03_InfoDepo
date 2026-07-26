@@ -34,6 +34,7 @@ import {
 } from '../utils/libraryDisplayPolicy.js';
 import { formatBytes } from '../utils/fileUtils.js';
 import { getSyncSettings, saveSyncSettings } from '../utils/syncSettings.js';
+import { THEMES, readTheme, writeTheme, applyTheme } from '../utils/theme.js';
 import {
   getDriveTokenForScope,
   peekDriveImplicitUploadToken,
@@ -128,6 +129,7 @@ export const Library = ({
   const [searchInputFocused, setSearchInputFocused] = useState(false);
   const [libraryPageIndex, setLibraryPageIndex] = useState(0);
   const [libraryDisplayPolicy, setLibraryDisplayPolicy] = useState(() => readLibraryDisplayPolicy());
+  const [theme, setTheme] = useState(() => readTheme());
   const [activeFilters,    setActiveFilters]    = useState(new Set());
   const [coverPickerTarget, setCoverPickerTarget] = useState(null);
 
@@ -1197,7 +1199,7 @@ export const Library = ({
   const folderBadge = hasCredentials && isEditor && React.createElement(
     'span',
     {
-      className: 'flex items-center gap-1 bg-gray-800 border border-gray-600/40 text-gray-300 text-xs font-mono px-2.5 py-1.5 rounded-lg',
+      className: 'flex items-center gap-1 bg-theme-100 border border-gray-200 text-theme-700 text-xs font-mono px-2.5 py-1.5 rounded-lg',
       title: driveFolderId ? `Linked folder: ${driveFolderId}` : '',
     },
     React.createElement(
@@ -1219,7 +1221,7 @@ export const Library = ({
       { className: 'flex items-center justify-between mb-4 flex-wrap gap-2' },
       React.createElement(
         'h2',
-        { className: 'text-3xl font-bold text-gray-100' },
+        { className: 'text-3xl font-bold text-theme-900' },
         'My Library'
       ),
       React.createElement(
@@ -1227,7 +1229,7 @@ export const Library = ({
         { className: 'flex items-center gap-2 flex-wrap' },
         React.createElement(
           'span',
-          { className: 'text-sm text-gray-500 font-medium bg-gray-800 px-3 py-1 rounded-full border border-gray-700' },
+          { className: 'text-sm text-theme-700 font-medium bg-theme-100 px-3 py-1 rounded-full border border-gray-200' },
           hasActiveSearch ? `${filteredGridCount} / ${totalGridCount}` : totalGridCount,
           ' ',
           totalGridCount === 1 ? 'Item' : 'Items'
@@ -1278,14 +1280,14 @@ export const Library = ({
           onBlur: () => setSearchInputFocused(false),
           onKeyDown: handleSearchKeyDown,
           placeholder: 'Search name, tags, or filter by type…',
-          className: 'w-full bg-gray-800 border border-gray-700 rounded-xl pl-10 pr-10 py-2.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors',
+          className: 'w-full bg-theme-50 border border-gray-200 rounded-xl pl-10 pr-10 py-2.5 text-sm text-theme-900 placeholder-theme-500 focus:outline-none focus:border-theme-500 focus:ring-1 focus:ring-theme-500 transition-colors',
         }),
         (searchQuery || activeFilters.size > 0) && React.createElement(
           'button',
           {
             type: 'button',
             onClick: () => { setSearchQuery(''); setActiveFilters(new Set()); setSearchSuggestIndex(-1); },
-            className: 'absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors z-10',
+            className: 'absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 transition-colors z-10',
             title: 'Clear search and filters',
           },
           React.createElement(
@@ -1299,14 +1301,14 @@ export const Library = ({
           'div',
           {
             id: 'library-search-suggestions',
-            className: 'absolute left-0 right-0 top-full mt-1 rounded-xl border border-gray-700 bg-gray-800 shadow-xl shadow-black/40 z-50 overflow-hidden',
+            className: 'absolute left-0 right-0 top-full mt-1 rounded-xl border border-gray-200 bg-theme-50 shadow-xl shadow-black/10 z-50 overflow-hidden',
           },
           // Type filter tabs row
           React.createElement(
             'div',
-            { className: 'flex items-center gap-1.5 flex-wrap px-3 py-2.5 border-b border-gray-700/60' },
+            { className: 'flex items-center gap-1.5 flex-wrap px-3 py-2.5 border-b border-gray-200' },
             [
-              { key: 'books',    label: 'Books',    activeClass: 'bg-indigo-600 border-indigo-500 text-white' },
+              { key: 'books',    label: 'Books',    activeClass: 'bg-theme-600 border-theme-700 text-buttontext' },
               { key: 'notes',    label: 'Notes',    activeClass: 'bg-emerald-600 border-emerald-500 text-white' },
               { key: 'videos',   label: 'Videos',   activeClass: 'bg-red-600 border-red-500 text-white' },
               { key: 'url',      label: 'URLs',     activeClass: 'bg-cyan-700 border-cyan-600 text-white' },
@@ -1323,7 +1325,7 @@ export const Library = ({
                   className: 'px-2.5 py-0.5 rounded-md text-xs font-semibold border transition-all ' + (
                     activeFilters.has(key)
                       ? activeClass
-                      : 'bg-gray-700 border-gray-600 text-gray-400 hover:border-gray-500 hover:text-gray-200'
+                      : 'bg-gray-200 border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-800'
                   ),
                 },
                 label
@@ -1356,7 +1358,7 @@ export const Library = ({
                     id: `library-search-opt-${idx}`,
                     className:
                       'w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ' +
-                      (active ? 'bg-indigo-900/50 text-indigo-100' : 'text-gray-200 hover:bg-gray-700/80'),
+                      (active ? 'bg-theme-100 text-theme-900' : 'text-gray-700 hover:bg-gray-100'),
                     onMouseDown: (e) => { e.preventDefault(); applySearchSuggestion(row); },
                     onMouseEnter: () => setSearchSuggestIndex(idx),
                   },
@@ -1365,7 +1367,7 @@ export const Library = ({
                     {
                       className:
                         'shrink-0 text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ' +
-                        (row.kind === 'tag' ? 'bg-amber-900/50 text-amber-200/90' : 'bg-gray-600/80 text-gray-300'),
+                        (row.kind === 'tag' ? 'bg-amber-100 text-amber-700' : 'bg-gray-200 text-gray-700'),
                     },
                     catLabel
                   ),
@@ -1383,13 +1385,13 @@ export const Library = ({
         [...activeFilters].map((key) => {
           const labels = { books: 'Books', notes: 'Notes', videos: 'Videos', url: 'URLs', images: 'Images', channels: 'Channels', desks: 'Desks' };
           const colors = {
-            books: 'bg-indigo-900/50 text-indigo-300 border-indigo-700/50',
-            notes: 'bg-emerald-900/50 text-emerald-300 border-emerald-700/50',
-            videos: 'bg-red-900/50 text-red-300 border-red-700/50',
-            url: 'bg-cyan-900/50 text-cyan-300 border-cyan-700/50',
-            images: 'bg-teal-900/50 text-teal-300 border-teal-700/50',
-            channels: 'bg-red-900/60 text-red-200 border-red-800/50',
-            desks: 'bg-violet-900/50 text-violet-300 border-violet-700/50',
+            books: 'bg-theme-100 text-theme-700 border-theme-200',
+            notes: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+            videos: 'bg-red-100 text-red-700 border-red-200',
+            url: 'bg-cyan-100 text-cyan-700 border-cyan-200',
+            images: 'bg-teal-100 text-teal-700 border-teal-200',
+            channels: 'bg-red-100 text-red-700 border-red-200',
+            desks: 'bg-violet-100 text-violet-700 border-violet-200',
           };
           return React.createElement(
             'button',
@@ -1397,7 +1399,7 @@ export const Library = ({
               key,
               type: 'button',
               onClick: () => toggleFilter(key),
-              className: `flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border ${colors[key] || 'bg-gray-700 text-gray-300 border-gray-600'}`,
+              className: `flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border ${colors[key] || 'bg-gray-200 text-gray-700 border-gray-300'}`,
               title: `Remove ${labels[key]} filter`,
             },
             labels[key] || key,
@@ -1410,8 +1412,8 @@ export const Library = ({
     // Sync progress banner — visible while sync is running
     isSyncing && React.createElement(
       'div',
-      { className: 'mb-4 px-4 py-2 rounded-xl text-sm flex items-center gap-3 bg-teal-900/30 text-teal-300 border border-teal-800/40' },
-      React.createElement('div', { className: 'h-3.5 w-3.5 border-2 border-teal-400 border-t-transparent rounded-full animate-spin flex-shrink-0' }),
+      { className: 'mb-4 px-4 py-2 rounded-xl text-sm flex items-center gap-3 bg-teal-100 text-teal-700 border border-teal-200' },
+      React.createElement('div', { className: 'h-3.5 w-3.5 border-2 border-teal-600 border-t-transparent rounded-full animate-spin flex-shrink-0' }),
       syncProgress || 'Syncing…',
     ),
 
@@ -1419,7 +1421,7 @@ export const Library = ({
     !isSyncing && syncResult && React.createElement(
       'div',
       {
-        className: `mb-4 px-4 py-2 rounded-xl text-sm flex items-center justify-between ${syncResult.error ? 'bg-red-900/30 text-red-300 border border-red-800/40' : syncResult.failed > 0 ? 'bg-amber-900/30 text-amber-300 border border-amber-800/40' : 'bg-teal-900/30 text-teal-300 border border-teal-800/40'}`,
+        className: `mb-4 px-4 py-2 rounded-xl text-sm flex items-center justify-between ${syncResult.error ? 'bg-red-100 text-red-700 border border-red-200' : syncResult.failed > 0 ? 'bg-amber-100 text-amber-700 border border-amber-200' : 'bg-teal-100 text-teal-700 border border-teal-200'}`,
       },
       syncResult.error
         ? `Sync failed: ${syncResult.error}`
@@ -1526,10 +1528,10 @@ export const Library = ({
           libraryTotalPages > 1 &&
             React.createElement(
               'div',
-              { className: 'flex flex-col sm:flex-row items-center justify-center gap-4 mt-10 pt-6 border-t border-gray-800' },
+              { className: 'flex flex-col sm:flex-row items-center justify-center gap-4 mt-10 pt-6 border-t border-gray-200' },
               React.createElement(
                 'p',
-                { className: 'text-sm text-gray-400 order-2 sm:order-1' },
+                { className: 'text-sm text-theme-700 order-2 sm:order-1' },
                 'Showing ',
                 libraryPageIndex * LIBRARY_PAGE_SIZE + 1,
                 '\u2013',
@@ -1549,14 +1551,14 @@ export const Library = ({
                     className:
                       'px-4 py-2 rounded-lg text-sm font-medium border transition-colors ' +
                       (libraryPageIndex <= 0
-                        ? 'border-gray-800 text-gray-600 cursor-not-allowed'
-                        : 'border-gray-600 text-gray-200 hover:bg-gray-800'),
+                        ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                        : 'border-gray-300 text-gray-700 hover:bg-theme-100'),
                   },
                   'Previous'
                 ),
                 React.createElement(
                   'span',
-                  { className: 'text-sm text-gray-500 px-2 min-w-[5rem] text-center' },
+                  { className: 'text-sm text-theme-500 px-2 min-w-[5rem] text-center' },
                   'Page ',
                   libraryPageIndex + 1,
                   ' / ',
@@ -1571,8 +1573,8 @@ export const Library = ({
                     className:
                       'px-4 py-2 rounded-lg text-sm font-medium border transition-colors ' +
                       (libraryPageIndex >= libraryTotalPages - 1
-                        ? 'border-gray-800 text-gray-600 cursor-not-allowed'
-                        : 'border-gray-600 text-gray-200 hover:bg-gray-800'),
+                        ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                        : 'border-gray-300 text-gray-700 hover:bg-theme-100'),
                   },
                   'Next'
                 )
@@ -1582,23 +1584,23 @@ export const Library = ({
       : hasActiveSearch
         ? React.createElement(
             'div',
-            { className: 'text-center py-16 px-6 border-2 border-dashed border-gray-800 rounded-2xl bg-gray-800/20' },
+            { className: 'text-center py-16 px-6 border-2 border-dashed border-gray-300 rounded-2xl bg-theme-50' },
             React.createElement(
               'svg',
-              { xmlns: 'http://www.w3.org/2000/svg', className: 'h-12 w-12 text-gray-600 mx-auto mb-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+              { xmlns: 'http://www.w3.org/2000/svg', className: 'h-12 w-12 text-gray-400 mx-auto mb-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
               React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 1.5, d: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' })
             ),
-            React.createElement('h3', { className: 'text-xl font-semibold text-gray-400' }, 'No results found'),
+            React.createElement('h3', { className: 'text-xl font-semibold text-theme-700' }, 'No results found'),
             React.createElement(
               'p',
-              { className: 'text-gray-500 mt-2 max-w-sm mx-auto' },
+              { className: 'text-theme-500 mt-2 max-w-sm mx-auto' },
               query ? `No items matching "${searchQuery.trim()}"` : 'No items match the selected filters'
             ),
             React.createElement(
               'button',
               {
                 onClick: () => { setSearchQuery(''); setActiveFilters(new Set()); },
-                className: 'mt-4 text-indigo-400 hover:text-indigo-300 text-sm font-medium transition-colors',
+                className: 'mt-4 text-theme-600 hover:text-theme-700 text-sm font-medium transition-colors',
               },
               'Clear search'
             )
@@ -1606,23 +1608,23 @@ export const Library = ({
         : totalGridCount === 0
           ? React.createElement(
               'div',
-              { className: 'text-center py-20 px-6 border-2 border-dashed border-gray-800 rounded-2xl bg-gray-800/20' },
+              { className: 'text-center py-20 px-6 border-2 border-dashed border-gray-300 rounded-2xl bg-theme-50' },
               React.createElement(
                 'div',
-                { className: 'bg-gray-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 border border-gray-700' },
-                React.createElement(BookIcon, { className: 'h-8 w-8 text-gray-600' })
+                { className: 'bg-theme-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 border border-gray-200' },
+                React.createElement(BookIcon, { className: 'h-8 w-8 text-gray-400' })
               ),
-              React.createElement('h3', { className: 'text-xl font-semibold text-gray-400' }, 'Library is Empty'),
+              React.createElement('h3', { className: 'text-xl font-semibold text-theme-700' }, 'Library is Empty'),
               React.createElement(
                 'p',
-                { className: 'text-gray-500 mt-2 max-w-sm mx-auto' },
+                { className: 'text-theme-500 mt-2 max-w-sm mx-auto' },
                 'Click "Add File" to import an EPUB, PDF, TXT, or Markdown file, or "Add YouTube" to save a video link.'
               ),
               isEditor && React.createElement(
                 'button',
                 {
                   onClick: onOpenFile,
-                  className: 'mt-6 inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-6 rounded-xl transition-all'
+                  className: 'mt-6 inline-flex items-center gap-2 bg-theme-500 hover:bg-theme-600 text-buttontext font-bold py-2.5 px-6 rounded-xl transition-all'
                 },
                 React.createElement(BookIcon, { className: 'h-5 w-5' }),
                 'Add Your First File'
@@ -1639,18 +1641,18 @@ export const Library = ({
       },
       React.createElement(
         'div',
-        { className: 'bg-gray-800 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-700 overflow-hidden flex flex-col max-h-[90vh]' },
+        { className: 'bg-theme-50 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-200 overflow-hidden flex flex-col max-h-[90vh]' },
 
         // Header
         React.createElement(
           'div',
-          { className: 'flex items-center justify-between px-6 py-4 border-b border-gray-700' },
-          React.createElement('h2', { className: 'text-lg font-bold text-gray-100' }, 'System Settings'),
+          { className: 'flex items-center justify-between px-6 py-4 border-b border-gray-200' },
+          React.createElement('h2', { className: 'text-lg font-bold text-theme-900' }, 'System Settings'),
           React.createElement(
             'button',
             {
               onClick: () => setIsSystemSettingsOpen(false),
-              className: 'text-gray-500 hover:text-gray-300 p-1 rounded-lg hover:bg-gray-700 transition-colors',
+              className: 'text-gray-500 hover:text-gray-700 p-1 rounded-lg hover:bg-gray-100 transition-colors',
             },
             React.createElement(
               'svg',
@@ -1669,20 +1671,20 @@ export const Library = ({
           React.createElement(
             'div',
             { className: 'space-y-2' },
-            React.createElement('p', { className: 'text-xs font-semibold text-gray-400 uppercase tracking-wider' }, 'Google API'),
+            React.createElement('p', { className: 'text-xs font-semibold text-gray-500 uppercase tracking-wider' }, 'Google API'),
             React.createElement(
               'div',
-              { className: 'bg-gray-900 rounded-xl px-4 py-3' },
-              React.createElement('p', { className: 'text-sm font-medium text-gray-200' }, 'Client ID & API key'),
+              { className: 'bg-theme-100 rounded-xl px-4 py-3' },
+              React.createElement('p', { className: 'text-sm font-medium text-theme-900' }, 'Client ID & API key'),
               React.createElement(
                 'p',
-                { className: 'text-xs text-gray-500 mt-1 leading-relaxed' },
+                { className: 'text-xs text-theme-500 mt-1 leading-relaxed' },
                 'Set ',
-                React.createElement('code', { className: 'text-gray-400' }, 'VITE_CLIENT_ID'),
+                React.createElement('code', { className: 'text-gray-600' }, 'VITE_CLIENT_ID'),
                 ' and Google API access (',
-                React.createElement('code', { className: 'text-gray-400' }, 'VITE_API_KEY'),
+                React.createElement('code', { className: 'text-gray-600' }, 'VITE_API_KEY'),
                 ' or Netlify proxy; see README) in your environment (',
-                React.createElement('code', { className: 'text-gray-400' }, '.env'),
+                React.createElement('code', { className: 'text-gray-600' }, '.env'),
                 ' locally, Netlify site settings in production).',
               ),
             ),
@@ -1692,7 +1694,7 @@ export const Library = ({
           React.createElement(
             'div',
             { className: 'space-y-2' },
-            React.createElement('p', { className: 'text-xs font-semibold text-gray-400 uppercase tracking-wider' }, 'Drive folder'),
+            React.createElement('p', { className: 'text-xs font-semibold text-gray-500 uppercase tracking-wider' }, 'Drive folder'),
             React.createElement(
               'div',
               { className: 'space-y-2' },
@@ -1702,7 +1704,7 @@ export const Library = ({
                 onChange: (e) => setDriveFolderDraft(e.target.value),
                 placeholder: 'Folder ID or Drive URL',
                 className:
-                  'w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-indigo-500 font-mono',
+                  'w-full bg-theme-50 border border-gray-300 rounded-lg px-3 py-2 text-sm text-theme-900 placeholder-theme-500 focus:outline-none focus:border-theme-500 font-mono',
               }),
               React.createElement(
                 'button',
@@ -1718,15 +1720,15 @@ export const Library = ({
                     onDriveCredentialsChanged?.();
                     setIsSystemSettingsOpen(false);
                   },
-                  className: 'w-full py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium',
+                  className: 'w-full py-2 rounded-lg bg-theme-500 hover:bg-theme-600 text-buttontext text-sm font-medium',
                 },
                 'Save folder',
               ),
               React.createElement(
                 'p',
-                { className: 'text-xs text-gray-500' },
+                { className: 'text-xs text-theme-500' },
                 'Stored in this browser as ',
-                React.createElement('code', { className: 'text-gray-400' }, 'infodepo_drive_folder_id'),
+                React.createElement('code', { className: 'text-gray-600' }, 'infodepo_drive_folder_id'),
                 '. Changing it may require signing in to Google again from the setup screen.',
               ),
             ),
@@ -1736,11 +1738,11 @@ export const Library = ({
           React.createElement(
             'div',
             { className: 'space-y-2' },
-            React.createElement('p', { className: 'text-xs font-semibold text-gray-400 uppercase tracking-wider' }, 'Library display'),
+            React.createElement('p', { className: 'text-xs font-semibold text-gray-500 uppercase tracking-wider' }, 'Library display'),
             React.createElement(
               'div',
-              { className: 'bg-gray-900 rounded-xl px-4 py-3 space-y-2' },
-              React.createElement('p', { className: 'text-sm font-medium text-gray-200' }, 'Item order policy'),
+              { className: 'bg-theme-100 rounded-xl px-4 py-3 space-y-2' },
+              React.createElement('p', { className: 'text-sm font-medium text-theme-900' }, 'Item order policy'),
               React.createElement(
                 'select',
                 {
@@ -1752,16 +1754,49 @@ export const Library = ({
                     setLibraryPageIndex(0);
                   },
                   className:
-                    'w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500',
+                    'w-full bg-theme-50 border border-gray-300 rounded-lg px-3 py-2 text-sm text-theme-900 focus:outline-none focus:border-theme-500',
                 },
                 React.createElement('option', { value: LIBRARY_DISPLAY_POLICIES.random }, 'Random (default)'),
                 React.createElement('option', { value: LIBRARY_DISPLAY_POLICIES.modifiedTimeBased }, 'Modified time (newest first)')
               ),
               React.createElement(
                 'p',
-                { className: 'text-xs text-gray-500' },
+                { className: 'text-xs text-theme-500' },
                 'Saved in this browser as ',
-                React.createElement('code', { className: 'text-gray-400' }, 'infodepo_library_display_policy'),
+                React.createElement('code', { className: 'text-gray-600' }, 'infodepo_library_display_policy'),
+                '.'
+              )
+            )
+          ),
+
+          // Section 1d: Theme
+          React.createElement(
+            'div',
+            { className: 'space-y-2' },
+            React.createElement('p', { className: 'text-xs font-semibold text-gray-500 uppercase tracking-wider' }, 'Theme'),
+            React.createElement(
+              'div',
+              { className: 'bg-theme-100 rounded-xl px-4 py-3 space-y-2' },
+              React.createElement('p', { className: 'text-sm font-medium text-theme-900' }, 'Accent color'),
+              React.createElement(
+                'div',
+                { className: 'flex flex-wrap gap-3' },
+                ...Object.entries(THEMES).map(([id, def]) =>
+                  React.createElement('button', {
+                    key: id,
+                    type: 'button',
+                    title: def.label,
+                    onClick: () => { setTheme(id); writeTheme(id); applyTheme(id); },
+                    className: `h-8 w-8 rounded-full transition-all ${theme === id ? 'ring-2 ring-offset-2 ring-offset-theme-100 ring-gray-700' : 'hover:scale-110'}`,
+                    style: { backgroundColor: def.swatchHex },
+                  })
+                )
+              ),
+              React.createElement(
+                'p',
+                { className: 'text-xs text-theme-500' },
+                'Applies immediately, saved in this browser as ',
+                React.createElement('code', { className: 'text-gray-600' }, 'infodepo_theme'),
                 '.'
               )
             )
@@ -1771,15 +1806,15 @@ export const Library = ({
           React.createElement(
             'div',
             { className: 'space-y-2' },
-            React.createElement('p', { className: 'text-xs font-semibold text-gray-400 uppercase tracking-wider' }, 'Google Account'),
+            React.createElement('p', { className: 'text-xs font-semibold text-gray-500 uppercase tracking-wider' }, 'Google Account'),
             React.createElement(
               'div',
-              { className: 'flex items-center justify-between bg-gray-900 rounded-xl px-4 py-3' },
+              { className: 'flex items-center justify-between bg-theme-100 rounded-xl px-4 py-3' },
               React.createElement(
                 'div',
                 null,
-                React.createElement('p', { className: 'text-sm font-medium text-gray-200' }, 'Sign out'),
-                React.createElement('p', { className: 'text-xs text-gray-500 mt-0.5' }, 'Revokes the current OAuth token')
+                React.createElement('p', { className: 'text-sm font-medium text-theme-900' }, 'Sign out'),
+                React.createElement('p', { className: 'text-xs text-theme-500 mt-0.5' }, 'Revokes the current OAuth token')
               ),
               React.createElement(
                 'button',
@@ -1788,7 +1823,7 @@ export const Library = ({
                     handleSignOutGoogle();
                     setIsSystemSettingsOpen(false);
                   },
-                  className: 'text-sm text-orange-400 hover:text-orange-300 px-3 py-1.5 rounded-lg hover:bg-orange-900/20 transition-colors',
+                  className: 'text-sm text-orange-700 hover:text-orange-800 px-3 py-1.5 rounded-lg hover:bg-orange-100 transition-colors',
                   title: 'Sign out of Google and revoke current OAuth token',
                 },
                 'Sign Out'
@@ -1800,17 +1835,17 @@ export const Library = ({
           React.createElement(
             'div',
             { className: 'space-y-2' },
-            React.createElement('p', { className: 'text-xs font-semibold text-gray-400 uppercase tracking-wider' }, 'Library Data'),
+            React.createElement('p', { className: 'text-xs font-semibold text-gray-500 uppercase tracking-wider' }, 'Library Data'),
             React.createElement(
               'div',
-              { className: 'flex items-center justify-between bg-gray-900 rounded-xl px-4 py-3' },
+              { className: 'flex items-center justify-between bg-theme-100 rounded-xl px-4 py-3' },
               React.createElement(
                 'div',
                 null,
-                React.createElement('p', { className: 'text-sm font-medium text-gray-200' }, 'Clear all content'),
+                React.createElement('p', { className: 'text-sm font-medium text-theme-900' }, 'Clear all content'),
                 React.createElement(
                   'p',
-                  { className: 'text-xs text-gray-500 mt-0.5' },
+                  { className: 'text-xs text-theme-500 mt-0.5' },
                   `${totalGridCount} item${totalGridCount === 1 ? '' : 's'} stored locally`
                 )
               ),
@@ -1821,7 +1856,7 @@ export const Library = ({
                     setIsSystemSettingsOpen(false);
                     handleConfirmClear();
                   },
-                  className: 'text-sm text-red-400 hover:text-red-300 px-3 py-1.5 rounded-lg hover:bg-red-900/20 transition-colors',
+                  className: 'text-sm text-red-700 hover:text-red-800 px-3 py-1.5 rounded-lg hover:bg-red-100 transition-colors',
                   title: 'Delete database and reinitialize',
                 },
                 'Clear All'
@@ -1833,28 +1868,28 @@ export const Library = ({
           React.createElement(
             'div',
             { className: 'space-y-2' },
-            React.createElement('p', { className: 'text-xs font-semibold text-gray-400 uppercase tracking-wider' }, 'Storage'),
+            React.createElement('p', { className: 'text-xs font-semibold text-gray-500 uppercase tracking-wider' }, 'Storage'),
             React.createElement(
               'div',
-              { className: 'bg-gray-900 rounded-xl px-4 py-3 space-y-3' },
+              { className: 'bg-theme-100 rounded-xl px-4 py-3 space-y-3' },
               storageUsed != null && React.createElement(
                 'div',
                 { className: 'space-y-1' },
                 React.createElement(
                   'div',
-                  { className: 'w-full bg-gray-700 rounded-full h-2' },
+                  { className: 'w-full bg-gray-200 rounded-full h-2' },
                   React.createElement('div', {
-                    className: 'bg-indigo-500 h-2 rounded-full transition-all',
+                    className: 'bg-theme-500 h-2 rounded-full transition-all',
                     style: { width: `${Math.min(100, (storageUsed / (storageLimitDraft * 1024 ** 3)) * 100).toFixed(1)}%` },
                   })
                 ),
                 React.createElement(
                   'p',
-                  { className: 'text-xs text-gray-400' },
+                  { className: 'text-xs text-theme-500' },
                   `${formatBytes(storageUsed)} used of ${storageLimitDraft} GB`
                 )
               ),
-              React.createElement('p', { className: 'text-sm font-medium text-gray-200' }, 'Storage limit (GB)'),
+              React.createElement('p', { className: 'text-sm font-medium text-theme-900' }, 'Storage limit (GB)'),
               React.createElement(
                 'div',
                 { className: 'flex gap-2' },
@@ -1863,20 +1898,20 @@ export const Library = ({
                   min: 1,
                   value: storageLimitDraft,
                   onChange: (e) => setStorageLimitDraft(Math.max(1, Number(e.target.value))),
-                  className: 'w-28 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-indigo-500',
+                  className: 'w-28 bg-theme-50 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-theme-900 focus:outline-none focus:border-theme-500',
                 }),
                 React.createElement(
                   'button',
                   {
                     onClick: () => saveSyncSettings({ maxStorageGB: storageLimitDraft }),
-                    className: 'px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium',
+                    className: 'px-3 py-1.5 rounded-lg bg-theme-500 hover:bg-theme-600 text-buttontext text-sm font-medium',
                   },
                   'Save'
                 )
               ),
               React.createElement(
                 'p',
-                { className: 'text-xs text-gray-500' },
+                { className: 'text-xs text-theme-500' },
                 'Oldest unvisited items (> 1 KB) are auto-cleared when over limit. Item metadata is kept.'
               )
             )

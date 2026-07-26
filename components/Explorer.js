@@ -311,7 +311,7 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
     // ── URL bar ──────────────────────────────────────────────────────
     React.createElement(
       'div',
-      { className: 'flex items-center gap-2 px-3 py-2 bg-gray-800 border-b border-gray-700 flex-shrink-0' },
+      { className: 'flex items-center gap-2 px-3 py-2 bg-theme-50 border-b border-gray-200 flex-shrink-0' },
 
       // Back button
       React.createElement(
@@ -319,7 +319,7 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
         {
           onClick: () => iframeRef.current?.contentWindow?.history?.back(),
           disabled: !iframeSrc,
-          className: 'w-7 h-7 flex items-center justify-center text-gray-400 hover:text-white disabled:opacity-30 rounded hover:bg-gray-700 flex-shrink-0',
+          className: 'w-7 h-7 flex items-center justify-center text-gray-600 hover:text-gray-900 disabled:opacity-30 rounded hover:bg-gray-100 flex-shrink-0',
           title: 'Back',
         },
         React.createElement(
@@ -333,7 +333,7 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
         {
           onClick: () => iframeRef.current?.contentWindow?.history?.forward(),
           disabled: !iframeSrc,
-          className: 'w-7 h-7 flex items-center justify-center text-gray-400 hover:text-white disabled:opacity-30 rounded hover:bg-gray-700 flex-shrink-0',
+          className: 'w-7 h-7 flex items-center justify-center text-gray-600 hover:text-gray-900 disabled:opacity-30 rounded hover:bg-gray-100 flex-shrink-0',
           title: 'Forward',
         },
         React.createElement(
@@ -347,7 +347,7 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
         {
           onClick: () => iframeRef.current?.contentWindow?.location?.reload(),
           disabled: !iframeSrc || isBusy,
-          className: 'w-7 h-7 flex items-center justify-center text-gray-400 hover:text-white disabled:opacity-30 rounded hover:bg-gray-700 flex-shrink-0',
+          className: 'w-7 h-7 flex items-center justify-center text-gray-600 hover:text-gray-900 disabled:opacity-30 rounded hover:bg-gray-100 flex-shrink-0',
           title: 'Reload',
         },
         React.createElement(
@@ -364,7 +364,7 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
         onKeyDown: handleKeyDown,
         placeholder: 'Enter a URL…',
         spellCheck: false,
-        className: 'flex-1 bg-gray-700 text-white text-sm rounded px-3 py-1.5 outline-none focus:ring-1 focus:ring-indigo-500 min-w-0',
+        className: 'flex-1 bg-gray-100 text-theme-900 text-sm rounded px-3 py-1.5 outline-none focus:ring-1 focus:ring-theme-500 min-w-0',
       }),
 
       // Go button
@@ -373,7 +373,7 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
         {
           onClick: handleGo,
           disabled: isBusy || !urlInput.trim(),
-          className: 'px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm rounded flex-shrink-0',
+          className: 'px-3 py-1.5 bg-theme-500 hover:bg-theme-600 disabled:opacity-50 text-buttontext text-sm rounded flex-shrink-0',
         },
         'Go'
       ),
@@ -393,7 +393,7 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
     // ── Error banner ─────────────────────────────────────────────────
     errorMsg && React.createElement(
       'div',
-      { className: 'px-4 py-2 bg-red-900/60 text-red-300 text-xs flex-shrink-0 whitespace-pre-line' },
+      { className: 'px-4 py-2 bg-red-100 text-red-700 text-xs flex-shrink-0 whitespace-pre-line' },
       errorMsg
     ),
 
@@ -421,11 +421,11 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
                 { className: 'text-center space-y-3' },
                 React.createElement(
                   'svg',
-                  { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 mx-auto text-gray-600', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
+                  { xmlns: 'http://www.w3.org/2000/svg', className: 'h-16 w-16 mx-auto text-gray-400', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
                   React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 1, d: 'M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9' })
                 ),
-                React.createElement('p', { className: 'text-gray-400 text-sm' }, 'Enter a URL above and click Go'),
-                React.createElement('p', { className: 'text-gray-600 text-xs' }, 'Then use Extract to Markdown to save the content')
+                React.createElement('p', { className: 'text-gray-600 text-sm' }, 'Enter a URL above and click Go'),
+                React.createElement('p', { className: 'text-gray-500 text-xs' }, 'Then use Extract to Markdown to save the content')
               )
             )
       ),
@@ -433,17 +433,17 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
       // Side panel (slides in after extraction)
       panelOpen && React.createElement(
         'div',
-        { className: 'flex-1 flex flex-col border-l border-gray-700 bg-gray-900 min-h-0 overflow-hidden' },
+        { className: 'flex-1 flex flex-col border-l border-gray-200 bg-theme-50 min-h-0 overflow-hidden' },
 
         // Panel header
         React.createElement(
           'div',
-          { className: 'flex items-center gap-2 px-3 py-2 border-b border-gray-700 flex-shrink-0 bg-gray-800' },
+          { className: 'flex items-center gap-2 px-3 py-2 border-b border-gray-200 flex-shrink-0 bg-theme-50' },
           React.createElement('input', {
             type: 'text',
             value: title,
             onChange: (e) => setTitle(e.target.value),
-            className: 'flex-1 bg-gray-700 text-white text-sm rounded px-2 py-1 outline-none focus:ring-1 focus:ring-indigo-500 min-w-0',
+            className: 'flex-1 bg-gray-100 text-theme-900 text-sm rounded px-2 py-1 outline-none focus:ring-1 focus:ring-theme-500 min-w-0',
             placeholder: 'Note title…',
           }),
           React.createElement(
@@ -451,7 +451,7 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
             {
               onClick: handleSave,
               disabled: isBusy || !markdown,
-              className: 'px-3 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs rounded whitespace-nowrap flex-shrink-0',
+              className: 'px-3 py-1 bg-theme-500 hover:bg-theme-600 disabled:opacity-50 text-buttontext text-xs rounded whitespace-nowrap flex-shrink-0',
             },
             status === 'saving' ? 'Saving…' : `Save as Note${pendingAssets.length ? ` (+${pendingAssets.length} img)` : ''}`
           ),
@@ -459,7 +459,7 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
             'button',
             {
               onClick: () => setPanelOpen(false),
-              className: 'w-6 h-6 flex items-center justify-center text-gray-400 hover:text-white rounded hover:bg-gray-700 flex-shrink-0',
+              className: 'w-6 h-6 flex items-center justify-center text-gray-600 hover:text-gray-900 rounded hover:bg-gray-100 flex-shrink-0',
               title: 'Close panel',
             },
             React.createElement(
@@ -472,18 +472,18 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
         // Image download progress bar
         dlProgress.total > 0 && React.createElement(
           'div',
-          { className: 'px-3 py-1.5 bg-gray-800 border-b border-gray-700 flex-shrink-0' },
+          { className: 'px-3 py-1.5 bg-theme-50 border-b border-gray-200 flex-shrink-0' },
           React.createElement(
             'div',
-            { className: 'flex items-center justify-between text-xs text-gray-400 mb-1' },
+            { className: 'flex items-center justify-between text-xs text-theme-700 mb-1' },
             React.createElement('span', null, `Images: ${dlProgress.done} / ${dlProgress.total}`),
             dlProgress.done === dlProgress.total
-              ? React.createElement('span', { className: 'text-emerald-400' }, '✓ All downloaded locally')
+              ? React.createElement('span', { className: 'text-emerald-700' }, '✓ All downloaded locally')
               : null
           ),
           React.createElement(
             'div',
-            { className: 'h-1 bg-gray-700 rounded-full overflow-hidden' },
+            { className: 'h-1 bg-gray-200 rounded-full overflow-hidden' },
             React.createElement('div', {
               className: 'h-full bg-emerald-500 transition-all duration-200',
               style: { width: `${dlProgress.total ? (dlProgress.done / dlProgress.total) * 100 : 0}%` },
@@ -497,7 +497,7 @@ export const Explorer = ({ addItem, addImage, onSaved }) => {
           { className: 'flex-1 overflow-y-auto' },
           React.createElement(
             'pre',
-            { className: 'p-4 text-xs text-gray-300 whitespace-pre-wrap break-words leading-relaxed font-mono' },
+            { className: 'p-4 text-xs text-theme-900 whitespace-pre-wrap break-words leading-relaxed font-mono' },
             markdown
           )
         )

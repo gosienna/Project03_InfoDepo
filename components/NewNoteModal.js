@@ -39,22 +39,22 @@ export const NewNoteModal = ({ onSave, onClose }) => {
     },
     React.createElement(
       'div',
-      { className: 'bg-gray-800 rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col border border-gray-700' },
+      { className: 'bg-theme-50 rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col border border-gray-200' },
 
       // Header
       React.createElement(
         'div',
-        { className: 'flex items-center justify-between px-6 py-4 border-b border-gray-700' },
+        { className: 'flex items-center justify-between px-6 py-4 border-b border-gray-200' },
         React.createElement(
           'h2',
-          { className: 'text-lg font-bold text-gray-100' },
+          { className: 'text-lg font-bold text-theme-900' },
           'New Note'
         ),
         React.createElement(
           'button',
           {
             onClick: onClose,
-            className: 'text-gray-400 hover:text-gray-200 p-1 rounded-lg hover:bg-gray-700 transition-colors',
+            className: 'text-gray-500 hover:text-gray-700 p-1 rounded-lg hover:bg-gray-100 transition-colors',
             title: 'Close',
           },
           React.createElement(
@@ -74,7 +74,7 @@ export const NewNoteModal = ({ onSave, onClose }) => {
           { className: 'flex flex-col gap-1' },
           React.createElement(
             'label',
-            { className: 'text-sm font-medium text-gray-400', htmlFor: 'note-title' },
+            { className: 'text-sm font-medium text-theme-700', htmlFor: 'note-title' },
             'Title'
           ),
           React.createElement('input', {
@@ -84,20 +84,20 @@ export const NewNoteModal = ({ onSave, onClose }) => {
             value: title,
             onChange: (e) => { setTitle(e.target.value); setError(null); },
             placeholder: 'My Note',
-            className: 'bg-gray-700 border border-gray-600 text-gray-100 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 placeholder-gray-500',
+            className: 'bg-theme-50 border border-gray-300 text-theme-900 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-theme-500 placeholder-theme-500',
           }),
-          error && React.createElement('p', { className: 'text-xs text-red-400 mt-1' }, error)
+          error && React.createElement('p', { className: 'text-xs text-red-700 mt-1' }, error)
         ),
         React.createElement(
           'div',
           { className: 'flex flex-col gap-1' },
           React.createElement(
             'label',
-            { className: 'text-sm font-medium text-gray-400', htmlFor: 'note-content' },
+            { className: 'text-sm font-medium text-theme-700', htmlFor: 'note-content' },
             'Content',
             React.createElement(
               'span',
-              { className: 'ml-2 text-xs text-gray-500 font-normal' },
+              { className: 'ml-2 text-xs text-theme-500 font-normal' },
               '(Markdown supported)'
             )
           ),
@@ -107,7 +107,7 @@ export const NewNoteModal = ({ onSave, onClose }) => {
             onChange: (e) => { setContent(e.target.value); setError(null); },
             placeholder: '# My Note\n\nStart writing here...',
             rows: 14,
-            className: 'bg-gray-700 border border-gray-600 text-gray-100 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-indigo-500 placeholder-gray-500 resize-none leading-relaxed',
+            className: 'bg-theme-50 border border-gray-300 text-theme-900 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-theme-500 placeholder-theme-500 resize-none leading-relaxed',
           })
         )
       ),
@@ -115,12 +115,12 @@ export const NewNoteModal = ({ onSave, onClose }) => {
       // Footer
       React.createElement(
         'div',
-        { className: 'flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-700' },
+        { className: 'flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200' },
         React.createElement(
           'button',
           {
             onClick: onClose,
-            className: 'px-5 py-2 rounded-xl text-sm font-medium text-gray-300 hover:text-gray-100 hover:bg-gray-700 transition-colors',
+            className: 'px-5 py-2 rounded-xl text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-100 transition-colors',
           },
           'Cancel'
         ),
@@ -129,7 +129,7 @@ export const NewNoteModal = ({ onSave, onClose }) => {
           {
             onClick: handleSave,
             disabled: !title.trim(),
-            className: 'px-5 py-2 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+            className: 'px-5 py-2 rounded-xl text-sm font-bold bg-theme-500 hover:bg-theme-600 text-buttontext transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
           },
           'Save Note'
         )

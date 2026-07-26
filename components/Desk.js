@@ -125,7 +125,7 @@ const DotGrid = ({ panX, panY, zoom }) => {
       'defs', null,
       React.createElement('pattern', {
         id: 'desk-dot-grid', x: ox, y: oy, width: scaled, height: scaled, patternUnits: 'userSpaceOnUse',
-      }, React.createElement('circle', { cx: 0, cy: 0, r: 1.2, fill: '#374151' }))
+      }, React.createElement('circle', { cx: 0, cy: 0, r: 1.2, fill: '#d1d5db' }))
     ),
     React.createElement('rect', { width: '100%', height: '100%', fill: 'url(#desk-dot-grid)' })
   );
@@ -184,7 +184,7 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
 
   const titleStyle = {
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    fontSize: 20, fontWeight: 700, color: '#e5e7eb', letterSpacing: '-0.02em',
+    fontSize: 20, fontWeight: 700, color: 'rgb(var(--theme-900))', letterSpacing: '-0.02em',
     maxWidth: 'min(50vw, 420px)',
   };
 
@@ -211,9 +211,9 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
             onBlur: () => commitEdit(currentDeskId),
             style: {
               minWidth: 160, maxWidth: 'min(50vw, 420px)',
-              background: '#111827', border: '1px solid #4f46e5',
+              background: 'rgb(var(--theme-100))', border: '1px solid rgb(var(--theme-600))',
               borderRadius: 6, padding: '6px 10px', fontSize: 18, fontWeight: 700,
-              color: '#e5e7eb', outline: 'none',
+              color: 'rgb(var(--theme-900))', outline: 'none',
             },
           }),
           React.createElement(
@@ -221,7 +221,7 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
             {
               type: 'button',
               onMouseDown: (e) => { e.preventDefault(); commitEdit(currentDeskId); },
-              style: { background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#818cf8', flexShrink: 0 },
+              style: { background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: 'rgb(var(--theme-600))', flexShrink: 0 },
               title: 'Save',
             },
             React.createElement(
@@ -291,14 +291,14 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
       {
         style: {
           position: 'absolute', top: 'calc(100% + 4px)', left: '50%', transform: 'translateX(-50%)',
-          background: '#1f2937', border: '1px solid #374151', borderRadius: 10,
+          background: 'rgb(var(--theme-50))', border: '1px solid #e5e7eb', borderRadius: 10,
           boxShadow: '0 8px 24px rgba(0,0,0,0.4)', zIndex: 50,
           minWidth: 220,
         },
       },
       React.createElement(
         'div',
-        { style: { padding: '8px', borderBottom: '1px solid #111827', position: 'relative' } },
+        { style: { padding: '8px', borderBottom: '1px solid #e5e7eb', position: 'relative' } },
         React.createElement('input', {
           autoFocus: true,
           type: 'text',
@@ -309,8 +309,8 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
           placeholder: 'Search desks…',
           style: {
             width: '100%', boxSizing: 'border-box',
-            background: '#111827', border: '1px solid #374151',
-            borderRadius: 6, padding: '5px 28px 5px 10px', fontSize: 12, color: '#e5e7eb',
+            background: 'rgb(var(--theme-100))', border: '1px solid #e5e7eb',
+            borderRadius: 6, padding: '5px 28px 5px 10px', fontSize: 12, color: 'rgb(var(--theme-900))',
             outline: 'none',
           },
         }),
@@ -332,8 +332,8 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
             key: d.driveId,
             style: {
               display: 'flex', alignItems: 'center', gap: 6,
-              background: d.driveId === currentDeskId ? '#374151' : 'none',
-              borderBottom: '1px solid #111827',
+              background: d.driveId === currentDeskId ? 'rgb(var(--theme-100))' : 'none',
+              borderBottom: '1px solid #e5e7eb',
               padding: editingId === d.driveId ? '4px 8px' : '0',
             },
           },
@@ -351,8 +351,8 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
                   },
                   onBlur: () => commitEdit(d.driveId),
                   style: {
-                    flex: 1, background: '#111827', border: '1px solid #4f46e5',
-                    borderRadius: 6, padding: '4px 8px', fontSize: 13, color: '#e5e7eb',
+                    flex: 1, background: 'rgb(var(--theme-100))', border: '1px solid rgb(var(--theme-600))',
+                    borderRadius: 6, padding: '4px 8px', fontSize: 13, color: 'rgb(var(--theme-900))',
                     outline: 'none', minWidth: 0,
                   },
                 }),
@@ -360,7 +360,7 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
                   'button',
                   {
                     onMouseDown: (e) => { e.preventDefault(); commitEdit(d.driveId); },
-                    style: { background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: '#818cf8', flexShrink: 0 },
+                    style: { background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: 'rgb(var(--theme-600))', flexShrink: 0 },
                     title: 'Save',
                   },
                   React.createElement(
@@ -391,14 +391,14 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
                     style: {
                       flex: 1, textAlign: 'left', padding: '8px 10px 8px 12px',
                       background: 'none', border: 'none',
-                      color: d.driveId === currentDeskId ? '#a5b4fc' : '#e5e7eb',
+                      color: d.driveId === currentDeskId ? 'rgb(var(--theme-700))' : 'rgb(var(--theme-900))',
                       fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
                       minWidth: 0,
                     },
-                    onMouseEnter: (e) => { if (d.driveId !== currentDeskId) e.currentTarget.closest('div').style.background = '#2d3748'; },
+                    onMouseEnter: (e) => { if (d.driveId !== currentDeskId) e.currentTarget.closest('div').style.background = '#f3f4f6'; },
                     onMouseLeave: (e) => { if (d.driveId !== currentDeskId) e.currentTarget.closest('div').style.background = 'none'; },
                   },
-                  d.driveId === currentDeskId && React.createElement('span', { style: { color: '#818cf8', fontSize: 8, lineHeight: 1, flexShrink: 0 } }, '●'),
+                  d.driveId === currentDeskId && React.createElement('span', { style: { color: 'rgb(var(--theme-600))', fontSize: 8, lineHeight: 1, flexShrink: 0 } }, '●'),
                   React.createElement('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, d.name || 'Untitled Desk')
                 ),
                 onRename && React.createElement(
@@ -410,7 +410,7 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
                       padding: '8px 10px', color: '#4b5563', flexShrink: 0,
                     },
                     title: 'Rename desk',
-                    onMouseEnter: (e) => { e.currentTarget.style.color = '#9ca3af'; },
+                    onMouseEnter: (e) => { e.currentTarget.style.color = '#111827'; },
                     onMouseLeave: (e) => { e.currentTarget.style.color = '#4b5563'; },
                   },
                   React.createElement(
@@ -429,10 +429,10 @@ const DeskSelector = ({ desks, currentDeskId, onSelect, onRename }) => {
 // --- Inline search to add existing items to desk ---
 
 const subColor = (sub) => {
-  if (sub === 'channel') return 'bg-red-900/60 text-red-200';
-  if (sub === 'desk') return 'bg-indigo-900/60 text-indigo-200';
-  if (sub === 'notes') return 'bg-emerald-900/60 text-emerald-200';
-  return 'bg-gray-700 text-gray-300';
+  if (sub === 'channel') return 'bg-red-100 text-red-700';
+  if (sub === 'desk') return 'bg-theme-100 text-theme-700';
+  if (sub === 'notes') return 'bg-emerald-100 text-emerald-700';
+  return 'bg-gray-200 text-gray-700';
 };
 
 const FILTER_TABS = [
@@ -535,8 +535,8 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
         onFocus: () => setOpen(true),
         onBlur: () => setTimeout(() => setOpen(false), 150),
         style: {
-          background: '#1f2937', border: '1px solid #374151', borderRadius: 10,
-          padding: '8px 32px 8px 12px', fontSize: 13, color: '#e5e7eb',
+          background: 'rgb(var(--theme-50))', border: '1px solid #e5e7eb', borderRadius: 10,
+          padding: '8px 32px 8px 12px', fontSize: 13, color: 'rgb(var(--theme-900))',
           outline: 'none', width: 210,
         },
       }),
@@ -551,7 +551,7 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
       {
         style: {
           position: 'absolute', top: 'calc(100% + 4px)', right: 0,
-          background: '#1f2937', border: '1px solid #374151', borderRadius: 10,
+          background: 'rgb(var(--theme-50))', border: '1px solid #e5e7eb', borderRadius: 10,
           boxShadow: '0 8px 24px rgba(0,0,0,0.4)', zIndex: 50,
           width: 300,
         },
@@ -559,7 +559,7 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
       // Active tag filters
       tagFilters.length > 0 && React.createElement(
         'div',
-        { style: { display: 'flex', flexWrap: 'wrap', gap: 4, padding: '8px 10px', borderBottom: '1px solid #111827' } },
+        { style: { display: 'flex', flexWrap: 'wrap', gap: 4, padding: '8px 10px', borderBottom: '1px solid #e5e7eb' } },
         tagFilters.map((t) =>
           React.createElement(
             'button',
@@ -569,7 +569,7 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
               style: {
                 display: 'flex', alignItems: 'center', gap: 3,
                 padding: '2px 6px', borderRadius: 5, fontSize: 11, fontWeight: 600,
-                background: '#312e81', color: '#a5b4fc', border: '1px solid #4338ca',
+                background: 'rgb(var(--theme-100))', color: 'rgb(var(--theme-700))', border: '1px solid rgb(var(--theme-300))',
                 cursor: 'pointer',
               },
               title: 'Remove tag filter',
@@ -582,7 +582,7 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
       // Tag suggestions matching the current query
       matchingTags.length > 0 && React.createElement(
         'div',
-        { style: { padding: '6px 10px', borderBottom: '1px solid #111827' } },
+        { style: { padding: '6px 10px', borderBottom: '1px solid #e5e7eb' } },
         React.createElement('p', { style: { fontSize: 10, color: '#6b7280', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'Tags'),
         React.createElement(
           'div',
@@ -595,7 +595,7 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
                 onMouseDown: (e) => { e.preventDefault(); addTagFilter(t); },
                 style: {
                   padding: '2px 7px', borderRadius: 5, fontSize: 11, fontWeight: 600,
-                  background: '#1e1b4b', color: '#818cf8', border: '1px solid #3730a3',
+                  background: 'rgb(var(--theme-100))', color: 'rgb(var(--theme-700))', border: '1px solid rgb(var(--theme-300))',
                   cursor: 'pointer',
                 },
               },
@@ -607,7 +607,7 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
       // Type filter tabs
       visibleTabs.length > 2 && React.createElement(
         'div',
-        { style: { display: 'flex', gap: 4, padding: '8px 8px', flexWrap: 'wrap', borderBottom: '1px solid #111827' } },
+        { style: { display: 'flex', gap: 4, padding: '8px 8px', flexWrap: 'wrap', borderBottom: '1px solid #e5e7eb' } },
         visibleTabs.map(({ key, label }) =>
           React.createElement(
             'button',
@@ -617,8 +617,8 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
               style: {
                 padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
                 cursor: 'pointer', border: 'none',
-                background: filter === key ? '#4f46e5' : '#374151',
-                color: filter === key ? '#fff' : '#9ca3af',
+                background: filter === key ? 'rgb(var(--theme-600))' : '#e5e7eb',
+                color: filter === key ? 'rgb(var(--theme-button-text))' : '#4b5563',
               },
             },
             label
@@ -641,9 +641,9 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
                   style: {
                     width: '100%', display: 'flex', alignItems: 'center', gap: 8,
                     padding: '8px 12px', background: 'none', border: 'none', cursor: 'pointer',
-                    textAlign: 'left', color: '#d1d5db', fontSize: 13, borderBottom: '1px solid #111827',
+                    textAlign: 'left', color: 'rgb(var(--theme-900))', fontSize: 13, borderBottom: '1px solid #e5e7eb',
                   },
-                  onMouseEnter: (e) => { e.currentTarget.style.background = '#374151'; },
+                  onMouseEnter: (e) => { e.currentTarget.style.background = '#f3f4f6'; },
                   onMouseLeave: (e) => { e.currentTarget.style.background = 'none'; },
                 },
                 React.createElement('span', { className: `text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${subColor(sub)}` }, sub),
@@ -654,7 +654,7 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
                   tags.slice(0, 2).map((t) =>
                     React.createElement(
                       'span',
-                      { key: t, style: { fontSize: 10, color: '#818cf8', background: '#1e1b4b', borderRadius: 4, padding: '1px 4px' } },
+                      { key: t, style: { fontSize: 10, color: 'rgb(var(--theme-700))', background: 'rgb(var(--theme-100))', borderRadius: 4, padding: '1px 4px' } },
                       t
                     )
                   )
@@ -1561,7 +1561,7 @@ export const Desk = ({
       className: 'flex-1 min-h-0 w-full',
       style: {
         position: 'relative', overflow: 'hidden',
-        background: '#111827',
+        background: 'rgb(var(--theme-100))',
         cursor: isPanning ? 'grabbing' : spaceRef.current ? 'grab' : 'default',
         touchAction: 'none',
       },
@@ -1585,8 +1585,8 @@ export const Desk = ({
         top: marqueeBox.y,
         width: marqueeBox.w,
         height: marqueeBox.h,
-        border: '1px dashed #a78bfa',
-        background: 'rgba(99,102,241,0.12)',
+        border: '1px dashed rgb(var(--theme-500))',
+        background: 'rgb(var(--theme-500) / 0.12)',
         pointerEvents: 'none',
         zIndex: 34,
       },
@@ -1619,7 +1619,7 @@ export const Desk = ({
               orient: 'auto',
               markerUnits: 'strokeWidth',
             },
-            React.createElement('path', { d: 'M0,0 L0,6 L7,3 z', fill: '#60a5fa' })
+            React.createElement('path', { d: 'M0,0 L0,6 L7,3 z', fill: '#2563eb' })
           ),
           React.createElement(
             'marker',
@@ -1632,7 +1632,7 @@ export const Desk = ({
               orient: 'auto',
               markerUnits: 'strokeWidth',
             },
-            React.createElement('path', { d: 'M0,0 L0,6 L7,3 z', fill: '#c4b5fd' })
+            React.createElement('path', { d: 'M0,0 L0,6 L7,3 z', fill: '#7c3aed' })
           )
         ),
         visibleConnections.map(({ conn, points }) =>
@@ -1641,7 +1641,7 @@ export const Desk = ({
             { key: conn.id },
             React.createElement('path', {
               d: pointsToPath(points),
-              stroke: selectedConnectionIds.includes(conn.id) ? '#c4b5fd' : '#60a5fa',
+              stroke: selectedConnectionIds.includes(conn.id) ? '#7c3aed' : '#2563eb',
               strokeWidth: selectedConnectionIds.includes(conn.id) ? 3 : 2,
               fill: 'none',
               markerEnd: selectedConnectionIds.includes(conn.id) ? 'url(#desk-conn-arrow-selected)' : 'url(#desk-conn-arrow)',
@@ -1673,8 +1673,8 @@ export const Desk = ({
                 cx: p.x,
                 cy: p.y,
                 r: 6,
-                fill: selectedNodeIds.includes(`${conn.id}:${idx}`) ? '#4c1d95' : '#111827',
-                stroke: selectedNodeIds.includes(`${conn.id}:${idx}`) ? '#ddd6fe' : '#93c5fd',
+                fill: selectedNodeIds.includes(`${conn.id}:${idx}`) ? 'rgb(var(--theme-700))' : 'rgb(var(--theme-100))',
+                stroke: selectedNodeIds.includes(`${conn.id}:${idx}`) ? '#7c3aed' : '#2563eb',
                 strokeWidth: selectedNodeIds.includes(`${conn.id}:${idx}`) ? 2.6 : 2,
                 style: { cursor: 'grab', pointerEvents: 'all' },
                 onPointerDown: (e) => {
@@ -1704,7 +1704,7 @@ export const Desk = ({
               top: pos.y,
               width: CARD_W,
               userSelect: 'none',
-              outline: selectedItemKeys.includes(key) ? '2px solid #c4b5fd' : 'none',
+              outline: selectedItemKeys.includes(key) ? '2px solid #7c3aed' : 'none',
               outlineOffset: 2,
               borderRadius: 10,
             },
@@ -1724,8 +1724,8 @@ export const Desk = ({
             'div',
             {
               style: {
-                height: DRAG_BAR_H, background: '#1f2937', borderRadius: '8px 8px 0 0',
-                border: '1px solid #374151', borderBottom: 'none',
+                height: DRAG_BAR_H, background: 'rgb(var(--theme-50))', borderRadius: '8px 8px 0 0',
+                border: '1px solid #e5e7eb', borderBottom: 'none',
                 cursor: 'grab', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 padding: '0 8px', color: '#4b5563', touchAction: 'none',
               },
@@ -1752,7 +1752,7 @@ export const Desk = ({
               style: {
                 borderRadius: readOnly ? 8 : '0 0 8px 8px',
                 overflow: 'hidden',
-                outline: connectMode && connectStartKey === key ? '2px solid #818cf8' : 'none',
+                outline: connectMode && connectStartKey === key ? '2px solid rgb(var(--theme-600))' : 'none',
               },
             },
             entry._entryType === 'pending'
@@ -1777,9 +1777,9 @@ export const Desk = ({
                         alignItems: 'center',
                         justifyContent: 'center',
                         gap: 8,
-                        background: '#1f2937',
+                        background: 'rgb(var(--theme-50))',
                         borderRadius: readOnly ? 8 : '0 0 8px 8px',
-                        border: '1px dashed #374151',
+                        border: '1px dashed #d1d5db',
                         color: '#6b7280',
                       },
                     },
@@ -1791,10 +1791,10 @@ export const Desk = ({
                         viewBox: '0 0 24 24',
                         fill: 'none',
                       },
-                      React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#374151', strokeWidth: 3 }),
+                      React.createElement('circle', { cx: 12, cy: 12, r: 10, stroke: '#e5e7eb', strokeWidth: 3 }),
                       React.createElement('path', {
                         d: 'M12 2a10 10 0 0 1 10 10',
-                        stroke: '#818cf8',
+                        stroke: 'rgb(var(--theme-600))',
                         strokeWidth: 3,
                         strokeLinecap: 'round',
                       }),
@@ -1824,6 +1824,7 @@ export const Desk = ({
                   onSetCoverFromLibrary: !readOnly ? (v) => setCoverPickerTarget(v) : undefined,
                   availableTags,
                   itemDownloadProgress,
+                  hideTitleUntilHover: true,
                 })
               : entry._entryType === 'channel'
               ? React.createElement(DataTile, {
@@ -1840,8 +1841,9 @@ export const Desk = ({
                   shareableEmails: shareableEmails || [],
                   onRename: onRenameChannel ? (c, name) => onRenameChannel(c, 'channels', name) : undefined,
                   availableTags,
+                  hideTitleUntilHover: true,
                 })
-              : React.createElement(DataTile, { tileType: 'desk', desk: entry, onSelect: onSelectDesk, readOnly: true })
+              : React.createElement(DataTile, { tileType: 'desk', desk: entry, onSelect: onSelectDesk, readOnly: true, hideTitleUntilHover: true })
           )
         )
       ),
@@ -1875,9 +1877,9 @@ export const Desk = ({
               style: {
                 height: 18, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 padding: '0 4px', cursor: 'grab', color: '#4b5563', fontSize: 10,
-                background: editingTextId === ti.id ? '#1f2937' : 'transparent',
+                background: editingTextId === ti.id ? 'rgb(var(--theme-50))' : 'transparent',
                 borderRadius: '6px 6px 0 0',
-                border: editingTextId === ti.id ? '1px solid #374151' : 'none',
+                border: editingTextId === ti.id ? '1px solid #e5e7eb' : 'none',
                 borderBottom: 'none', touchAction: 'none',
               },
               onPointerDown: (e) => onTextHandlePointerDown(e, ti.id),
@@ -1895,7 +1897,7 @@ export const Desk = ({
                   onClick: (e) => { e.stopPropagation(); setTextFontSizeMenu(textFontSizeMenu === ti.id ? null : ti.id); },
                   style: {
                     background: 'none', border: 'none', cursor: 'pointer',
-                    color: '#9ca3af', fontSize: 10, padding: '0 3px',
+                    color: '#6b7280', fontSize: 10, padding: '0 3px',
                   },
                   title: 'Font size',
                   onPointerDown: (e) => e.stopPropagation(),
@@ -1921,7 +1923,7 @@ export const Desk = ({
             {
               style: {
                 position: 'absolute', top: 18, right: 0, zIndex: 50,
-                background: '#1f2937', border: '1px solid #374151', borderRadius: 8,
+                background: 'rgb(var(--theme-50))', border: '1px solid #e5e7eb', borderRadius: 8,
                 boxShadow: '0 4px 16px rgba(0,0,0,0.4)', padding: 4,
                 display: 'flex', flexWrap: 'wrap', gap: 2, width: 140,
               },
@@ -1936,8 +1938,8 @@ export const Desk = ({
                   style: {
                     padding: '3px 7px', borderRadius: 5, fontSize: 11, fontWeight: 600,
                     cursor: 'pointer', border: 'none',
-                    background: (ti.fontSize || 16) === sz ? '#4f46e5' : '#374151',
-                    color: (ti.fontSize || 16) === sz ? '#fff' : '#9ca3af',
+                    background: (ti.fontSize || 16) === sz ? 'rgb(var(--theme-600))' : '#e5e7eb',
+                    color: (ti.fontSize || 16) === sz ? 'rgb(var(--theme-button-text))' : '#4b5563',
                   },
                 },
                 `${sz}px`
@@ -2020,10 +2022,10 @@ export const Desk = ({
                   rerender();
                 },
                 style: {
-                  background: '#111827',
-                  border: selectedTextIds.includes(ti.id) ? '2px solid #c4b5fd' : '1px solid #4f46e5',
+                  background: 'rgb(var(--theme-100))',
+                  border: selectedTextIds.includes(ti.id) ? '2px solid #7c3aed' : '1px solid rgb(var(--theme-600))',
                   borderRadius: 6,
-                  padding: '4px 8px', fontSize: ti.fontSize || 16, color: '#e5e7eb',
+                  padding: '4px 8px', fontSize: ti.fontSize || 16, color: 'rgb(var(--theme-900))',
                   outline: 'none', minWidth: 120, minHeight: (ti.fontSize || 16) + 16,
                   width: Math.max(120, Number(ti.width) || 180),
                   height: Math.max((ti.fontSize || 16) + 16, Number(ti.height) || 40),
@@ -2037,18 +2039,18 @@ export const Desk = ({
                 {
                   onDoubleClick: () => { if (!readOnly) setEditingTextId(ti.id); },
                   style: {
-                    fontSize: ti.fontSize || 16, color: '#e5e7eb', whiteSpace: 'pre-wrap',
+                    fontSize: ti.fontSize || 16, color: 'rgb(var(--theme-900))', whiteSpace: 'pre-wrap',
                     cursor: readOnly ? 'default' : 'text', padding: '4px 8px',
                     minWidth: 40, minHeight: (ti.fontSize || 16) + 8,
                     width: Math.max(40, Number(ti.width) || 180),
                     height: Math.max((ti.fontSize || 16) + 8, Number(ti.height) || 40),
                     borderRadius: 4,
-                    border: selectedTextIds.includes(ti.id) ? '2px solid #c4b5fd' : '1px solid transparent',
+                    border: selectedTextIds.includes(ti.id) ? '2px solid #7c3aed' : '1px solid transparent',
                     lineHeight: 1.4,
                     boxSizing: 'border-box',
                     overflow: 'hidden',
                   },
-                  onMouseEnter: (e) => { if (!readOnly) e.currentTarget.style.border = '1px dashed #374151'; },
+                  onMouseEnter: (e) => { if (!readOnly) e.currentTarget.style.border = '1px dashed #9ca3af'; },
                   onMouseLeave: (e) => { e.currentTarget.style.border = '1px solid transparent'; },
                 },
                 ti.text || (readOnly ? '' : 'Double-click to edit')
@@ -2067,7 +2069,7 @@ export const Desk = ({
               cy: points[0].y,
               r: 5.5,
               fill: '#1e293b',
-              stroke: '#60a5fa',
+              stroke: '#2563eb',
               strokeWidth: 2,
               style: { pointerEvents: 'none' },
             }),
@@ -2076,7 +2078,7 @@ export const Desk = ({
               cy: points[points.length - 1].y,
               r: 5.5,
               fill: '#1e293b',
-              stroke: '#60a5fa',
+              stroke: '#2563eb',
               strokeWidth: 2,
               style: { pointerEvents: 'none' },
             })
@@ -2122,13 +2124,13 @@ export const Desk = ({
           onClick: addTextItemAtCenter,
           title: 'Add text (T)',
           style: {
-            background: '#1f2937', border: '1px solid #374151', borderRadius: 10,
-            padding: '7px 12px', fontSize: 13, color: '#e5e7eb',
+            background: 'rgb(var(--theme-50))', border: '1px solid #e5e7eb', borderRadius: 10,
+            padding: '7px 12px', fontSize: 13, color: 'rgb(var(--theme-900))',
             cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5,
             touchAction: 'manipulation',
           },
-          onMouseEnter: (e) => { e.currentTarget.style.background = '#374151'; },
-          onMouseLeave: (e) => { e.currentTarget.style.background = '#1f2937'; },
+          onMouseEnter: (e) => { e.currentTarget.style.background = 'rgb(var(--theme-100))'; },
+          onMouseLeave: (e) => { e.currentTarget.style.background = 'rgb(var(--theme-50))'; },
         },
         React.createElement(
           'svg', { xmlns: 'http://www.w3.org/2000/svg', width: 14, height: 14, fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2.5 },
@@ -2155,8 +2157,8 @@ export const Desk = ({
           left: slashMenu.x,
           width: 220,
           zIndex: 40,
-          background: '#1f2937',
-          border: '1px solid #374151',
+          background: 'rgb(var(--theme-50))',
+          border: '1px solid #e5e7eb',
           borderRadius: 10,
           padding: 10,
           boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
@@ -2170,12 +2172,12 @@ export const Desk = ({
           onClick: addTextItem,
           style: {
             width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-            border: '1px solid #374151', borderRadius: 8, background: '#111827',
-            color: '#e5e7eb', padding: '8px 10px', fontSize: 13, cursor: 'pointer',
+            border: '1px solid #e5e7eb', borderRadius: 8, background: 'rgb(var(--theme-100))',
+            color: 'rgb(var(--theme-900))', padding: '8px 10px', fontSize: 13, cursor: 'pointer',
             marginBottom: 8, textAlign: 'left',
           },
-          onMouseEnter: (e) => { e.currentTarget.style.background = '#1e293b'; },
-          onMouseLeave: (e) => { e.currentTarget.style.background = '#111827'; },
+          onMouseEnter: (e) => { e.currentTarget.style.background = 'rgb(var(--theme-200))'; },
+          onMouseLeave: (e) => { e.currentTarget.style.background = 'rgb(var(--theme-100))'; },
         },
         React.createElement(
           'svg', { xmlns: 'http://www.w3.org/2000/svg', width: 14, height: 14, fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2 },
@@ -2184,9 +2186,9 @@ export const Desk = ({
         'Text'
       ),
       // Connections section
-      React.createElement('p', { style: { color: '#9ca3af', fontSize: 11, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'Connections'),
-      React.createElement('p', { style: { color: '#a5b4fc', fontSize: 11, lineHeight: 1.5, marginBottom: 8 } }, 'Line edit mode is active. Press "/" again to exit.'),
-      connectMode && React.createElement('p', { style: { color: '#a5b4fc', fontSize: 11, lineHeight: 1.5, marginBottom: 8 } }, connectStartKey ? 'Select the second item to complete line.' : 'Click first item, then second item.'),
+      React.createElement('p', { style: { color: '#6b7280', fontSize: 11, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'Connections'),
+      React.createElement('p', { style: { color: 'rgb(var(--theme-700))', fontSize: 11, lineHeight: 1.5, marginBottom: 8 } }, 'Line edit mode is active. Press "/" again to exit.'),
+      connectMode && React.createElement('p', { style: { color: 'rgb(var(--theme-700))', fontSize: 11, lineHeight: 1.5, marginBottom: 8 } }, connectStartKey ? 'Select the second item to complete line.' : 'Click first item, then second item.'),
       connectMode && connectStartKey && React.createElement(
         'button',
         {
@@ -2196,10 +2198,10 @@ export const Desk = ({
           },
           style: {
             width: '100%',
-            border: '1px solid #374151',
+            border: '1px solid #e5e7eb',
             borderRadius: 8,
-            background: '#111827',
-            color: '#9ca3af',
+            background: 'rgb(var(--theme-100))',
+            color: '#6b7280',
             padding: '6px 8px',
             fontSize: 12,
             cursor: 'pointer',
@@ -2214,9 +2216,9 @@ export const Desk = ({
       'div',
       {
         style: {
-          position: 'absolute', bottom: 16, left: 16, zIndex: 30, background: '#1f2937',
-          border: '1px solid #374151', borderRadius: 8, padding: '4px 10px',
-          color: '#9ca3af', fontSize: 12, fontFamily: 'monospace', pointerEvents: 'none',
+          position: 'absolute', bottom: 16, left: 16, zIndex: 30, background: 'rgb(var(--theme-50))',
+          border: '1px solid #e5e7eb', borderRadius: 8, padding: '4px 10px',
+          color: '#6b7280', fontSize: 12, fontFamily: 'monospace', pointerEvents: 'none',
         },
       },
       `${Math.round(zoom * 100)}%`
@@ -2235,7 +2237,7 @@ export const Desk = ({
         'p',
         { style: { color: '#374151', fontSize: 14, maxWidth: 360, textAlign: 'center', lineHeight: 1.5 } },
         'This desk is empty. Use the search bar or ',
-        React.createElement('span', { style: { color: '#a5b4fc', fontWeight: 600 } }, '+ Add Content'),
+        React.createElement('span', { style: { color: 'rgb(var(--theme-700))', fontWeight: 600 } }, '+ Add Content'),
         ' (top-right) to place items here.'
       )
     )

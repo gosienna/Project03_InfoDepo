@@ -34,14 +34,14 @@ export const CoverImagePickerModal = ({ images, onSelect, onClose }) => {
     },
     React.createElement(
       'div',
-      { className: 'bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-[600px] max-w-[95vw] max-h-[80vh] flex flex-col' },
+      { className: 'bg-theme-50 border border-gray-200 rounded-2xl shadow-2xl w-[600px] max-w-[95vw] max-h-[80vh] flex flex-col' },
       React.createElement(
         'div',
-        { className: 'flex items-center justify-between px-5 py-4 border-b border-gray-700' },
-        React.createElement('h2', { className: 'text-white font-semibold text-base' }, 'Choose Cover from Library'),
+        { className: 'flex items-center justify-between px-5 py-4 border-b border-gray-200' },
+        React.createElement('h2', { className: 'text-theme-900 font-semibold text-base' }, 'Choose Cover from Library'),
         React.createElement(
           'button',
-          { onClick: onClose, className: 'text-gray-400 hover:text-white transition-colors' },
+          { onClick: onClose, className: 'text-gray-500 hover:text-gray-800 transition-colors' },
           React.createElement(
             'svg',
             { xmlns: 'http://www.w3.org/2000/svg', className: 'h-5 w-5', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor' },
@@ -55,7 +55,7 @@ export const CoverImagePickerModal = ({ images, onSelect, onClose }) => {
         (!images || images.length === 0)
           ? React.createElement(
               'p',
-              { className: 'text-gray-400 text-sm text-center py-8' },
+              { className: 'text-theme-700 text-sm text-center py-8' },
               'No images in library yet — import an image first.'
             )
           : React.createElement(
@@ -68,7 +68,7 @@ export const CoverImagePickerModal = ({ images, onSelect, onClose }) => {
                   {
                     key: img.id,
                     onClick: () => onSelect(img),
-                    className: 'group relative aspect-square rounded-lg overflow-hidden border border-gray-700 hover:border-indigo-500 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500',
+                    className: 'group relative aspect-square rounded-lg overflow-hidden border border-gray-200 hover:border-theme-500 transition-all focus:outline-none focus:ring-2 focus:ring-theme-500',
                   },
                   url
                     ? React.createElement('img', {
@@ -76,8 +76,8 @@ export const CoverImagePickerModal = ({ images, onSelect, onClose }) => {
                         alt: img.name,
                         className: 'w-full h-full object-cover',
                       })
-                    : React.createElement('div', { className: 'w-full h-full bg-gray-800 flex items-center justify-center' },
-                        React.createElement('span', { className: 'text-gray-500 text-xs' }, '…')
+                    : React.createElement('div', { className: 'w-full h-full bg-theme-100 flex items-center justify-center' },
+                        React.createElement('span', { className: 'text-theme-500 text-xs' }, '…')
                       ),
                   React.createElement(
                     'div',
