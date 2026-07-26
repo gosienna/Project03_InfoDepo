@@ -47,14 +47,20 @@ const estimateTextBounds = (item) => {
   };
 };
 
-const cardBoxFor = (pos) => ({
-  left: pos.x,
-  right: pos.x + CARD_W,
-  top: pos.y,
-  bottom: pos.y + CARD_H,
-  cx: pos.x + CARD_W / 2,
-  cy: pos.y + CARD_H / 2,
-});
+// `size` is the actually-rendered card footprint (measured via ResizeObserver);
+// falls back to the nominal CARD_W/CARD_H before the first measurement lands.
+const cardBoxFor = (pos, size) => {
+  const w = size?.width || CARD_W;
+  const h = size?.height || CARD_H;
+  return {
+    left: pos.x,
+    right: pos.x + w,
+    top: pos.y,
+    bottom: pos.y + h,
+    cx: pos.x + w / 2,
+    cy: pos.y + h / 2,
+  };
+};
 
 const edgeAnchors = (box) => ([
   { edge: 'left', x: box.left, y: box.cy },
@@ -66,13 +72,26 @@ const edgeAnchors = (box) => ([
 const autoRoute = (from, to) => {
   const f = snapPoint(from);
   const t = snapPoint(to);
+  const fromVertical = from.edge === 'top' || from.edge === 'bottom';
+  const toVertical = to.edge === 'top' || to.edge === 'bottom';
+  if (fromVertical && toVertical) {
+    const my = snapToGrid((f.y + t.y) / 2);
+    return [f, { x: f.x, y: my }, { x: t.x, y: my }, t];
+  }
+  if (fromVertical !== toVertical) {
+    // Mixed exit/entry edges: bend once, leaving along the source edge's
+    // axis and arriving along the target edge's axis so the arrowhead at
+    // the end always points along the direction it actually enters from.
+    const corner = fromVertical ? { x: f.x, y: t.y } : { x: t.x, y: f.y };
+    return [f, corner, t];
+  }
   const mx = snapToGrid((f.x + t.x) / 2);
   return [f, { x: mx, y: f.y }, { x: mx, y: t.y }, t];
 };
 
-const closestAnchors = (fromPos, toPos) => {
-  const fromBox = cardBoxFor(fromPos);
-  const toBox = cardBoxFor(toPos);
+const closestAnchors = (fromPos, toPos, fromSize, toSize) => {
+  const fromBox = cardBoxFor(fromPos, fromSize);
+  const toBox = cardBoxFor(toPos, toSize);
   const a = edgeAnchors(fromBox);
   const b = edgeAnchors(toBox);
   const dx = toBox.cx - fromBox.cx;
@@ -94,14 +113,24 @@ const closestAnchors = (fromPos, toPos) => {
 
 const pointsToPath = (points) => {
   if (!points || points.length < 2) return '';
-  return `M ${points[0].x} ${points[0].y} ${points.slice(1).map((p) => `L ${p.x} ${p.y}`).join(' ')}`;
+  // Drop consecutive duplicate points so the final segment is never
+  // zero-length — a zero-length last segment leaves the `orient="auto"`
+  // arrowhead marker with no direction to follow, and it falls back to
+  // pointing along the positive x-axis (i.e. always to the right).
+  const deduped = points.reduce((acc, p) => {
+    const prev = acc[acc.length - 1];
+    if (!prev || prev.x !== p.x || prev.y !== p.y) acc.push(p);
+    return acc;
+  }, []);
+  if (deduped.length < 2) return '';
+  return `M ${deduped[0].x} ${deduped[0].y} ${deduped.slice(1).map((p) => `L ${p.x} ${p.y}`).join(' ')}`;
 };
 
-const connectionPointsFor = (conn, layout) => {
+const connectionPointsFor = (conn, layout, sizes) => {
   const fromPos = layout?.[conn.fromKey];
   const toPos = layout?.[conn.toKey];
   if (!fromPos || !toPos) return null;
-  const anchors = closestAnchors(fromPos, toPos);
+  const anchors = closestAnchors(fromPos, toPos, sizes?.[conn.fromKey], sizes?.[conn.toKey]);
   if (!anchors) return null;
   const start = snapPoint(anchors.from);
   const end = snapPoint(anchors.to);
@@ -109,7 +138,7 @@ const connectionPointsFor = (conn, layout) => {
     const mids = Array.isArray(conn.route.points) ? conn.route.points.map(snapPoint) : [];
     return [start, ...mids, end];
   }
-  return autoRoute(start, end);
+  return autoRoute({ ...start, edge: anchors.from.edge }, { ...end, edge: anchors.to.edge });
 };
 
 // --- Dot grid background ---
@@ -722,6 +751,43 @@ export const Desk = ({
   const viewportRef = useRef(null);
   const historyRef = useRef({ past: [], future: [] });
 
+  // Real, rendered card footprints (drag bar + content), keyed by layout key.
+  // Connection routing uses these instead of the nominal CARD_W/CARD_H so
+  // arrowheads land on the card's actual edge rather than partway into it.
+  const cardSizeRef = useRef({});
+  const cardResizeObserverRef = useRef(null);
+  const sizeTickRafRef = useRef(null);
+  const [sizeTick, setSizeTick] = useState(0);
+  const scheduleSizeTick = useCallback(() => {
+    if (sizeTickRafRef.current) return;
+    sizeTickRafRef.current = requestAnimationFrame(() => {
+      sizeTickRafRef.current = null;
+      setSizeTick((n) => n + 1);
+    });
+  }, []);
+
+  useEffect(() => {
+    cardResizeObserverRef.current = new ResizeObserver((entries) => {
+      let changed = false;
+      for (const entry of entries) {
+        const key = entry.target.getAttribute('data-desk-card-key');
+        if (!key) continue;
+        const { width, height } = entry.contentRect;
+        const prev = cardSizeRef.current[key];
+        if (!prev || Math.abs(prev.width - width) > 0.5 || Math.abs(prev.height - height) > 0.5) {
+          cardSizeRef.current = { ...cardSizeRef.current, [key]: { width, height } };
+          changed = true;
+        }
+      }
+      if (changed) scheduleSizeTick();
+    });
+    return () => {
+      cardResizeObserverRef.current?.disconnect();
+      cardResizeObserverRef.current = null;
+      if (sizeTickRafRef.current) cancelAnimationFrame(sizeTickRafRef.current);
+    };
+  }, [scheduleSizeTick]);
+
   // Refs for real-time drag values (avoids stale closures in event handlers)
   const panRef = useRef({ x: 0, y: 0 });
   const zoomRef = useRef(1);
@@ -1096,7 +1162,7 @@ export const Desk = ({
     setSelectedTextIds(textIds);
 
     const connIds = (connectionsRef.current || [])
-      .map((conn) => ({ conn, points: connectionPointsFor(conn, layoutRef.current || {}) }))
+      .map((conn) => ({ conn, points: connectionPointsFor(conn, layoutRef.current || {}, cardSizeRef.current) }))
       .filter((row) => row.points && row.points.length >= 2)
       .filter(({ points }) => {
         const xs = points.map((p) => p.x);
@@ -1111,7 +1177,7 @@ export const Desk = ({
     setSelectedConnectionIds(connIds);
     const nodeIds = [];
     (connectionsRef.current || []).forEach((conn) => {
-      const pts = connectionPointsFor(conn, layoutRef.current || {});
+      const pts = connectionPointsFor(conn, layoutRef.current || {}, cardSizeRef.current);
       if (!pts || pts.length < 3) return;
       const mids = conn.route?.mode === 'manual'
         ? (Array.isArray(conn.route?.points) ? conn.route.points : [])
@@ -1401,6 +1467,15 @@ export const Desk = ({
     });
   }, [renderTick, items, channels, desks]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Attach the size observer to any card DOM node not already tracked (new
+  // items dropped on the desk, or ones that just re-mounted).
+  useEffect(() => {
+    const observer = cardResizeObserverRef.current;
+    const root = viewportRef.current;
+    if (!observer || !root) return;
+    root.querySelectorAll('[data-desk-card-key]').forEach((el) => observer.observe(el));
+  }, [layoutEntries]);
+
   // Pull layout tiles that reference real Drive ids not yet in IndexedDB.
   useEffect(() => {
     if (readOnly || !onPullMissingLayoutRefs || !desk?.driveId) return;
@@ -1441,7 +1516,7 @@ export const Desk = ({
   }, [items, channels]);
 
   const routePointsFor = useCallback((conn) => {
-    return connectionPointsFor(conn, layoutRef.current || {});
+    return connectionPointsFor(conn, layoutRef.current || {}, cardSizeRef.current);
   }, []);
 
   const visibleConnections = useMemo(() => {
@@ -1450,7 +1525,7 @@ export const Desk = ({
       .filter((conn) => keys.has(conn.fromKey) && keys.has(conn.toKey) && conn.fromKey !== conn.toKey)
       .map((conn) => ({ conn, points: routePointsFor(conn) }))
       .filter((row) => row.points && row.points.length >= 2);
-  }, [renderTick, routePointsFor]);
+  }, [renderTick, sizeTick, routePointsFor]);
 
   const handlePickConnectionNode = useCallback((key) => {
     if (!connectMode) return false;
@@ -1602,102 +1677,12 @@ export const Desk = ({
           willChange: 'transform',
         },
       },
-      React.createElement(
-        'svg',
-        { style: { position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' } },
-        React.createElement(
-          'defs',
-          null,
-          React.createElement(
-            'marker',
-            {
-              id: 'desk-conn-arrow',
-              markerWidth: 8,
-              markerHeight: 8,
-              refX: 7,
-              refY: 3,
-              orient: 'auto',
-              markerUnits: 'strokeWidth',
-            },
-            React.createElement('path', { d: 'M0,0 L0,6 L7,3 z', fill: '#2563eb' })
-          ),
-          React.createElement(
-            'marker',
-            {
-              id: 'desk-conn-arrow-selected',
-              markerWidth: 8,
-              markerHeight: 8,
-              refX: 7,
-              refY: 3,
-              orient: 'auto',
-              markerUnits: 'strokeWidth',
-            },
-            React.createElement('path', { d: 'M0,0 L0,6 L7,3 z', fill: '#7c3aed' })
-          )
-        ),
-        visibleConnections.map(({ conn, points }) =>
-          React.createElement(
-            'g',
-            { key: conn.id },
-            React.createElement('path', {
-              d: pointsToPath(points),
-              stroke: selectedConnectionIds.includes(conn.id) ? '#7c3aed' : '#2563eb',
-              strokeWidth: selectedConnectionIds.includes(conn.id) ? 3 : 2,
-              fill: 'none',
-              markerEnd: selectedConnectionIds.includes(conn.id) ? 'url(#desk-conn-arrow-selected)' : 'url(#desk-conn-arrow)',
-              pointerEvents: connectMode ? 'stroke' : 'none',
-              style: { pointerEvents: connectMode ? 'stroke' : 'none' },
-              onPointerDown: (e) => {
-                if (readOnly || !connectMode) return;
-                e.stopPropagation();
-                setSelectedConnectionIds([conn.id]);
-              },
-            }),
-            !readOnly && connectMode && React.createElement('path', {
-              d: pointsToPath(points),
-              stroke: 'transparent',
-              strokeWidth: 16,
-              fill: 'none',
-              pointerEvents: 'stroke',
-              onPointerDown: (e) => {
-                e.stopPropagation();
-                setSelectedConnectionIds([conn.id]);
-              },
-            }),
-            !readOnly && connectMode && (conn.route?.mode === 'manual'
-              ? (Array.isArray(conn.route?.points) ? conn.route.points : [])
-              : points.slice(1, -1)
-            ).map((p, idx) =>
-              React.createElement('circle', {
-                key: `${conn.id}-h-${idx}`,
-                cx: p.x,
-                cy: p.y,
-                r: 6,
-                fill: selectedNodeIds.includes(`${conn.id}:${idx}`) ? 'rgb(var(--theme-700))' : 'rgb(var(--theme-100))',
-                stroke: selectedNodeIds.includes(`${conn.id}:${idx}`) ? '#7c3aed' : '#2563eb',
-                strokeWidth: selectedNodeIds.includes(`${conn.id}:${idx}`) ? 2.6 : 2,
-                style: { cursor: 'grab', pointerEvents: 'all' },
-                onPointerDown: (e) => {
-                  setSelectedConnectionIds([conn.id]);
-                  const nodeId = `${conn.id}:${idx}`;
-                  const additive = e.shiftKey || e.metaKey || e.ctrlKey;
-                  if (additive) {
-                    setSelectedNodeIds((prev) => prev.includes(nodeId) ? prev.filter((id) => id !== nodeId) : [...prev, nodeId]);
-                  }
-                  beginDragLineHandle(e, conn.id, idx, p);
-                },
-                onPointerMove: moveDragLineHandle,
-                onPointerUp: endDragLineHandle,
-              })
-            )
-          )
-        )
-      ),
       layoutEntries.map(({ key, pos, entry }) =>
         React.createElement(
           'div',
           {
             key,
+            'data-desk-card-key': key,
             style: {
               position: 'absolute',
               left: pos.x,
@@ -1824,7 +1809,6 @@ export const Desk = ({
                   onSetCoverFromLibrary: !readOnly ? (v) => setCoverPickerTarget(v) : undefined,
                   availableTags,
                   itemDownloadProgress,
-                  hideTitleUntilHover: true,
                 })
               : entry._entryType === 'channel'
               ? React.createElement(DataTile, {
@@ -1841,9 +1825,8 @@ export const Desk = ({
                   shareableEmails: shareableEmails || [],
                   onRename: onRenameChannel ? (c, name) => onRenameChannel(c, 'channels', name) : undefined,
                   availableTags,
-                  hideTitleUntilHover: true,
                 })
-              : React.createElement(DataTile, { tileType: 'desk', desk: entry, onSelect: onSelectDesk, readOnly: true, hideTitleUntilHover: true })
+              : React.createElement(DataTile, { tileType: 'desk', desk: entry, onSelect: onSelectDesk, readOnly: true })
           )
         )
       ),
@@ -2057,6 +2040,97 @@ export const Desk = ({
               )
         )
       ),
+      React.createElement(
+        'svg',
+        { style: { position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' } },
+        React.createElement(
+          'defs',
+          null,
+          React.createElement(
+            'marker',
+            {
+              id: 'desk-conn-arrow',
+              markerWidth: 8,
+              markerHeight: 8,
+              refX: 7,
+              refY: 3,
+              orient: 'auto',
+              markerUnits: 'strokeWidth',
+            },
+            React.createElement('path', { d: 'M0,0 L0,6 L7,3 z', fill: 'rgb(var(--theme-700))' })
+          ),
+          React.createElement(
+            'marker',
+            {
+              id: 'desk-conn-arrow-selected',
+              markerWidth: 8,
+              markerHeight: 8,
+              refX: 7,
+              refY: 3,
+              orient: 'auto',
+              markerUnits: 'strokeWidth',
+            },
+            React.createElement('path', { d: 'M0,0 L0,6 L7,3 z', fill: 'rgb(var(--theme-900))' })
+          )
+        ),
+        visibleConnections.map(({ conn, points }) =>
+          React.createElement(
+            'g',
+            { key: conn.id },
+            React.createElement('path', {
+              d: pointsToPath(points),
+              stroke: selectedConnectionIds.includes(conn.id) ? 'rgb(var(--theme-900))' : 'rgb(var(--theme-700))',
+              strokeWidth: selectedConnectionIds.includes(conn.id) ? 3 : 2,
+              fill: 'none',
+              markerEnd: selectedConnectionIds.includes(conn.id) ? 'url(#desk-conn-arrow-selected)' : 'url(#desk-conn-arrow)',
+              pointerEvents: connectMode ? 'stroke' : 'none',
+              style: { pointerEvents: connectMode ? 'stroke' : 'none' },
+              onPointerDown: (e) => {
+                if (readOnly || !connectMode) return;
+                e.stopPropagation();
+                setSelectedConnectionIds([conn.id]);
+              },
+            }),
+            !readOnly && connectMode && React.createElement('path', {
+              d: pointsToPath(points),
+              stroke: 'transparent',
+              strokeWidth: 16,
+              fill: 'none',
+              pointerEvents: 'stroke',
+              onPointerDown: (e) => {
+                e.stopPropagation();
+                setSelectedConnectionIds([conn.id]);
+              },
+            }),
+            !readOnly && connectMode && (conn.route?.mode === 'manual'
+              ? (Array.isArray(conn.route?.points) ? conn.route.points : [])
+              : points.slice(1, -1)
+            ).map((p, idx) =>
+              React.createElement('circle', {
+                key: `${conn.id}-h-${idx}`,
+                cx: p.x,
+                cy: p.y,
+                r: 6,
+                fill: selectedNodeIds.includes(`${conn.id}:${idx}`) ? 'rgb(var(--theme-700))' : 'rgb(var(--theme-100))',
+                stroke: selectedNodeIds.includes(`${conn.id}:${idx}`) ? 'rgb(var(--theme-900))' : 'rgb(var(--theme-700))',
+                strokeWidth: selectedNodeIds.includes(`${conn.id}:${idx}`) ? 2.6 : 2,
+                style: { cursor: 'grab', pointerEvents: 'all' },
+                onPointerDown: (e) => {
+                  setSelectedConnectionIds([conn.id]);
+                  const nodeId = `${conn.id}:${idx}`;
+                  const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+                  if (additive) {
+                    setSelectedNodeIds((prev) => prev.includes(nodeId) ? prev.filter((id) => id !== nodeId) : [...prev, nodeId]);
+                  }
+                  beginDragLineHandle(e, conn.id, idx, p);
+                },
+                onPointerMove: moveDragLineHandle,
+                onPointerUp: endDragLineHandle,
+              })
+            )
+          )
+        )
+      ),
       !readOnly && connectMode && React.createElement(
         'svg',
         { style: { position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' } },
@@ -2069,7 +2143,7 @@ export const Desk = ({
               cy: points[0].y,
               r: 5.5,
               fill: '#1e293b',
-              stroke: '#2563eb',
+              stroke: 'rgb(var(--theme-700))',
               strokeWidth: 2,
               style: { pointerEvents: 'none' },
             }),
@@ -2078,7 +2152,7 @@ export const Desk = ({
               cy: points[points.length - 1].y,
               r: 5.5,
               fill: '#1e293b',
-              stroke: '#2563eb',
+              stroke: 'rgb(var(--theme-700))',
               strokeWidth: 2,
               style: { pointerEvents: 'none' },
             })

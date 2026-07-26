@@ -115,11 +115,11 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
             {
               onClick: onSync,
               disabled: isSyncing,
-              className: "flex items-center gap-1.5 bg-teal-800 hover:bg-teal-700 disabled:opacity-50 text-white text-sm font-bold py-2 px-4 rounded-xl transition-all active:scale-95",
+              className: "flex items-center gap-1.5 bg-theme-500 hover:bg-theme-600 disabled:opacity-50 text-buttontext text-sm font-bold py-2 px-4 rounded-xl transition-all active:scale-95",
               title: "Back up local items to Drive, then sync Drive → local",
             },
             isSyncing
-              ? React.createElement("div", { className: "h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" })
+              ? React.createElement("div", { className: "h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin" })
               : React.createElement(
                   "svg",
                   { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor" },
