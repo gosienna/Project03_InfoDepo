@@ -16,3 +16,11 @@ export const formatBytes = (bytes, decimals = 2) => {
 
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 };
+
+/** ms epoch -> "Jul 26, 2026, 3:45 PM"; '' when unknown/invalid. */
+export const formatUpdatedAt = (ms) => {
+  if (!ms) return '';
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+};

@@ -34,3 +34,16 @@ export function parseDeskLayoutKey(key) {
 export function hasDriveCopy(record) {
   return Boolean(String(record?.driveFileId || '').trim());
 }
+
+/**
+ * Drive sync state for display: 'local' (never uploaded), 'pending' (local edits
+ * newer than the last known Drive revision), or 'synced'. Mirrors the newer-check
+ * used by itemNeedsBackupUpload in utils/driveSync.js, but doesn't require a loaded blob.
+ */
+export function getDriveSyncStatus(record) {
+  if (!hasDriveCopy(record)) return 'local';
+  const lm = record?.localModifiedAt != null ? new Date(record.localModifiedAt).getTime() : NaN;
+  const mt = record?.modifiedTime != null ? new Date(record.modifiedTime).getTime() : NaN;
+  if (!Number.isNaN(lm) && !Number.isNaN(mt) && lm > mt) return 'pending';
+  return 'synced';
+}

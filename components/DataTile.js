@@ -16,13 +16,20 @@ function readBlobAsArrayBuffer(blob) {
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from '../utils/pdfjsWorkerEntry.js?worker&url';
 import JSZip from 'jszip';
-import { formatBytes, getFileExtension } from '../utils/fileUtils.js';
+import { formatBytes, formatUpdatedAt, getFileExtension } from '../utils/fileUtils.js';
 import { BookIcon } from './icons/BookIcon.js';
 import { TrashIcon } from './icons/TrashIcon.js';
 import { UploadIcon } from './icons/UploadIcon.js';
 import { DownloadIcon } from './icons/DownloadIcon.js';
 import { normalizeTag } from '../utils/tagUtils.js';
-import { hasDriveCopy } from '../utils/driveRecordKey.js';
+import { hasDriveCopy, getDriveSyncStatus } from '../utils/driveRecordKey.js';
+import { modifiedTimeSortMs } from '../utils/libraryDisplayPolicy.js';
+
+const SYNC_STATUS_META = {
+  synced: { label: 'Synced with Google Drive', dot: 'bg-emerald-500' },
+  pending: { label: 'Local changes not yet synced to Drive', dot: 'bg-amber-500' },
+  local: { label: 'Not synced to Google Drive', dot: 'bg-gray-400' },
+};
 
 const YT_VIDEO_ID_RE = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
 
@@ -151,6 +158,21 @@ export const DataTile = ({
   const tagSuggestions = (availableTags || []).filter((t) => !tags.includes(t));
   const sharedWith = Array.isArray(record?.sharedWith) ? record.sharedWith : [];
   const shareSuggestions = (shareableEmails || []).filter((email) => !sharedWith.includes(email));
+
+  const updatedLabel = formatUpdatedAt(modifiedTimeSortMs(record));
+  const syncStatusMeta = SYNC_STATUS_META[getDriveSyncStatus(record)];
+  const syncStatusRow = React.createElement(
+    'p',
+    { className: 'text-[10px] text-theme-500 mt-1 flex items-center gap-1.5 flex-wrap' },
+    updatedLabel && React.createElement('span', { title: 'Last updated' }, `Updated ${updatedLabel}`),
+    updatedLabel && React.createElement('span', { className: 'text-theme-300' }, '·'),
+    React.createElement(
+      'span',
+      { className: 'inline-flex items-center gap-1', title: syncStatusMeta.label },
+      React.createElement('span', { className: `h-1.5 w-1.5 rounded-full shrink-0 ${syncStatusMeta.dot}` }),
+      syncStatusMeta.label
+    )
+  );
 
   useEffect(() => {
     if (isChannel || !isYoutube || !video?.data) {
@@ -775,6 +797,7 @@ export const DataTile = ({
         ),
         ch.handle &&
           React.createElement('p', { className: 'text-xs text-theme-500 truncate mt-0.5', title: ch.handle }, ch.handle),
+        syncStatusRow,
         tagRow,
         shareRow
       )
@@ -917,6 +940,7 @@ export const DataTile = ({
           { className: 'text-sm text-theme-700 mt-0.5' },
           deskItemCount, ' ', deskItemCount === 1 ? 'item' : 'items'
         ),
+        syncStatusRow,
         !readOnly && onSetCoverImage && React.createElement(
           'div',
           { className: 'mt-1 flex items-center gap-1.5', onClick: (e) => e.stopPropagation() },
@@ -1291,6 +1315,7 @@ export const DataTile = ({
               : ''
           )
         : React.createElement('p', { className: 'text-sm text-theme-700' }, formatBytes(video.size)),
+      syncStatusRow,
       !readOnly && onSetNoteCoverImage && React.createElement(
         'div',
         { className: 'mt-1 flex items-center gap-1.5', onClick: (e) => e.stopPropagation() },
