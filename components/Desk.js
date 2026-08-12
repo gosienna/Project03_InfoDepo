@@ -1277,11 +1277,24 @@ export const Desk = ({
   }, [pointerToWorld, rerender]);
 
   const onHandlePointerUp = useCallback((e, key) => {
-    if (!itemDragRef.current || !itemDragRef.current.keys.includes(key)) return;
-    commitLayout({ ...layoutRef.current });
-    if (Array.isArray(itemDragRef.current.textIds) && itemDragRef.current.textIds.length > 0) {
-      commitTextItems([...(textItemsRef.current || [])]);
-    }
+    const drag = itemDragRef.current;
+    if (!drag || !drag.keys.includes(key)) return;
+    // A click-to-select (pointerdown immediately followed by pointerup, no
+    // intervening move) still reaches here. Only commit — and thus mark the
+    // desk dirty / queue a Drive upload — when a position actually changed;
+    // otherwise this fires on every plain click.
+    const layoutMoved = drag.keys.some((k) => {
+      const start = drag.startPositions[k] || { x: 0, y: 0 };
+      const cur = layoutRef.current[k] || start;
+      return cur.x !== start.x || cur.y !== start.y;
+    });
+    if (layoutMoved) commitLayout({ ...layoutRef.current });
+    const textMoved = Array.isArray(drag.textIds) && drag.textIds.length > 0 && drag.textIds.some((id) => {
+      const start = drag.startTextPositions[id];
+      const cur = (textItemsRef.current || []).find((t) => t.id === id);
+      return start && cur && (cur.x !== start.x || cur.y !== start.y);
+    });
+    if (textMoved) commitTextItems([...(textItemsRef.current || [])]);
     itemDragRef.current = null;
   }, [commitLayout, commitTextItems]);
 
@@ -1447,11 +1460,22 @@ export const Desk = ({
   }, [pointerToWorld, rerender]);
 
   const onTextHandlePointerUp = useCallback((e, id) => {
-    if (!textItemDragRef.current || !textItemDragRef.current.ids.includes(id)) return;
-    commitTextItems([...(textItemsRef.current || [])]);
-    if (Array.isArray(textItemDragRef.current.itemKeys) && textItemDragRef.current.itemKeys.length > 0) {
-      commitLayout({ ...layoutRef.current });
-    }
+    const drag = textItemDragRef.current;
+    if (!drag || !drag.ids.includes(id)) return;
+    // Same no-op-click guard as onHandlePointerUp: only commit (and mark the
+    // desk dirty) when something actually moved.
+    const textMoved = drag.ids.some((tid) => {
+      const start = drag.startPositions[tid];
+      const cur = (textItemsRef.current || []).find((t) => t.id === tid);
+      return start && cur && (cur.x !== start.x || cur.y !== start.y);
+    });
+    if (textMoved) commitTextItems([...(textItemsRef.current || [])]);
+    const itemsMoved = Array.isArray(drag.itemKeys) && drag.itemKeys.length > 0 && drag.itemKeys.some((k) => {
+      const start = drag.startItemPositions[k] || { x: 0, y: 0 };
+      const cur = layoutRef.current[k] || start;
+      return cur.x !== start.x || cur.y !== start.y;
+    });
+    if (itemsMoved) commitLayout({ ...layoutRef.current });
     textItemDragRef.current = null;
   }, [commitLayout, commitTextItems]);
 
@@ -1606,8 +1630,16 @@ export const Desk = ({
   }, [pointerToWorld, rerender, routePointsFor]);
 
   const endDragLineHandle = useCallback(() => {
-    if (!lineDragRef.current) return;
-    commitConnections([...(connectionsRef.current || [])]);
+    const drag = lineDragRef.current;
+    if (!drag) return;
+    // Same no-op-click guard: only commit when a handle's point actually moved.
+    const moved = (drag.activeHandles || []).some((h) => {
+      const conn = (connectionsRef.current || []).find((c) => c.id === h.connId);
+      const points = conn?.route?.mode === 'manual' && Array.isArray(conn.route.points) ? conn.route.points : [];
+      const cur = points[h.handleIndex];
+      return cur && (cur.x !== h.initialPoint.x || cur.y !== h.initialPoint.y);
+    });
+    if (moved) commitConnections([...(connectionsRef.current || [])]);
     lineDragRef.current = null;
   }, [commitConnections]);
 
