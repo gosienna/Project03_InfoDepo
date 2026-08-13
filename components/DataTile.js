@@ -119,6 +119,8 @@ export const DataTile = ({
   itemDownloadProgress,
   hideTitleUntilHover,
   onCancelPendingSync,
+  onSyncPendingNow,
+  isSyncingNow,
 }) => {
   const titleClassName = (base) => hideTitleUntilHover ? `${base} opacity-0 group-hover:opacity-100 transition-opacity` : base;
   const isChannel = tileType === 'channel';
@@ -163,7 +165,9 @@ export const DataTile = ({
   const updatedLabel = formatUpdatedAt(modifiedTimeSortMs(record));
   const driveSyncStatus = getDriveSyncStatus(record);
   const syncStatusMeta = SYNC_STATUS_META[driveSyncStatus];
-  const showCancelPendingSync = isDesk && !readOnly && driveSyncStatus === 'pending' && typeof onCancelPendingSync === 'function';
+  const isDeskPending = isDesk && driveSyncStatus === 'pending' && !readOnly;
+  const showCancelPendingSync = isDeskPending && !isSyncingNow && typeof onCancelPendingSync === 'function';
+  const showSyncNow = isDeskPending && typeof onSyncPendingNow === 'function';
   const syncStatusRow = React.createElement(
     'p',
     { className: 'text-[10px] text-theme-500 mt-1 flex items-center gap-1.5 flex-wrap' },
@@ -172,8 +176,19 @@ export const DataTile = ({
     React.createElement(
       'span',
       { className: 'inline-flex items-center gap-1', title: syncStatusMeta.label },
-      React.createElement('span', { className: `h-1.5 w-1.5 rounded-full shrink-0 ${syncStatusMeta.dot}` }),
-      syncStatusMeta.label
+      React.createElement('span', { className: `h-1.5 w-1.5 rounded-full shrink-0 ${syncStatusMeta.dot} ${isSyncingNow ? 'animate-pulse' : ''}` }),
+      isSyncingNow ? 'Syncing to Drive…' : syncStatusMeta.label
+    ),
+    showSyncNow && React.createElement(
+      'button',
+      {
+        type: 'button',
+        disabled: isSyncingNow,
+        onClick: (e) => { e.stopPropagation(); onSyncPendingNow(record); },
+        title: 'Push this desk\'s local changes to Drive right now, resolving the pending state.',
+        className: `text-theme-600 underline decoration-dotted hover:text-theme-800 transition-colors ${isSyncingNow ? 'opacity-50 cursor-default' : ''}`,
+      },
+      isSyncingNow ? 'Syncing…' : 'Sync now'
     ),
     showCancelPendingSync && React.createElement(
       'button',

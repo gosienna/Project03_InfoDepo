@@ -116,6 +116,7 @@ export const Library = ({
   const viewerPeerSyncDoneRef = useRef(false);
   const deskBackupTimersRef = useRef(new Map());
   const deskBackupControllersRef = useRef(new Map());
+  const [deskSyncNowIds, setDeskSyncNowIds] = useState(() => new Set());
   const desksRef = useRef(desks);
   const credentials = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
@@ -922,47 +923,54 @@ export const Library = ({
   // Keep desksRef current so the debounced backup callback always reads the latest IDB state.
   desksRef.current = desks;
 
+  // Uploads one desk right now (used by both the debounced per-edit path and
+  // the manual "Sync now" trigger). Swallows errors — callers that care about
+  // completion just await the promise and don't need a rejection.
+  const runDeskBackupNow = async (deskId) => {
+    const desk = desksRef.current.find((d) => d.driveId === deskId);
+    if (!desk) return;
+    const controller = new AbortController();
+    deskBackupControllersRef.current.set(deskId, controller);
+    try {
+      const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
+      if (!token) return;
+      let capturedDriveId = null;
+      let capturedModifiedTime = null;
+      const wrappedOnSetDriveId = async (oldDriveId, storeName, newDriveId, meta) => {
+        await onSetDriveId(oldDriveId, storeName, newDriveId, meta);
+        capturedDriveId = newDriveId;
+        capturedModifiedTime = meta?.modifiedTime;
+      };
+      const result = await backupSingleDesk(desk, { accessToken: token, folderId: driveFolderId, onSetDriveId: wrappedOnSetDriveId, signal: controller.signal });
+      if (result === 'backed' && capturedDriveId) {
+        try {
+          await updateOwnerIndexEntry(capturedDriveId, {
+            modifiedTime: capturedModifiedTime || '',
+            name: desk.name,
+            type: 'infodepo-desk',
+            sharedWith: Array.isArray(desk.sharedWith) ? desk.sharedWith : [],
+            tags: Array.isArray(desk.tags) ? desk.tags : [],
+          }, { accessToken: token, folderId: driveFolderId, ownerEmail: normalizedUserEmail });
+          // only clear dirty after BOTH blob upload AND index update succeed
+          await clearDeskDirty(deskId).catch(() => {});
+        } catch (indexErr) {
+          console.warn('[InfoDepo] index update after desk backup failed:', indexErr.message);
+        }
+      }
+    } catch (err) {
+      if (err?.name !== 'AbortError') console.warn('[InfoDepo] single desk backup failed:', err.message);
+    } finally {
+      deskBackupControllersRef.current.delete(deskId);
+    }
+  };
+
   const triggerDeskBackup = (deskId) => {
     if (!credentials?.clientId || !String(driveFolderId || '').trim()) return;
     if (userType !== 'master' && userType !== 'editor') return;
     clearTimeout(deskBackupTimersRef.current.get(deskId));
-    deskBackupTimersRef.current.set(deskId, setTimeout(async () => {
+    deskBackupTimersRef.current.set(deskId, setTimeout(() => {
       deskBackupTimersRef.current.delete(deskId);
-      const desk = desksRef.current.find((d) => d.driveId === deskId);
-      if (!desk) return;
-      const controller = new AbortController();
-      deskBackupControllersRef.current.set(deskId, controller);
-      try {
-        const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
-        if (!token) return;
-        let capturedDriveId = null;
-        let capturedModifiedTime = null;
-        const wrappedOnSetDriveId = async (oldDriveId, storeName, newDriveId, meta) => {
-          await onSetDriveId(oldDriveId, storeName, newDriveId, meta);
-          capturedDriveId = newDriveId;
-          capturedModifiedTime = meta?.modifiedTime;
-        };
-        const result = await backupSingleDesk(desk, { accessToken: token, folderId: driveFolderId, onSetDriveId: wrappedOnSetDriveId, signal: controller.signal });
-        if (result === 'backed' && capturedDriveId) {
-          try {
-            await updateOwnerIndexEntry(capturedDriveId, {
-              modifiedTime: capturedModifiedTime || '',
-              name: desk.name,
-              type: 'infodepo-desk',
-              sharedWith: Array.isArray(desk.sharedWith) ? desk.sharedWith : [],
-              tags: Array.isArray(desk.tags) ? desk.tags : [],
-            }, { accessToken: token, folderId: driveFolderId, ownerEmail: normalizedUserEmail });
-            // only clear dirty after BOTH blob upload AND index update succeed
-            await clearDeskDirty(deskId).catch(() => {});
-          } catch (indexErr) {
-            console.warn('[InfoDepo] index update after desk backup failed:', indexErr.message);
-          }
-        }
-      } catch (err) {
-        if (err?.name !== 'AbortError') console.warn('[InfoDepo] single desk backup failed:', err.message);
-      } finally {
-        deskBackupControllersRef.current.delete(deskId);
-      }
+      runDeskBackupNow(deskId);
     }, 3000));
   };
 
@@ -979,6 +987,25 @@ export const Library = ({
     if (controller) {
       controller.abort();
       deskBackupControllersRef.current.delete(deskId);
+    }
+  };
+
+  // Manually resolves a desk's pending/dirty state right now instead of
+  // waiting for the 3s debounce or a full library Sync.
+  const syncDeskNow = async (deskId) => {
+    if (!credentials?.clientId || !String(driveFolderId || '').trim()) return;
+    if (userType !== 'master' && userType !== 'editor') return;
+    cancelDeskBackup(deskId); // avoid racing an already-scheduled/in-flight backup
+    setDeskSyncNowIds((prev) => new Set(prev).add(deskId));
+    try {
+      await runDeskBackupNow(deskId);
+    } finally {
+      setDeskSyncNowIds((prev) => {
+        if (!prev.has(deskId)) return prev;
+        const next = new Set(prev);
+        next.delete(deskId);
+        return next;
+      });
     }
   };
 
@@ -1542,6 +1569,8 @@ export const Library = ({
                     : undefined,
                   onSetCoverFromLibrary: isEditor ? (dk) => setCoverPickerTarget({ ...dk, _storeName: 'desks' }) : undefined,
                   onCancelPendingSync: isEditor ? (dk) => cancelDeskBackup(dk.driveId) : undefined,
+                  onSyncPendingNow: isEditor ? (dk) => syncDeskNow(dk.driveId) : undefined,
+                  isSyncingNow: deskSyncNowIds.has(d.driveId),
                 });
               }
               return null;
