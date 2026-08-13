@@ -1709,7 +1709,9 @@ export const Desk = ({
           willChange: 'transform',
         },
       },
-      layoutEntries.map(({ key, pos, entry }) =>
+      layoutEntries
+        .filter(({ entry }) => !(entry._entryType === 'pending' && entry._pendingKind === 'upload'))
+        .map(({ key, pos, entry }) =>
         React.createElement(
           'div',
           {
@@ -1775,14 +1777,11 @@ export const Desk = ({
             entry._entryType === 'pending'
               ? (() => {
                   const kind = entry._pendingKind || 'unknown';
-                  const isUpload = kind === 'upload';
                   const isSync = kind === 'sync';
-                  const statusLabel = isUpload
-                    ? 'Uploading to Drive…'
-                    : isSync
-                      ? 'Syncing from Drive…'
-                      : 'Not available on this device';
-                  const showSpinner = isUpload || isSync;
+                  const statusLabel = isSync
+                    ? 'Syncing from Drive…'
+                    : 'Not available on this device';
+                  const showSpinner = isSync;
                   return React.createElement(
                     'div',
                     {
