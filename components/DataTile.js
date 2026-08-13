@@ -118,6 +118,7 @@ export const DataTile = ({
   availableTags,
   itemDownloadProgress,
   hideTitleUntilHover,
+  onCancelPendingSync,
 }) => {
   const titleClassName = (base) => hideTitleUntilHover ? `${base} opacity-0 group-hover:opacity-100 transition-opacity` : base;
   const isChannel = tileType === 'channel';
@@ -160,7 +161,9 @@ export const DataTile = ({
   const shareSuggestions = (shareableEmails || []).filter((email) => !sharedWith.includes(email));
 
   const updatedLabel = formatUpdatedAt(modifiedTimeSortMs(record));
-  const syncStatusMeta = SYNC_STATUS_META[getDriveSyncStatus(record)];
+  const driveSyncStatus = getDriveSyncStatus(record);
+  const syncStatusMeta = SYNC_STATUS_META[driveSyncStatus];
+  const showCancelPendingSync = isDesk && !readOnly && driveSyncStatus === 'pending' && typeof onCancelPendingSync === 'function';
   const syncStatusRow = React.createElement(
     'p',
     { className: 'text-[10px] text-theme-500 mt-1 flex items-center gap-1.5 flex-wrap' },
@@ -171,6 +174,16 @@ export const DataTile = ({
       { className: 'inline-flex items-center gap-1', title: syncStatusMeta.label },
       React.createElement('span', { className: `h-1.5 w-1.5 rounded-full shrink-0 ${syncStatusMeta.dot}` }),
       syncStatusMeta.label
+    ),
+    showCancelPendingSync && React.createElement(
+      'button',
+      {
+        type: 'button',
+        onClick: (e) => { e.stopPropagation(); onCancelPendingSync(record); },
+        title: 'Stop this desk from auto-syncing to Drive for now — it stays local until the next manual Sync.',
+        className: 'text-theme-500 underline decoration-dotted hover:text-theme-700 transition-colors',
+      },
+      'Cancel'
     )
   );
 

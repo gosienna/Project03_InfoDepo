@@ -115,6 +115,7 @@ export const Library = ({
   const runOwnerSyncRef = useRef(() => {});
   const viewerPeerSyncDoneRef = useRef(false);
   const deskBackupTimersRef = useRef(new Map());
+  const deskBackupControllersRef = useRef(new Map());
   const desksRef = useRef(desks);
   const credentials = getDriveCredentials();
   const driveFolderId = getDriveFolderId();
@@ -929,6 +930,8 @@ export const Library = ({
       deskBackupTimersRef.current.delete(deskId);
       const desk = desksRef.current.find((d) => d.driveId === deskId);
       if (!desk) return;
+      const controller = new AbortController();
+      deskBackupControllersRef.current.set(deskId, controller);
       try {
         const token = await getDriveTokenForScope(OWNER_DRIVE_SCOPE);
         if (!token) return;
@@ -939,7 +942,7 @@ export const Library = ({
           capturedDriveId = newDriveId;
           capturedModifiedTime = meta?.modifiedTime;
         };
-        const result = await backupSingleDesk(desk, { accessToken: token, folderId: driveFolderId, onSetDriveId: wrappedOnSetDriveId });
+        const result = await backupSingleDesk(desk, { accessToken: token, folderId: driveFolderId, onSetDriveId: wrappedOnSetDriveId, signal: controller.signal });
         if (result === 'backed' && capturedDriveId) {
           try {
             await updateOwnerIndexEntry(capturedDriveId, {
@@ -956,9 +959,27 @@ export const Library = ({
           }
         }
       } catch (err) {
-        console.warn('[InfoDepo] single desk backup failed:', err.message);
+        if (err?.name !== 'AbortError') console.warn('[InfoDepo] single desk backup failed:', err.message);
+      } finally {
+        deskBackupControllersRef.current.delete(deskId);
       }
     }, 3000));
+  };
+
+  // Stops a desk's scheduled/in-flight per-edit auto-backup (e.g. user clicked
+  // "Cancel" on the pending sync indicator). The desk stays dirty locally —
+  // this only defers the automatic push; a manual Sync still picks it up.
+  const cancelDeskBackup = (deskId) => {
+    const timer = deskBackupTimersRef.current.get(deskId);
+    if (timer) {
+      clearTimeout(timer);
+      deskBackupTimersRef.current.delete(deskId);
+    }
+    const controller = deskBackupControllersRef.current.get(deskId);
+    if (controller) {
+      controller.abort();
+      deskBackupControllersRef.current.delete(deskId);
+    }
   };
 
   onRegisterItemBackup?.((id, storeName) => {
@@ -1520,6 +1541,7 @@ export const Library = ({
                     ? (desk, file) => onSetNoteCoverImage(desk.driveId, file, 'desks')
                     : undefined,
                   onSetCoverFromLibrary: isEditor ? (dk) => setCoverPickerTarget({ ...dk, _storeName: 'desks' }) : undefined,
+                  onCancelPendingSync: isEditor ? (dk) => cancelDeskBackup(dk.driveId) : undefined,
                 });
               }
               return null;

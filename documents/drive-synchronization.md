@@ -131,8 +131,6 @@ Desk records are serialized as `<name>.desk.json` with `_type: 'infodepo-desk'` 
 Every user edit on the Desk canvas calls one of three commit functions (`commitLayout`, `commitConnections`, `commitTextItems`). Each commit:
 
 1. Writes the change to IDB (`setDeskLayout` / `setDeskConnections` / `setDeskTextItems`), bumping `localModifiedAt`.
-
-**No-op guard:** the drag-bar/text/connection-handle `pointerUp` handlers in `Desk.js` (`onHandlePointerUp`, `onTextHandlePointerUp`, `endDragLineHandle`) only call the commit function when the dragged position(s) actually differ from the drag-start snapshot. A plain click-to-select (`pointerdown` immediately followed by `pointerup`, or a drag that snaps back to its starting grid cell) reaches the same handler but is skipped — it does not bump `localModifiedAt`, mark the desk dirty, push undo history, or queue a Drive upload. Only genuine repositioning does.
 2. Calls `onDeskModified(desk.id)` → `itemBackupFnRef.current(id, 'desks')` in App.js → `triggerDeskBackup(id)` in Library.js.
 3. A **3-second debounce** per desk ID resets on each call. Only after 3 s of inactivity on that desk does the upload fire.
 4. At fire time, the latest desk is read from `desksRef.current` (a ref kept in sync with the `desks` prop), so rapid edits collapse to a single upload of the final state.
@@ -140,6 +138,10 @@ Every user edit on the Desk canvas calls one of three commit functions (`commitL
 6. After a successful backup, `updateOwnerIndexEntry(driveId, { modifiedTime, name, type, sharedWith, tags }, ...)` patches the Drive index so the next sync on any device sees the updated timestamp immediately.
 
 The per-edit path is guarded: only `master` / `editor` roles trigger it; viewers never upload via this path.
+
+**No-op guard:** the drag-bar/text/connection-handle `pointerUp` handlers in `Desk.js` (`onHandlePointerUp`, `onTextHandlePointerUp`, `endDragLineHandle`) only call the commit function when the dragged position(s) actually differ from the drag-start snapshot. A plain click-to-select (`pointerdown` immediately followed by `pointerup`, or a drag that snaps back to its starting grid cell) reaches the same handler but is skipped — it does not bump `localModifiedAt`, mark the desk dirty, push undo history, or queue a Drive upload. Only genuine repositioning does.
+
+**Cancelling a pending auto-backup:** a desk tile showing the amber "pending" sync status (`components/DataTile.js`'s `syncStatusRow`, added by `getDriveSyncStatus`) has a **Cancel** link next to it, shown for editors on desk tiles only. It calls `cancelDeskBackup(deskId)` in `Library.js`, which clears the 3-second debounce timer if the upload hasn't fired yet, or aborts the in-flight `fetch` via `AbortController` if it has (the signal is threaded through `backupSingleDesk` → `drivePatchMultipart`/`drivePostMultipart`/`findExistingDriveFile` in `utils/driveSync.js`). This only defers the automatic per-edit push — the desk stays dirty (`localModifiedAt > modifiedTime`) and is still picked up by the next manual **Sync** or full pipeline run; it does not revert the edit or mark the record clean.
 
 ### Full pipeline upload
 

@@ -529,7 +529,7 @@ function channelNeedsBackupUpload(ch) {
  * @param {Function} options.onProgress          - (message: string) => void
  * @returns {Promise<{ backed: number, failed: number }>}
  */
-async function drivePostMultipart(accessToken, blob, name, mimeType, parentId) {
+async function drivePostMultipart(accessToken, blob, name, mimeType, parentId, signal) {
   const mt = mimeType || 'application/octet-stream';
   const metadata = { name, mimeType: mt, ...(parentId ? { parents: [parentId] } : {}) };
   const bodyBlob = await cloneBlobForNetwork(blob, mt);
@@ -538,13 +538,13 @@ async function drivePostMultipart(accessToken, blob, name, mimeType, parentId) {
   form.append('file', bodyBlob);
   const res = await fetch(
     'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime',
-    { method: 'POST', headers: { Authorization: `Bearer ${accessToken}` }, body: form }
+    { method: 'POST', headers: { Authorization: `Bearer ${accessToken}` }, body: form, signal }
   );
   if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error?.message || res.statusText); }
   return res.json();
 }
 
-async function drivePatchMultipart(accessToken, fileId, blob, name, mimeType) {
+async function drivePatchMultipart(accessToken, fileId, blob, name, mimeType, signal) {
   const mt = mimeType || 'application/octet-stream';
   const bodyBlob = await cloneBlobForNetwork(blob, mt);
   const form = new FormData();
@@ -552,7 +552,7 @@ async function drivePatchMultipart(accessToken, fileId, blob, name, mimeType) {
   form.append('file', bodyBlob);
   const res = await fetch(
     `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=multipart&fields=id,name,modifiedTime`,
-    { method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}` }, body: form }
+    { method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}` }, body: form, signal }
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -563,13 +563,13 @@ async function drivePatchMultipart(accessToken, fileId, blob, name, mimeType) {
   return res.json();
 }
 
-async function findExistingDriveFile(accessToken, name, parentId) {
+async function findExistingDriveFile(accessToken, name, parentId, signal) {
   if (!parentId) return null;
   try {
     const q = `name='${name.replace(/'/g, "\\'")}' and '${parentId}' in parents and trashed=false`;
     const res = await fetch(
       `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)&pageSize=1`,
-      { headers: { Authorization: `Bearer ${accessToken}` } },
+      { headers: { Authorization: `Bearer ${accessToken}` }, signal },
     );
     if (!res.ok) return null;
     const data = await res.json();
@@ -711,7 +711,7 @@ export async function pullMissingDeskLayoutRefs(desk, {
  * Uploads a single desk to Drive immediately. Used for per-edit auto-backup.
  * Skips the upload if the desk is not dirty (localModifiedAt ≤ modifiedTime).
  */
-export async function backupSingleDesk(desk, { accessToken, folderId, onSetDriveId }) {
+export async function backupSingleDesk(desk, { accessToken, folderId, onSetDriveId, signal }) {
   if (!deskNeedsBackupUpload(desk)) return 'skipped';
   const label = desk.name || `desk-${desk.driveId}`;
   const { id: _legacyId, ...rest } = desk;
@@ -720,20 +720,21 @@ export async function backupSingleDesk(desk, { accessToken, folderId, onSetDrive
   const fileName = `${String(label).replace(/[/\\?%*:|"<>]/g, '-')}.desk.json`;
   let fileId = String(desk.driveFileId || '').trim();
   if (!fileId) {
-    const existing = await findExistingDriveFile(accessToken, fileName, folderId);
+    const existing = await findExistingDriveFile(accessToken, fileName, folderId, signal);
     if (existing) fileId = existing;
   }
   let driveFile;
   if (fileId) {
     try {
-      driveFile = await drivePatchMultipart(accessToken, fileId, blob, fileName, 'application/json');
+      driveFile = await drivePatchMultipart(accessToken, fileId, blob, fileName, 'application/json', signal);
     } catch (patchErr) {
+      if (patchErr.name === 'AbortError') throw patchErr;
       if (patchErr.status === 404 || patchErr.status === 403) {
-        driveFile = await drivePostMultipart(accessToken, blob, fileName, 'application/json', folderId);
+        driveFile = await drivePostMultipart(accessToken, blob, fileName, 'application/json', folderId, signal);
       } else throw patchErr;
     }
   } else {
-    driveFile = await drivePostMultipart(accessToken, blob, fileName, 'application/json', folderId);
+    driveFile = await drivePostMultipart(accessToken, blob, fileName, 'application/json', folderId, signal);
   }
   await onSetDriveId(desk.driveId, 'desks', driveFile.id, { modifiedTime: driveFile.modifiedTime });
   return 'backed';
