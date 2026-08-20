@@ -472,6 +472,49 @@ export const DataTile = ({
     }
   };
 
+  const canEditName = !readOnly && !!onRename && !!renameTarget;
+
+  const renderEditableName = (displayText, { truncate = false, placeholder = 'Enter name', ariaLabel = 'Rename', titleAttr } = {}) => {
+    const baseClass = truncate
+      ? 'font-bold text-md text-theme-900 truncate flex-1 min-w-0'
+      : 'font-bold text-md text-theme-900 whitespace-normal break-words flex-1 min-w-0';
+
+    if (isEditingName) {
+      return React.createElement('input', {
+        ref: nameInputRef,
+        type: 'text',
+        value: nameInput,
+        onChange: (e) => setNameInput(e.target.value),
+        onClick: (e) => e.stopPropagation(),
+        onKeyDown: (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commitRename(e);
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelRename(e);
+          }
+        },
+        className:
+          'flex-1 min-w-0 bg-theme-50 border border-theme-300 rounded px-2 py-1 text-sm text-theme-900 placeholder-theme-500',
+        placeholder,
+        'aria-label': ariaLabel,
+        disabled: isSavingName,
+      });
+    }
+
+    return React.createElement(
+      'h3',
+      {
+        className: titleClassName(canEditName ? `${baseClass} cursor-pointer hover:text-theme-700` : baseClass),
+        title: canEditName ? 'Click to rename' : (titleAttr ?? displayText),
+        onClick: canEditName ? beginRename : undefined,
+      },
+      displayText
+    );
+  };
+
   const idPrefix = isChannel ? `ch-${recordId}` : `item-${recordId}`;
 
   const addTagControlsHidden =
@@ -741,80 +784,12 @@ export const DataTile = ({
         { className: 'p-4' },
         React.createElement(
           'div',
-          { className: 'flex items-start gap-2', onClick: (e) => e.stopPropagation() },
-          isEditingName
-            ? React.createElement('input', {
-                ref: nameInputRef,
-                type: 'text',
-                value: nameInput,
-                onChange: (e) => setNameInput(e.target.value),
-                onClick: (e) => e.stopPropagation(),
-                onKeyDown: (e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    commitRename(e);
-                  }
-                  if (e.key === 'Escape') {
-                    e.preventDefault();
-                    cancelRename(e);
-                  }
-                },
-                className:
-                  'flex-1 min-w-0 bg-theme-50 border border-theme-300 rounded px-2 py-1 text-sm text-theme-900 placeholder-theme-500',
-                placeholder: 'Enter channel name',
-                'aria-label': 'Rename channel',
-                disabled: isSavingName,
-              })
-            : React.createElement(
-                'h3',
-                { className: titleClassName('font-bold text-md text-theme-900 whitespace-normal break-words flex-1 min-w-0'), title: ch.name },
-                ch.name
-              ),
-          !readOnly &&
-            onRename &&
-            React.createElement(
-              'div',
-              { className: 'shrink-0 flex items-center gap-1' },
-              isEditingName
-                ? React.createElement(
-                    React.Fragment,
-                    null,
-                    React.createElement(
-                      'button',
-                      {
-                        type: 'button',
-                        onClick: commitRename,
-                        disabled: isSavingName || !String(nameInput || '').trim(),
-                        className:
-                          'text-xs px-2 py-1 rounded bg-theme-500 text-buttontext hover:bg-theme-600 disabled:opacity-50 disabled:cursor-not-allowed',
-                        title: 'Save name',
-                      },
-                      isSavingName ? 'Saving…' : 'Save'
-                    ),
-                    React.createElement(
-                      'button',
-                      {
-                        type: 'button',
-                        onClick: cancelRename,
-                        disabled: isSavingName,
-                        className: 'text-xs px-2 py-1 rounded bg-gray-200 text-gray-700 hover:bg-gray-300',
-                        title: 'Cancel rename',
-                      },
-                      'Cancel'
-                    )
-                  )
-                : React.createElement(
-                    'button',
-                    {
-                      type: 'button',
-                      onClick: beginRename,
-                      className:
-                        'text-xs px-2 py-1 rounded bg-gray-200/80 text-gray-700 hover:bg-gray-300 opacity-0 group-hover:opacity-100 transition-opacity',
-                      title: 'Rename channel',
-                    },
-                    'Rename'
-                  )
-            )
+          { onClick: (e) => e.stopPropagation() },
+          renderEditableName(ch.name, {
+            placeholder: 'Enter channel name',
+            ariaLabel: 'Rename channel',
+            titleAttr: ch.name,
+          })
         ),
         React.createElement(
           'p',
@@ -923,45 +898,13 @@ export const DataTile = ({
         { className: 'p-4' },
         React.createElement(
           'div',
-          { className: 'flex items-start gap-2', onClick: (e) => e.stopPropagation() },
-          isEditingName
-            ? React.createElement('input', {
-                ref: nameInputRef,
-                type: 'text',
-                value: nameInput,
-                onChange: (e) => setNameInput(e.target.value),
-                onClick: (e) => e.stopPropagation(),
-                onKeyDown: (e) => {
-                  if (e.key === 'Enter') { e.preventDefault(); commitRename(e); }
-                  if (e.key === 'Escape') { e.preventDefault(); cancelRename(e); }
-                },
-                className: 'flex-1 min-w-0 bg-theme-50 border border-theme-300 rounded px-2 py-1 text-sm text-theme-900',
-                placeholder: 'Desk name',
-                disabled: isSavingName,
-              })
-            : React.createElement('h3', { className: titleClassName('font-bold text-md text-theme-900 truncate flex-1 min-w-0'), title: desk.name }, desk.name || 'Untitled Desk'),
-          !readOnly && onRename && React.createElement(
-            'div',
-            { className: 'shrink-0 flex items-center gap-1' },
-            isEditingName
-              ? React.createElement(
-                  React.Fragment, null,
-                  React.createElement('button', {
-                    type: 'button', onClick: commitRename,
-                    disabled: isSavingName || !String(nameInput || '').trim(),
-                    className: 'text-xs px-2 py-1 rounded bg-theme-500 text-buttontext hover:bg-theme-600 disabled:opacity-50',
-                  }, isSavingName ? 'Saving…' : 'Save'),
-                  React.createElement('button', {
-                    type: 'button', onClick: cancelRename, disabled: isSavingName,
-                    className: 'text-xs px-2 py-1 rounded bg-gray-200 text-gray-700 hover:bg-gray-300',
-                  }, 'Cancel')
-                )
-              : React.createElement('button', {
-                  type: 'button', onClick: beginRename,
-                  className: 'text-xs px-2 py-1 rounded bg-gray-200/80 text-gray-700 hover:bg-gray-300 opacity-0 group-hover:opacity-100 transition-opacity',
-                  title: 'Rename desk',
-                }, 'Rename')
-          )
+          { onClick: (e) => e.stopPropagation() },
+          renderEditableName(desk.name || 'Untitled Desk', {
+            truncate: true,
+            placeholder: 'Desk name',
+            ariaLabel: 'Rename desk',
+            titleAttr: desk.name,
+          })
         ),
         React.createElement(
           'p',
@@ -1257,80 +1200,12 @@ export const DataTile = ({
       { className: 'p-4' },
       React.createElement(
         'div',
-        { className: 'flex items-start gap-2', onClick: (e) => e.stopPropagation() },
-        isEditingName
-          ? React.createElement('input', {
-              ref: nameInputRef,
-              type: 'text',
-              value: nameInput,
-              onChange: (e) => setNameInput(e.target.value),
-              onClick: (e) => e.stopPropagation(),
-              onKeyDown: (e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  commitRename(e);
-                }
-                if (e.key === 'Escape') {
-                  e.preventDefault();
-                  cancelRename(e);
-                }
-              },
-              className:
-                'flex-1 min-w-0 bg-theme-50 border border-theme-300 rounded px-2 py-1 text-sm text-theme-900 placeholder-theme-500',
-              placeholder: 'Enter item name',
-              'aria-label': 'Rename item',
-              disabled: isSavingName,
-            })
-          : React.createElement(
-              'h3',
-              { className: titleClassName('font-bold text-md text-theme-900 whitespace-normal break-words flex-1 min-w-0'), title: video.name },
-              isYoutube ? video.name.replace(/\.youtube$/i, '') : video.name
-            ),
-        !readOnly &&
-          onRename &&
-          React.createElement(
-            'div',
-            { className: 'shrink-0 flex items-center gap-1' },
-            isEditingName
-              ? React.createElement(
-                  React.Fragment,
-                  null,
-                  React.createElement(
-                    'button',
-                    {
-                      type: 'button',
-                      onClick: commitRename,
-                      disabled: isSavingName || !String(nameInput || '').trim(),
-                      className:
-                        'text-xs px-2 py-1 rounded bg-theme-500 text-buttontext hover:bg-theme-600 disabled:opacity-50 disabled:cursor-not-allowed',
-                      title: 'Save name',
-                    },
-                    isSavingName ? 'Saving…' : 'Save'
-                  ),
-                  React.createElement(
-                    'button',
-                    {
-                      type: 'button',
-                      onClick: cancelRename,
-                      disabled: isSavingName,
-                      className: 'text-xs px-2 py-1 rounded bg-gray-200 text-gray-700 hover:bg-gray-300',
-                      title: 'Cancel rename',
-                    },
-                    'Cancel'
-                  )
-                )
-              : React.createElement(
-                  'button',
-                  {
-                    type: 'button',
-                    onClick: beginRename,
-                    className:
-                      'text-xs px-2 py-1 rounded bg-gray-200/80 text-gray-700 hover:bg-gray-300 opacity-0 group-hover:opacity-100 transition-opacity',
-                    title: 'Rename item',
-                  },
-                  'Rename'
-                )
-          )
+        { onClick: (e) => e.stopPropagation() },
+        renderEditableName(isYoutube ? video.name.replace(/\.youtube$/i, '') : video.name, {
+          placeholder: 'Enter item name',
+          ariaLabel: 'Rename item',
+          titleAttr: video.name,
+        })
       ),
       isYoutube && video._channelVideo
         ? React.createElement(
