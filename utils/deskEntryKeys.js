@@ -18,7 +18,12 @@ export function normalizeLayoutPos(pos, driveFileId) {
   const x = Number(pos?.x) || 0;
   const y = Number(pos?.y) || 0;
   const dfid = trimDrive(driveFileId) || trimDrive(pos?.driveFileId);
-  return dfid ? { x, y, driveFileId: dfid } : { x, y };
+  const out = { x, y };
+  if (dfid) out.driveFileId = dfid;
+  if (pos?.displayMode === 'image') out.displayMode = 'image';
+  const width = Number(pos?.width);
+  if (width > 0) out.width = width;
+  return out;
 }
 
 /** Unresolved layout key — upload (no Drive copy) vs sync (Drive copy, not loaded locally). */

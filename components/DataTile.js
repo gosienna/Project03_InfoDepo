@@ -121,6 +121,8 @@ export const DataTile = ({
   onCancelPendingSync,
   onSyncPendingNow,
   isSyncingNow,
+  displayMode,
+  onSetDisplayMode,
 }) => {
   const titleClassName = (base) => hideTitleUntilHover ? `${base} opacity-0 group-hover:opacity-100 transition-opacity` : base;
   const isChannel = tileType === 'channel';
@@ -959,6 +961,37 @@ export const DataTile = ({
     );
   }
 
+  if (isStandaloneImage && displayMode === 'image') {
+    return React.createElement(
+      'div',
+      { className: `${DATA_TILE_SHELL} relative`, onClick: () => onSelect(video) },
+      imageThumbUrl && React.createElement('img', {
+        src: imageThumbUrl,
+        alt: video?.name || 'Image',
+        className: 'w-full h-auto block',
+        loading: 'lazy',
+      }),
+      typeof onSetDisplayMode === 'function' && React.createElement(
+        'button',
+        {
+          type: 'button',
+          onClick: (e) => { e.stopPropagation(); onSetDisplayMode(video, 'card'); },
+          className: 'absolute top-2 right-2 p-2 rounded-full bg-theme-950/50 text-white opacity-0 group-hover:opacity-100 hover:bg-theme-950/80 transition-all duration-300',
+          title: 'Show details',
+        },
+        React.createElement(
+          'svg',
+          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 1.5 },
+          React.createElement('path', {
+            strokeLinecap: 'round',
+            strokeLinejoin: 'round',
+            d: 'M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5M15 15l5.25 5.25',
+          })
+        )
+      )
+    );
+  }
+
   const isDownloadable = !isYoutube && !isUrl && video?.data instanceof Blob;
 
   const handleDownload = (e) => {
@@ -1099,6 +1132,24 @@ export const DataTile = ({
                 : 'absolute top-2 right-2 bg-theme-600 text-white text-xs font-bold px-2 py-1 rounded',
         },
         isYoutube ? 'YouTube' : isUrl ? 'URL' : isStandaloneImage ? 'Image' : fileExtension.toUpperCase()
+      ),
+      isStandaloneImage && typeof onSetDisplayMode === 'function' && React.createElement(
+        'button',
+        {
+          type: 'button',
+          onClick: (e) => { e.stopPropagation(); onSetDisplayMode(video, 'image'); },
+          className: 'absolute top-2 left-2 p-2 rounded-full bg-theme-950/50 text-white opacity-0 group-hover:opacity-100 hover:bg-theme-950/80 transition-all duration-300',
+          title: 'Show image only',
+        },
+        React.createElement(
+          'svg',
+          { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 1.5 },
+          React.createElement('path', {
+            strokeLinecap: 'round',
+            strokeLinejoin: 'round',
+            d: 'M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9M20.25 20.25h-4.5m4.5 0v-4.5m0 4.5L15 15',
+          })
+        )
       ),
       !isChannel && !isDesk && !video.data && hasDriveCopy(video) && (
         dlProgress

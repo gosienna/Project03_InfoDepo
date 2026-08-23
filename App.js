@@ -1007,6 +1007,7 @@ const App = () => {
               onOpenYoutube: isEditor ? () => setIsYoutubeOpen(true) : undefined,
               onOpenChannel: isEditor ? () => setIsChannelOpen(true) : undefined,
               onOpenFile: isEditor ? () => fileInputRef.current?.click() : undefined,
+              onOpenImage: isEditor ? () => imageInputRef.current?.click() : undefined,
               onOpenUrl: isEditor ? () => setIsUrlOpen(true) : undefined,
               onSetItemDriveId: isEditor ? promotingSetItemDriveId : undefined,
               getBookByDriveId,

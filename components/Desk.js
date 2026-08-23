@@ -23,6 +23,8 @@ const CARD_H = 220;
 const SECTION_HEADER_H = 22;
 const MIN_SECTION_W = 160;
 const MIN_SECTION_H = 120;
+const MIN_IMAGE_W = 120;
+const DEFAULT_IMAGE_W = 320;
 // Auto-expand grows a section a bit past the item's actual edge, so the new
 // boundary sits with breathing room around it instead of flush against it.
 const SECTION_EXPAND_PADDING = 20;
@@ -786,6 +788,7 @@ export const Desk = ({
   onOpenYoutube,
   onOpenChannel,
   onOpenFile,
+  onOpenImage,
   onOpenUrl,
   onSetItemDriveId,
   getBookByDriveId,
@@ -901,6 +904,10 @@ export const Desk = ({
   // See onTextItemFontWheelRef above — same reason.
   const onSectionTitleWheelRef = useRef(null);
 
+  // Standalone-image tiles in 'image' display mode: user-resizable via a
+  // corner grip (width only — height follows the image's own aspect ratio).
+  const imageResizeRef = useRef(null);
+
   useEffect(() => {
     // Sync refs when desk data changes; normalize layout keys in the same pass so
     // we never briefly apply a stale prop layout over a migrated ref.
@@ -951,6 +958,15 @@ export const Desk = ({
     if (desk?.driveId != null) onDeskModified?.(desk.driveId);
     rerender();
   }, [onUpdateLayout, onDeskModified, desk?.driveId, rerender, snapshotState]);
+
+  const setItemDisplayMode = useCallback((key, mode) => {
+    const current = layoutRef.current[key];
+    if (!current) return;
+    const next = { ...current };
+    if (mode === 'image') next.displayMode = 'image';
+    else delete next.displayMode;
+    commitLayout({ ...layoutRef.current, [key]: next });
+  }, [commitLayout]);
 
   const commitConnections = useCallback((next, options = {}) => {
     if (options.recordHistory !== false) {
@@ -1415,6 +1431,8 @@ export const Desk = ({
       const base = drag.startPositions[k] || { x: 0, y: 0 };
       const moved = { x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
       if (base.driveFileId) moved.driveFileId = base.driveFileId;
+      if (base.displayMode) moved.displayMode = base.displayMode;
+      if (base.width) moved.width = base.width;
       nextLayout[k] = moved;
     });
     layoutRef.current = nextLayout;
@@ -1457,6 +1475,43 @@ export const Desk = ({
     if (textMoved) commitTextItems([...(textItemsRef.current || [])]);
     itemDragRef.current = null;
   }, [commitLayout, commitTextItems, commitSections, growSectionsForBoxes]);
+
+  const onImageResizePointerDown = useCallback((e, key) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const world = pointerToWorld(e);
+    const pos = layoutRef.current[key] || {};
+    imageResizeRef.current = {
+      key,
+      startWorldX: world.x,
+      startWidth: pos.width || DEFAULT_IMAGE_W,
+    };
+    setSelectedItemKeys([key]);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, [pointerToWorld]);
+
+  const onImageResizePointerMove = useCallback((e, key) => {
+    const drag = imageResizeRef.current;
+    if (!drag || drag.key !== key) return;
+    const world = pointerToWorld(e);
+    const dx = world.x - drag.startWorldX;
+    const width = Math.max(MIN_IMAGE_W, snapToGrid(drag.startWidth + dx));
+    const base = layoutRef.current[key] || { x: 0, y: 0 };
+    layoutRef.current = { ...layoutRef.current, [key]: { ...base, width } };
+    rerender();
+  }, [pointerToWorld, rerender]);
+
+  const onImageResizePointerUp = useCallback((e, key) => {
+    const drag = imageResizeRef.current;
+    if (!drag || drag.key !== key) return;
+    const cur = layoutRef.current[key];
+    const resized = !!cur && cur.width !== drag.startWidth;
+    if (resized) {
+      growSectionsForBoxes([cardBoxFor(cur, cardSizeRef.current[key])]);
+      commitLayout({ ...layoutRef.current });
+    }
+    imageResizeRef.current = null;
+  }, [commitLayout, growSectionsForBoxes]);
 
   // --- Add item to desk ---
   const addItemToDesk = useCallback((key) => {
@@ -1645,6 +1700,8 @@ export const Desk = ({
         const base = drag.startItemPositions[k] || layoutRef.current[k] || { x: 0, y: 0 };
         const moved = { x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
         if (base.driveFileId) moved.driveFileId = base.driveFileId;
+        if (base.displayMode) moved.displayMode = base.displayMode;
+        if (base.width) moved.width = base.width;
         nextLayout[k] = moved;
       });
       layoutRef.current = nextLayout;
@@ -1807,6 +1864,8 @@ export const Desk = ({
         const base = drag.startItemPositions[k] || { x: 0, y: 0 };
         const moved = { x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
         if (base.driveFileId) moved.driveFileId = base.driveFileId;
+        if (base.displayMode) moved.displayMode = base.displayMode;
+        if (base.width) moved.width = base.width;
         nextLayout[k] = moved;
       });
       layoutRef.current = nextLayout;
@@ -2284,17 +2343,23 @@ export const Desk = ({
       ),
       layoutEntries
         .filter(({ entry }) => !(entry._entryType === 'pending' && entry._pendingKind === 'upload'))
-        .map(({ key, pos, entry }) =>
-        React.createElement(
+        .map(({ key, pos, entry }) => {
+        const isImageDisplay =
+          entry._entryType === 'item' &&
+          String(entry?.type || '').startsWith('image/') &&
+          pos?.displayMode === 'image';
+        const cardWidth = isImageDisplay ? (pos?.width || DEFAULT_IMAGE_W) : CARD_W;
+        return React.createElement(
           'div',
           {
             key,
+            className: 'group',
             'data-desk-card-key': key,
             style: {
               position: 'absolute',
               left: pos.x,
               top: pos.y,
-              width: CARD_W,
+              width: cardWidth,
               userSelect: 'none',
               outline: selectedItemKeys.includes(key) ? '2px solid #7c3aed' : 'none',
               outlineOffset: 2,
@@ -2312,8 +2377,9 @@ export const Desk = ({
               handlePickConnectionNode(key);
             },
           },
-          // Drag handle bar
-          !readOnly && React.createElement(
+          // Drag handle bar — hidden for image tiles in 'image' display mode,
+          // which instead get a small hover-revealed drag grip over the image itself.
+          !readOnly && !isImageDisplay && React.createElement(
             'div',
             {
               style: {
@@ -2338,12 +2404,60 @@ export const Desk = ({
               '×'
             )
           ),
+          !readOnly && isImageDisplay && React.createElement(
+            'div',
+            {
+              className: 'absolute top-1.5 left-1.5 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1',
+            },
+            React.createElement(
+              'div',
+              {
+                style: { cursor: 'grab', touchAction: 'none' },
+                className: 'p-1.5 rounded-full bg-theme-950/50 text-white',
+                title: 'Drag to move',
+                onPointerDown: (e) => onHandlePointerDown(e, key),
+                onPointerMove: (e) => onHandlePointerMove(e, key),
+                onPointerUp: (e) => onHandlePointerUp(e, key),
+              },
+              React.createElement(
+                'svg',
+                { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 1.5 },
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M4 8h16M4 16h16' })
+              )
+            ),
+            React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'p-1.5 rounded-full bg-theme-950/50 text-white hover:bg-red-600/80 transition-colors',
+                onClick: (e) => { e.stopPropagation(); removeFromDesk(key); },
+                onPointerDown: (e) => e.stopPropagation(),
+                title: 'Remove from desk',
+              },
+              React.createElement(
+                'svg',
+                { xmlns: 'http://www.w3.org/2000/svg', className: 'h-4 w-4', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 1.5 },
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M6 18L18 6M6 6l12 12' })
+              )
+            )
+          ),
+          !readOnly && isImageDisplay && React.createElement('div', {
+            className: 'absolute z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200',
+            style: {
+              right: -5, bottom: -5, width: 14, height: 14, cursor: 'nwse-resize', touchAction: 'none',
+              background: 'rgb(var(--theme-600))', borderRadius: 3, border: '2px solid white',
+            },
+            title: 'Drag to resize',
+            onPointerDown: (e) => onImageResizePointerDown(e, key),
+            onPointerMove: (e) => onImageResizePointerMove(e, key),
+            onPointerUp: (e) => onImageResizePointerUp(e, key),
+          }),
           // Tile content
           React.createElement(
             'div',
             {
               style: {
-                borderRadius: readOnly ? 8 : '0 0 8px 8px',
+                borderRadius: (readOnly || isImageDisplay) ? 8 : '0 0 8px 8px',
                 overflow: 'hidden',
                 outline: connectMode && connectStartKey === key ? '2px solid rgb(var(--theme-600))' : 'none',
               },
@@ -2414,6 +2528,8 @@ export const Desk = ({
                   onSetCoverFromLibrary: !readOnly ? (v) => setCoverPickerTarget(v) : undefined,
                   availableTags,
                   itemDownloadProgress,
+                  displayMode: pos?.displayMode === 'image' ? 'image' : undefined,
+                  onSetDisplayMode: !readOnly ? (_v, mode) => setItemDisplayMode(key, mode) : undefined,
                 })
               : entry._entryType === 'channel'
               ? React.createElement(DataTile, {
@@ -2433,8 +2549,9 @@ export const Desk = ({
                 })
               : React.createElement(DataTile, { tileType: 'desk', desk: entry, onSelect: onSelectDesk, readOnly: true })
           )
-        )
-      ),
+        );
+        })
+      ,
       // Text items on canvas (top-left corner anchors to grid)
       (textItemsRef.current || []).map((ti) =>
         React.createElement(
@@ -2829,11 +2946,12 @@ export const Desk = ({
         ),
         'Text'
       ),
-      role !== 'viewer' && (onOpenNewNote || onOpenFile || onCreateDesk) && React.createElement(AddContentDropdown, {
+      role !== 'viewer' && (onOpenNewNote || onOpenFile || onOpenImage || onCreateDesk) && React.createElement(AddContentDropdown, {
         onNewNote: onOpenNewNote,
         onAddYoutube: onOpenYoutube,
         onAddChannel: onOpenChannel,
         onAddFile: onOpenFile,
+        onAddImage: onOpenImage,
         onAddUrl: onOpenUrl,
         onAddDesk: onCreateDesk ? handleCreateDesk : undefined,
       })
