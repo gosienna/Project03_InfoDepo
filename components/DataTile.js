@@ -354,6 +354,75 @@ export const DataTile = ({
     return () => URL.revokeObjectURL(url);
   }, [isStandaloneImage, video?.id, video?.data, video?.size]);
 
+  // Full-resolution 'image' display mode draws into a canvas sized to the
+  // container's actual CSS width * devicePixelRatio, instead of letting the
+  // browser scale an <img> live. A GPU-composited <img> whose backing bitmap
+  // doesn't match its on-screen size can render at a blurry backing scale at
+  // rest and only re-rasterize sharply for a moment during a repaint (e.g. on
+  // hover) — pre-rendering to the exact target pixel size sidesteps that.
+  const imageCanvasContainerRef = useRef(null);
+  const imageCanvasRef = useRef(null);
+  const imageSourceRef = useRef(null);
+  const imageNaturalSizeRef = useRef(null);
+  const imageContainerWidthRef = useRef(0);
+
+  const drawImageCanvas = () => {
+    const canvas = imageCanvasRef.current;
+    const img = imageSourceRef.current;
+    const natural = imageNaturalSizeRef.current;
+    const width = imageContainerWidthRef.current;
+    if (!canvas || !img || !natural || !natural.width || !width) return;
+    const dpr = window.devicePixelRatio || 1;
+    const aspect = natural.height / natural.width;
+    const targetW = Math.max(1, Math.round(width * dpr));
+    const targetH = Math.max(1, Math.round(width * aspect * dpr));
+    if (canvas.width !== targetW) canvas.width = targetW;
+    if (canvas.height !== targetH) canvas.height = targetH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.clearRect(0, 0, targetW, targetH);
+    ctx.drawImage(img, 0, 0, targetW, targetH);
+  };
+
+  useEffect(() => {
+    if (!isStandaloneImage || displayMode !== 'image' || !imageThumbUrl) {
+      imageSourceRef.current = null;
+      imageNaturalSizeRef.current = null;
+      return () => {};
+    }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      imageSourceRef.current = img;
+      imageNaturalSizeRef.current = { width: img.naturalWidth, height: img.naturalHeight };
+      drawImageCanvas();
+    };
+    img.src = imageThumbUrl;
+    return () => { cancelled = true; };
+  }, [isStandaloneImage, displayMode, imageThumbUrl]);
+
+  useEffect(() => {
+    if (!isStandaloneImage || displayMode !== 'image') return () => {};
+    const el = imageCanvasContainerRef.current;
+    // The canvas container only mounts once `imageThumbUrl` (set asynchronously
+    // by the blob-URL effect above) is non-null — on the render where that's
+    // still null, `el` is null here. Depending on imageThumbUrl too makes this
+    // effect retry on the render right after the container actually mounts,
+    // instead of permanently skipping the observer for this tile's lifetime.
+    if (!el) return () => {};
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        imageContainerWidthRef.current = entry.contentRect.width;
+      }
+      drawImageCanvas();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [isStandaloneImage, displayMode, imageThumbUrl]);
+
   useEffect(() => {
     setTagInput('');
     setTagPickerMode('select');
@@ -970,12 +1039,16 @@ export const DataTile = ({
     return React.createElement(
       'div',
       { className: 'rounded-lg overflow-hidden cursor-pointer w-full group relative', onClick: () => onSelect(video) },
-      imageThumbUrl && React.createElement('img', {
-        src: imageThumbUrl,
-        alt: video?.name || 'Image',
-        className: 'w-full h-auto block',
-        loading: 'lazy',
-      }),
+      imageThumbUrl && React.createElement(
+        'div',
+        { ref: imageCanvasContainerRef, style: { width: '100%', lineHeight: 0 } },
+        React.createElement('canvas', {
+          ref: imageCanvasRef,
+          role: 'img',
+          'aria-label': video?.name || 'Image',
+          style: { width: '100%', height: 'auto', display: 'block' },
+        })
+      ),
       typeof onSetDisplayMode === 'function' && React.createElement(
         'button',
         {
