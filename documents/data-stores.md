@@ -57,7 +57,7 @@ Additional fields:
 - `notes`: `assets[]`, optional `driveFolderId`
 - `images` (legacy): `noteDriveId`
 - `channels`: `channelId` (unique index), `handle`, `videos[]`, etc.
-- `desks`: `layout`, `connections`, etc.
+- `desks`: `layout`, `connections`, `textItems`, `sections`, etc.
 
 ## Desk layout keys and values
 
@@ -66,6 +66,10 @@ Canonical layout key: **`drive:{localDriveId}`** — see [`utils/deskEntryKeys.j
 Layout values: `{ x, y, driveFileId? }`. The optional `driveFileId` enables cross-device desk resolution when layout JSON is pulled from Drive.
 
 `normalizeDeskLayoutV11` runs on DB upgrade and at desk open to rewrite legacy key shapes (numeric ids, Google-id keys from v10) into the v11 format. `remapDeskLayoutByDriveFileId` resolves pending tiles by matching `value.driveFileId` to local rows.
+
+## Desk sections
+
+`desk.sections` is an array of rounded-rectangle grouping containers rendered on the Desk canvas: `{ id, x, y, width, height, label }`. Unlike `layout`, section-to-item membership is never stored — it's computed live from bounding-box containment against the current `layout`/`textItems` positions, once at the start of a section drag gesture. Sections auto-expand (grow-only, never shrink) to keep containing any item dragged onto or past their edge; manual resize (via on-canvas handles) can shrink them. Merged the same way as `connections`/`textItems`: additively, keyed by `id` (`mergeById` in `utils/deskMerge.js`).
 
 ## Key indexes
 

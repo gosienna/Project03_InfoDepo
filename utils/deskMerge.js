@@ -71,6 +71,7 @@ export function mergeDesk(base, local, remote) {
     layout:      mergeLayout(base?.layout,      local?.layout,      remote?.layout),
     connections: mergeById(base?.connections,   local?.connections, remote?.connections),
     textItems:   mergeById(base?.textItems,     local?.textItems,   remote?.textItems),
+    sections:    mergeById(base?.sections,      local?.sections,    remote?.sections),
     rev: Math.max(local?.rev || 0, remote?.rev || 0) + 1,
   };
 }

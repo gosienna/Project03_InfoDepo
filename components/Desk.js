@@ -20,6 +20,12 @@ const DEFAULT_ZOOM_MIN = 0.1;
 const DEFAULT_ZOOM_MAX = 5;
 const GRID_SIZE = 40;
 const CARD_H = 220;
+const SECTION_HEADER_H = 22;
+const MIN_SECTION_W = 160;
+const MIN_SECTION_H = 120;
+// Auto-expand grows a section a bit past the item's actual edge, so the new
+// boundary sits with breathing room around it instead of flush against it.
+const SECTION_EXPAND_PADDING = 20;
 
 const snapToGrid = (v) => Math.round(v / GRID_SIZE) * GRID_SIZE;
 const snapPoint = (p) => ({ x: snapToGrid(p.x), y: snapToGrid(p.y) });
@@ -60,6 +66,42 @@ const cardBoxFor = (pos, size) => {
     cx: pos.x + w / 2,
     cy: pos.y + h / 2,
   };
+};
+
+// Section geometry helpers. Sections are {id, x, y, width, height, label}
+// rectangles; membership (which items sit inside one) is never persisted,
+// only computed live from current positions.
+const sectionBoxFor = (s) => ({
+  left: s.x,
+  top: s.y,
+  right: s.x + s.width,
+  bottom: s.y + s.height,
+});
+
+const boxContainedIn = (box, sectionBox) =>
+  box.left >= sectionBox.left && box.right <= sectionBox.right &&
+  box.top >= sectionBox.top && box.bottom <= sectionBox.bottom;
+
+// True when the two boxes share any area — used to gate auto-expand so a
+// section only grows for an item actually straddling its edge, never for one
+// dragged clean away (otherwise the section would balloon out to keep
+// re-engulfing anything that ever touched it, trapping it permanently).
+const boxesOverlap = (a, b) =>
+  a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+
+// Grow-only union: expands `section` just enough to contain `box` plus a
+// little padding, so the new boundary has breathing room around the item
+// instead of sitting flush against its edge. Never shrinks. Returns the same
+// reference when nothing changed, so callers can cheaply detect a no-op.
+const expandSectionToContain = (section, box) => {
+  const left = Math.min(section.x, box.left - SECTION_EXPAND_PADDING);
+  const top = Math.min(section.y, box.top - SECTION_EXPAND_PADDING);
+  const right = Math.max(section.x + section.width, box.right + SECTION_EXPAND_PADDING);
+  const bottom = Math.max(section.y + section.height, box.bottom + SECTION_EXPAND_PADDING);
+  if (left === section.x && top === section.y && right === section.x + section.width && bottom === section.y + section.height) {
+    return section;
+  }
+  return { ...section, x: left, y: top, width: right - left, height: bottom - top };
 };
 
 const edgeAnchors = (box) => ([
@@ -699,6 +741,20 @@ const InlineAddSearch = ({ items, channels, desks, googleUserEmail, currentDeskI
 
 const TEXT_FONT_SIZES = [12, 14, 16, 20, 24, 32, 40, 48, 64];
 const textItemId = () => `text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const sectionId = () => `section-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+// Resize-handle configuration: which edge(s) each handle drags, and whether
+// dragging it moves the section's left/top origin (vs. only its size).
+const SECTION_RESIZE_HANDLES = [
+  { id: 'nw', cursor: 'nwse-resize', hx: 0, hy: 0, growLeft: true, growTop: true },
+  { id: 'n', cursor: 'ns-resize', hx: 0.5, hy: 0, growLeft: false, growTop: true },
+  { id: 'ne', cursor: 'nesw-resize', hx: 1, hy: 0, growLeft: false, growTop: true },
+  { id: 'e', cursor: 'ew-resize', hx: 1, hy: 0.5, growLeft: false, growTop: false },
+  { id: 'se', cursor: 'nwse-resize', hx: 1, hy: 1, growLeft: false, growTop: false },
+  { id: 's', cursor: 'ns-resize', hx: 0.5, hy: 1, growLeft: false, growTop: false },
+  { id: 'sw', cursor: 'nesw-resize', hx: 0, hy: 1, growLeft: true, growTop: false },
+  { id: 'w', cursor: 'ew-resize', hx: 0, hy: 0.5, growLeft: true, growTop: false },
+];
 
 export const Desk = ({
   desk,
@@ -713,6 +769,7 @@ export const Desk = ({
   onMigrateDeskLayout,
   onUpdateConnections,
   onUpdateTextItems,
+  onUpdateSections,
   onDeskModified,
   onRenameDesk,
   onSetTags,
@@ -812,10 +869,14 @@ export const Desk = ({
       },
     }));
   }, []);
+  const cloneSections = useCallback((sections) => {
+    return (sections || []).map((s) => ({ ...s }));
+  }, []);
   const snapshotState = useCallback(() => ({
     layout: cloneLayout(layoutRef.current),
     connections: cloneConnections(connectionsRef.current),
-  }), [cloneConnections, cloneLayout]);
+    sections: cloneSections(sectionsRef.current),
+  }), [cloneConnections, cloneLayout, cloneSections]);
   useEffect(() => {
     // Reset undo/redo only when switching to a different desk.
     historyRef.current = { past: [], future: [] };
@@ -823,6 +884,22 @@ export const Desk = ({
 
   // Text items on the canvas
   const textItemsRef = useRef(Array.isArray(desk?.textItems) ? desk.textItems : []);
+  const textFontWheelTimerRef = useRef(null);
+  // Holds the latest onTextItemFontWheel closure so the canvas-level native
+  // wheel listener (registered once, below) can call into it without a
+  // stale-closure/TDZ dance — assigned on every render, read only from events.
+  const onTextItemFontWheelRef = useRef(null);
+
+  // Sections: rounded-rect grouping containers. Membership is computed live
+  // from layoutRef/textItemsRef, never persisted.
+  const sectionsRef = useRef(Array.isArray(desk?.sections) ? desk.sections : []);
+  const [selectedSectionIds, setSelectedSectionIds] = useState([]);
+  const [editingSectionId, setEditingSectionId] = useState(null);
+  const sectionDragRef = useRef(null);
+  const sectionResizeRef = useRef(null);
+  const sectionFontWheelTimerRef = useRef(null);
+  // See onTextItemFontWheelRef above — same reason.
+  const onSectionTitleWheelRef = useRef(null);
 
   useEffect(() => {
     // Sync refs when desk data changes; normalize layout keys in the same pass so
@@ -860,8 +937,9 @@ export const Desk = ({
       connectionsRef.current = connections;
     }
     textItemsRef.current = Array.isArray(desk?.textItems) ? desk.textItems : [];
+    sectionsRef.current = Array.isArray(desk?.sections) ? desk.sections : [];
     rerender();
-  }, [desk?.layout, desk?.connections, desk?.textItems, items, channels, desks, readOnly, desk?.driveId, onUpdateLayout, onMigrateDeskLayout, onUpdateConnections, rerender]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [desk?.layout, desk?.connections, desk?.textItems, desk?.sections, items, channels, desks, readOnly, desk?.driveId, onUpdateLayout, onMigrateDeskLayout, onUpdateConnections, rerender]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const commitLayout = useCallback((newLayout, options = {}) => {
     if (options.recordHistory !== false) {
@@ -892,16 +970,51 @@ export const Desk = ({
     rerender();
   }, [onUpdateTextItems, onDeskModified, desk?.driveId, rerender]);
 
+  const commitSections = useCallback((next, options = {}) => {
+    if (options.recordHistory !== false) {
+      historyRef.current.past.push(snapshotState());
+      historyRef.current.future = [];
+    }
+    sectionsRef.current = Array.isArray(next) ? next : [];
+    if (onUpdateSections && desk?.driveId != null) onUpdateSections(desk.driveId, sectionsRef.current);
+    if (desk?.driveId != null) onDeskModified?.(desk.driveId);
+    rerender();
+  }, [onUpdateSections, onDeskModified, desk?.driveId, rerender, snapshotState]);
+
+  // Grow-only auto-expand: given the boxes of items that just moved (or were
+  // placed), expand any section a box actually overlaps so it fully contains
+  // it. A box that doesn't overlap a section at all leaves it untouched —
+  // otherwise an item once inside could never be dragged back out, since the
+  // section would just keep growing to re-engulf it wherever it went. Mutates
+  // sectionsRef.current in place; never shrinks.
+  const growSectionsForBoxes = useCallback((boxes) => {
+    if (!boxes.length || !(sectionsRef.current || []).length) return false;
+    let sections = sectionsRef.current;
+    let changed = false;
+    boxes.forEach((box) => {
+      sections = sections.map((s) => {
+        if (!boxesOverlap(box, sectionBoxFor(s))) return s;
+        const grown = expandSectionToContain(s, box);
+        if (grown !== s) changed = true;
+        return grown;
+      });
+    });
+    if (changed) sectionsRef.current = sections;
+    return changed;
+  }, []);
+
   const applyDeskState = useCallback((state) => {
     layoutRef.current = cloneLayout(state?.layout);
     connectionsRef.current = cloneConnections(state?.connections);
+    sectionsRef.current = cloneSections(state?.sections);
     if (desk?.driveId != null) {
       if (onUpdateLayout) onUpdateLayout(desk.driveId, layoutRef.current);
       if (onUpdateConnections) onUpdateConnections(desk.driveId, connectionsRef.current);
+      if (onUpdateSections) onUpdateSections(desk.driveId, sectionsRef.current);
       onDeskModified?.(desk.driveId);
     }
     rerender();
-  }, [cloneConnections, cloneLayout, desk?.driveId, onUpdateConnections, onUpdateLayout, onDeskModified, rerender]);
+  }, [cloneConnections, cloneLayout, cloneSections, desk?.driveId, onUpdateConnections, onUpdateLayout, onUpdateSections, onDeskModified, rerender]);
 
   const undoDesk = useCallback(() => {
     const prev = historyRef.current.past.pop();
@@ -933,6 +1046,10 @@ export const Desk = ({
   const [slashMenu, setSlashMenu] = useState({ open: false, x: 120, y: 120 });
   const [editingTextId, setEditingTextId] = useState(null);
   const [textFontSizeMenu, setTextFontSizeMenu] = useState(null);
+  // id of whichever text item / section title is currently moused-over — the
+  // small "16px" readout only renders while its owner is this value, so it
+  // stays out of the way until the user is actually pointing at that text.
+  const [hoveredFontTarget, setHoveredFontTarget] = useState(null);
   const lineDragRef = useRef(null);
   const activePointersRef = useRef(new Map());
   const pinchStartRef = useRef(null);
@@ -977,11 +1094,12 @@ export const Desk = ({
         }
         return;
       }
-      if ((key === 'backspace' || key === 'delete') && (selectedConnectionIds.length > 0 || selectedItemKeys.length > 0 || selectedTextIds.length > 0)) {
+      if ((key === 'backspace' || key === 'delete') && (selectedConnectionIds.length > 0 || selectedItemKeys.length > 0 || selectedTextIds.length > 0 || selectedSectionIds.length > 0)) {
         e.preventDefault();
         const selectedLineSet = new Set(selectedConnectionIds);
         const selectedItemSet = new Set(selectedItemKeys);
         const selectedTextSet = new Set(selectedTextIds);
+        const selectedSectionSet = new Set(selectedSectionIds);
         if (selectedItemSet.size > 0) {
           const nextLayout = { ...(layoutRef.current || {}) };
           selectedItemSet.forEach((k) => { delete nextLayout[k]; });
@@ -997,10 +1115,16 @@ export const Desk = ({
           const nextTextItems = (textItemsRef.current || []).filter((t) => !selectedTextSet.has(t.id));
           commitTextItems(nextTextItems);
         }
+        if (selectedSectionSet.size > 0) {
+          // Deletes only the section rectangle — contained items are never touched.
+          const nextSections = (sectionsRef.current || []).filter((s) => !selectedSectionSet.has(s.id));
+          commitSections(nextSections, { recordHistory: false });
+        }
         setSelectedConnectionIds([]);
         setSelectedItemKeys([]);
         setSelectedTextIds([]);
         setSelectedNodeIds([]);
+        setSelectedSectionIds([]);
         return;
       }
       const mod = e.ctrlKey || e.metaKey;
@@ -1017,7 +1141,7 @@ export const Desk = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [commitConnections, commitLayout, commitTextItems, connectMode, readOnly, redoDesk, selectedConnectionIds, selectedItemKeys, selectedTextIds, slashMenu.open, undoDesk]);
+  }, [commitConnections, commitLayout, commitTextItems, commitSections, connectMode, readOnly, redoDesk, selectedConnectionIds, selectedItemKeys, selectedTextIds, selectedSectionIds, slashMenu.open, undoDesk]);
 
   const onViewportPointerDown = useCallback((e) => {
     activePointersRef.current.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
@@ -1054,6 +1178,7 @@ export const Desk = ({
       setSelectedItemKeys([]);
       setSelectedTextIds([]);
       setSelectedNodeIds([]);
+      setSelectedSectionIds([]);
       setSlashMenu((prev) => prev.open ? { ...prev, open: false } : prev);
       setConnectMode(false);
       setConnectStartKey(null);
@@ -1124,6 +1249,7 @@ export const Desk = ({
         setSelectedItemKeys([]);
         setSelectedTextIds([]);
         setSelectedNodeIds([]);
+        setSelectedSectionIds([]);
       }
     }
     if (!marqueeRef.current || !viewportRef.current) return;
@@ -1161,6 +1287,14 @@ export const Desk = ({
       .map((item) => item.driveId);
     setSelectedTextIds(textIds);
 
+    const sectionIds = (sectionsRef.current || [])
+      .filter((s) => {
+        const b = sectionBoxFor(s);
+        return b.left <= ex && b.right >= sx && b.top <= ey && b.bottom >= sy;
+      })
+      .map((s) => s.id);
+    setSelectedSectionIds(sectionIds);
+
     const connIds = (connectionsRef.current || [])
       .map((conn) => ({ conn, points: connectionPointsFor(conn, layoutRef.current || {}, cardSizeRef.current) }))
       .filter((row) => row.points && row.points.length >= 2)
@@ -1192,7 +1326,24 @@ export const Desk = ({
   }, []);
 
   // --- Zoom ---
+  // A single native (non-passive) listener on the viewport handles all wheel
+  // events for the canvas, including scroll-to-resize over a text item's
+  // content or a section's title — routing has to happen here, in the one
+  // listener that's guaranteed to see the event first, rather than via a
+  // React onWheel further down the tree: this listener is attached directly
+  // to an ancestor DOM node, so it always fires before React's synthetic
+  // (root-delegated) dispatch would reach a descendant's onWheel handler.
   const onWheel = useCallback((e) => {
+    const textTarget = e.target.closest?.('[data-text-font-id]');
+    if (textTarget) {
+      onTextItemFontWheelRef.current?.(e, textTarget.getAttribute('data-text-font-id'));
+      return;
+    }
+    const sectionTarget = e.target.closest?.('[data-section-font-id]');
+    if (sectionTarget) {
+      onSectionTitleWheelRef.current?.(e, sectionTarget.getAttribute('data-section-font-id'));
+      return;
+    }
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.1 : 0.9;
     const oldZoom = zoomRef.current;
@@ -1246,8 +1397,10 @@ export const Desk = ({
       startWorldY: world.y,
       startPositions,
       startTextPositions,
+      startSections: sectionsRef.current,
     };
     setSelectedItemKeys(selected);
+    setSelectedSectionIds([]);
     e.currentTarget.setPointerCapture(e.pointerId);
   }, [pointerToWorld, selectedItemKeys, selectedTextIds]);
 
@@ -1279,6 +1432,11 @@ export const Desk = ({
   const onHandlePointerUp = useCallback((e, key) => {
     const drag = itemDragRef.current;
     if (!drag || !drag.keys.includes(key)) return;
+    // Auto-expand is evaluated once here, against the final dropped position —
+    // not live during the drag — so a section only grows on drop, and never
+    // visibly balloons out while the user is still mid-drag.
+    const droppedBoxes = drag.keys.map((k) => cardBoxFor(layoutRef.current[k], cardSizeRef.current[k]));
+    growSectionsForBoxes(droppedBoxes);
     // A click-to-select (pointerdown immediately followed by pointerup, no
     // intervening move) still reaches here. Only commit — and thus mark the
     // desk dirty / queue a Drive upload — when a position actually changed;
@@ -1288,6 +1446,8 @@ export const Desk = ({
       const cur = layoutRef.current[k] || start;
       return cur.x !== start.x || cur.y !== start.y;
     });
+    const sectionsGrew = sectionsRef.current !== drag.startSections;
+    if (sectionsGrew) commitSections([...sectionsRef.current], { recordHistory: false });
     if (layoutMoved) commitLayout({ ...layoutRef.current });
     const textMoved = Array.isArray(drag.textIds) && drag.textIds.length > 0 && drag.textIds.some((id) => {
       const start = drag.startTextPositions[id];
@@ -1296,7 +1456,7 @@ export const Desk = ({
     });
     if (textMoved) commitTextItems([...(textItemsRef.current || [])]);
     itemDragRef.current = null;
-  }, [commitLayout, commitTextItems]);
+  }, [commitLayout, commitTextItems, commitSections, growSectionsForBoxes]);
 
   // --- Add item to desk ---
   const addItemToDesk = useCallback((key) => {
@@ -1306,7 +1466,11 @@ export const Desk = ({
     const centerX = (w / 2 - panRef.current.x) / zoomRef.current;
     const centerY = (h / 2 - panRef.current.y) / zoomRef.current;
     const offset = Object.keys(layoutRef.current).length * 20;
-    const newLayout = { ...layoutRef.current, [key]: { x: snapToGrid(centerX - CARD_W / 2 + offset % 200), y: snapToGrid(centerY - 150 + offset % 100) } };
+    const pos = { x: snapToGrid(centerX - CARD_W / 2 + offset % 200), y: snapToGrid(centerY - 150 + offset % 100) };
+    const newLayout = { ...layoutRef.current, [key]: pos };
+    if (growSectionsForBoxes([cardBoxFor(pos, cardSizeRef.current[key])])) {
+      commitSections([...sectionsRef.current], { recordHistory: false });
+    }
     commitLayout(newLayout);
 
     // Propagate desk's sharedWith to the newly added record
@@ -1325,7 +1489,7 @@ export const Desk = ({
         }
       }
     }
-  }, [commitLayout, desk, items, channels, desks, onSetSharedWith]);
+  }, [commitLayout, commitSections, growSectionsForBoxes, desk, items, channels, desks, onSetSharedWith]);
 
   const handleCreateDesk = useCallback(async () => {
     if (!onCreateDesk) return;
@@ -1367,13 +1531,16 @@ export const Desk = ({
     const snapped = snapPoint({ x: worldX, y: worldY });
     const id = textItemId();
     const newItem = { id, text: '', x: snapped.x, y: snapped.y, fontSize: 16, width: 180, height: 40 };
+    if (growSectionsForBoxes([estimateTextBounds(newItem)])) {
+      commitSections([...sectionsRef.current], { recordHistory: false });
+    }
     const next = [...(textItemsRef.current || []), newItem];
     commitTextItems(next);
     setEditingTextId(id);
     setSlashMenu((prev) => ({ ...prev, open: false }));
     setConnectMode(false);
     setConnectStartKey(null);
-  }, [commitTextItems]);
+  }, [commitTextItems, commitSections, growSectionsForBoxes]);
 
   const addTextItemAtCenter = useCallback(() => {
     const el = viewportRef.current;
@@ -1384,13 +1551,16 @@ export const Desk = ({
     const snapped = snapPoint({ x: worldX, y: worldY });
     const id = textItemId();
     const newItem = { id, text: '', x: snapped.x, y: snapped.y, fontSize: 16, width: 180, height: 40 };
+    if (growSectionsForBoxes([estimateTextBounds(newItem)])) {
+      commitSections([...sectionsRef.current], { recordHistory: false });
+    }
     const next = [...(textItemsRef.current || []), newItem];
     commitTextItems(next);
     setEditingTextId(id);
     setSlashMenu((prev) => ({ ...prev, open: false }));
     setConnectMode(false);
     setConnectStartKey(null);
-  }, [commitTextItems]);
+  }, [commitTextItems, commitSections, growSectionsForBoxes]);
 
   const updateTextItem = useCallback((id, updates) => {
     const next = (textItemsRef.current || []).map((t) =>
@@ -1398,6 +1568,27 @@ export const Desk = ({
     );
     commitTextItems(next);
   }, [commitTextItems]);
+
+  // Scroll-to-resize while hovering the text item's own content area — mutates
+  // the ref + rerenders immediately, then persists via a debounced commit once
+  // scrolling settles, so rapid wheel ticks don't spam IndexedDB writes.
+  const onTextItemFontWheel = useCallback((e, id) => {
+    if (readOnly) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const current = (textItemsRef.current || []).find((t) => t.id === id);
+    if (!current) return;
+    const prevSize = current.fontSize || 16;
+    const nextSize = Math.max(8, Math.min(96, prevSize + (e.deltaY < 0 ? 1 : -1)));
+    if (nextSize === prevSize) return;
+    textItemsRef.current = (textItemsRef.current || []).map((t) => (t.id === id ? { ...t, fontSize: nextSize } : t));
+    rerender();
+    clearTimeout(textFontWheelTimerRef.current);
+    textFontWheelTimerRef.current = setTimeout(() => {
+      commitTextItems([...(textItemsRef.current || [])]);
+    }, 300);
+  }, [readOnly, rerender, commitTextItems]);
+  onTextItemFontWheelRef.current = onTextItemFontWheel;
 
   const deleteTextItem = useCallback((id) => {
     const next = (textItemsRef.current || []).filter((t) => t.id !== id);
@@ -1429,10 +1620,12 @@ export const Desk = ({
       startWorldY: world.y,
       startPositions,
       startItemPositions,
+      startSections: sectionsRef.current,
     };
     setSelectedTextIds(selected);
     setSelectedConnectionIds([]);
     setSelectedNodeIds([]);
+    setSelectedSectionIds([]);
     e.currentTarget.setPointerCapture(e.pointerId);
   }, [pointerToWorld, selectedItemKeys, selectedTextIds]);
 
@@ -1462,6 +1655,13 @@ export const Desk = ({
   const onTextHandlePointerUp = useCallback((e, id) => {
     const drag = textItemDragRef.current;
     if (!drag || !drag.ids.includes(id)) return;
+    // Auto-expand is evaluated once here, against the final dropped position —
+    // not live during the drag — so a section only grows on drop.
+    const droppedTextBoxes = (textItemsRef.current || []).filter((t) => drag.ids.includes(t.id)).map((t) => estimateTextBounds(t));
+    if (Array.isArray(drag.itemKeys) && drag.itemKeys.length > 0) {
+      drag.itemKeys.forEach((k) => droppedTextBoxes.push(cardBoxFor(layoutRef.current[k], cardSizeRef.current[k])));
+    }
+    growSectionsForBoxes(droppedTextBoxes);
     // Same no-op-click guard as onHandlePointerUp: only commit (and mark the
     // desk dirty) when something actually moved.
     const textMoved = drag.ids.some((tid) => {
@@ -1469,6 +1669,8 @@ export const Desk = ({
       const cur = (textItemsRef.current || []).find((t) => t.id === tid);
       return start && cur && (cur.x !== start.x || cur.y !== start.y);
     });
+    const sectionsGrew = sectionsRef.current !== drag.startSections;
+    if (sectionsGrew) commitSections([...sectionsRef.current], { recordHistory: false });
     if (textMoved) commitTextItems([...(textItemsRef.current || [])]);
     const itemsMoved = Array.isArray(drag.itemKeys) && drag.itemKeys.length > 0 && drag.itemKeys.some((k) => {
       const start = drag.startItemPositions[k] || { x: 0, y: 0 };
@@ -1477,7 +1679,232 @@ export const Desk = ({
     });
     if (itemsMoved) commitLayout({ ...layoutRef.current });
     textItemDragRef.current = null;
-  }, [commitLayout, commitTextItems]);
+  }, [commitLayout, commitTextItems, commitSections, growSectionsForBoxes]);
+
+  // --- Sections ---
+  const addSectionAtCenter = useCallback(() => {
+    const el = viewportRef.current;
+    const w = el ? el.clientWidth : 800;
+    const h = el ? el.clientHeight : 600;
+    const worldX = (w / 2 - panRef.current.x) / zoomRef.current;
+    const worldY = (h / 2 - panRef.current.y) / zoomRef.current;
+    const defaultW = 400;
+    const defaultH = 300;
+    const snapped = snapPoint({ x: worldX - defaultW / 2, y: worldY - defaultH / 2 });
+    const newSection = { id: sectionId(), x: snapped.x, y: snapped.y, width: defaultW, height: defaultH, label: 'Section' };
+    commitSections([...(sectionsRef.current || []), newSection]);
+    setEditingSectionId(newSection.id);
+    setSelectedSectionIds([newSection.id]);
+    setSlashMenu((prev) => ({ ...prev, open: false }));
+    setConnectMode(false);
+    setConnectStartKey(null);
+  }, [commitSections]);
+
+  const renameSection = useCallback((id, label) => {
+    const next = (sectionsRef.current || []).map((s) => (s.id === id ? { ...s, label } : s));
+    commitSections(next);
+  }, [commitSections]);
+
+  // Scroll-to-resize: mutates the ref + rerenders immediately for smooth
+  // feedback, then persists via a debounced commit once scrolling settles
+  // (mirrors the drag handles, which also commit once at the end of the
+  // gesture rather than on every intermediate frame).
+  const onSectionTitleWheel = useCallback((e, id) => {
+    if (readOnly) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const current = (sectionsRef.current || []).find((s) => s.id === id);
+    if (!current) return;
+    const prevSize = current.fontSize || 12;
+    const nextSize = Math.max(10, Math.min(100, prevSize + (e.deltaY < 0 ? 1 : -1)));
+    if (nextSize === prevSize) return;
+    sectionsRef.current = (sectionsRef.current || []).map((s) => (s.id === id ? { ...s, fontSize: nextSize } : s));
+    rerender();
+    clearTimeout(sectionFontWheelTimerRef.current);
+    sectionFontWheelTimerRef.current = setTimeout(() => {
+      commitSections([...(sectionsRef.current || [])], { recordHistory: false });
+    }, 300);
+  }, [readOnly, rerender, commitSections]);
+  onSectionTitleWheelRef.current = onSectionTitleWheel;
+
+  const deleteSection = useCallback((id) => {
+    const next = (sectionsRef.current || []).filter((s) => s.id !== id);
+    commitSections(next);
+    if (editingSectionId === id) setEditingSectionId(null);
+    setSelectedSectionIds((prev) => prev.filter((x) => x !== id));
+  }, [commitSections, editingSectionId]);
+
+  const onSectionHandlePointerDown = useCallback((e, id) => {
+    e.stopPropagation();
+    const world = pointerToWorld(e);
+    const section = (sectionsRef.current || []).find((s) => s.id === id);
+    if (!section) return;
+    const sBox = sectionBoxFor(section);
+    // Membership computed once, at drag-start — not re-evaluated mid-drag.
+    const itemKeys = Object.entries(layoutRef.current || {})
+      .filter(([k, pos]) => boxContainedIn(cardBoxFor(pos, cardSizeRef.current[k]), sBox))
+      .map(([k]) => k);
+    const textIds = (textItemsRef.current || [])
+      .filter((t) => boxContainedIn(estimateTextBounds(t), sBox))
+      .map((t) => t.id);
+    // Other sections nested inside this one move along with it too. A flat
+    // containment check against this section's box is enough even for
+    // multiple levels of nesting — a section nested two levels deep is still
+    // geometrically contained in the outermost one being dragged.
+    const childSectionIds = (sectionsRef.current || [])
+      .filter((other) => other.id !== id && boxContainedIn(sectionBoxFor(other), sBox))
+      .map((other) => other.id);
+    const startItemPositions = {};
+    itemKeys.forEach((k) => { startItemPositions[k] = layoutRef.current[k] || { x: 0, y: 0 }; });
+    const startTextPositions = {};
+    textIds.forEach((tid) => {
+      const t = (textItemsRef.current || []).find((x) => x.id === tid);
+      if (t) startTextPositions[tid] = { x: t.x, y: t.y };
+    });
+    const startChildSectionPositions = {};
+    childSectionIds.forEach((cid) => {
+      const cs = (sectionsRef.current || []).find((x) => x.id === cid);
+      if (cs) startChildSectionPositions[cid] = { x: cs.x, y: cs.y };
+    });
+    sectionDragRef.current = {
+      id,
+      startWorldX: world.x,
+      startWorldY: world.y,
+      startSection: { x: section.x, y: section.y },
+      itemKeys,
+      textIds,
+      childSectionIds,
+      startItemPositions,
+      startTextPositions,
+      startChildSectionPositions,
+    };
+    setSelectedSectionIds([id]);
+    setSelectedItemKeys([]);
+    setSelectedTextIds([]);
+    setSelectedConnectionIds([]);
+    setSelectedNodeIds([]);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, [pointerToWorld]);
+
+  const onSectionHandlePointerMove = useCallback((e, id) => {
+    const drag = sectionDragRef.current;
+    if (!drag || drag.id !== id) return;
+    const world = pointerToWorld(e);
+    const dx = world.x - drag.startWorldX;
+    const dy = world.y - drag.startWorldY;
+    const nextSections = (sectionsRef.current || []).map((s) => {
+      if (s.id === id) return { ...s, x: snapToGrid(drag.startSection.x + dx), y: snapToGrid(drag.startSection.y + dy) };
+      if (drag.childSectionIds.includes(s.id)) {
+        const base = drag.startChildSectionPositions[s.id] || { x: s.x, y: s.y };
+        return { ...s, x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
+      }
+      return s;
+    });
+    sectionsRef.current = nextSections;
+    if (drag.itemKeys.length > 0) {
+      const nextLayout = { ...layoutRef.current };
+      drag.itemKeys.forEach((k) => {
+        const base = drag.startItemPositions[k] || { x: 0, y: 0 };
+        const moved = { x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
+        if (base.driveFileId) moved.driveFileId = base.driveFileId;
+        nextLayout[k] = moved;
+      });
+      layoutRef.current = nextLayout;
+    }
+    if (drag.textIds.length > 0) {
+      const nextTexts = (textItemsRef.current || []).map((t) => {
+        if (!drag.textIds.includes(t.id)) return t;
+        const base = drag.startTextPositions[t.id] || { x: t.x, y: t.y };
+        return { ...t, x: snapToGrid(base.x + dx), y: snapToGrid(base.y + dy) };
+      });
+      textItemsRef.current = nextTexts;
+    }
+    rerender();
+  }, [pointerToWorld, rerender]);
+
+  const onSectionHandlePointerUp = useCallback((e, id) => {
+    const drag = sectionDragRef.current;
+    if (!drag || drag.id !== id) return;
+    const section = (sectionsRef.current || []).find((s) => s.id === id);
+    const sectionMoved = !!section && (section.x !== drag.startSection.x || section.y !== drag.startSection.y);
+    if (sectionMoved) commitSections([...sectionsRef.current], { recordHistory: false });
+    if (drag.itemKeys.length > 0) commitLayout({ ...layoutRef.current });
+    if (drag.textIds.length > 0) commitTextItems([...(textItemsRef.current || [])]);
+    sectionDragRef.current = null;
+  }, [commitLayout, commitTextItems, commitSections]);
+
+  const onSectionResizePointerDown = useCallback((e, id, handleId) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const world = pointerToWorld(e);
+    const section = (sectionsRef.current || []).find((s) => s.id === id);
+    const handle = SECTION_RESIZE_HANDLES.find((h) => h.id === handleId);
+    if (!section || !handle) return;
+    sectionResizeRef.current = {
+      id,
+      handle,
+      startWorldX: world.x,
+      startWorldY: world.y,
+      start: { x: section.x, y: section.y, width: section.width, height: section.height },
+    };
+    setSelectedSectionIds([id]);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, [pointerToWorld]);
+
+  const onSectionResizePointerMove = useCallback((e, id) => {
+    const drag = sectionResizeRef.current;
+    if (!drag || drag.id !== id) return;
+    const world = pointerToWorld(e);
+    const dx = world.x - drag.startWorldX;
+    const dy = world.y - drag.startWorldY;
+    const { start, handle } = drag;
+    // Only the axis this handle actually controls gets touched — snapping (or
+    // even re-writing) the other axis would silently drift it to the nearest
+    // grid line on every drag, even though the user never moved that edge.
+    const affectsX = handle.growLeft || handle.hx !== 0.5;
+    const affectsY = handle.growTop || handle.hy !== 0.5;
+    let x = start.x;
+    let width = start.width;
+    if (affectsX) {
+      if (handle.growLeft) {
+        width = Math.max(MIN_SECTION_W, start.width - dx);
+        x = start.x + start.width - width;
+      } else {
+        width = Math.max(MIN_SECTION_W, start.width + dx);
+      }
+      x = snapToGrid(x);
+      width = Math.max(MIN_SECTION_W, snapToGrid(width));
+    }
+    let y = start.y;
+    let height = start.height;
+    if (affectsY) {
+      if (handle.growTop) {
+        height = Math.max(MIN_SECTION_H, start.height - dy);
+        y = start.y + start.height - height;
+      } else {
+        height = Math.max(MIN_SECTION_H, start.height + dy);
+      }
+      y = snapToGrid(y);
+      height = Math.max(MIN_SECTION_H, snapToGrid(height));
+    }
+    const nextSections = (sectionsRef.current || []).map((s) =>
+      s.id === id ? { ...s, x, y, width, height } : s
+    );
+    sectionsRef.current = nextSections;
+    rerender();
+  }, [pointerToWorld, rerender]);
+
+  const onSectionResizePointerUp = useCallback((e, id) => {
+    const drag = sectionResizeRef.current;
+    if (!drag || drag.id !== id) return;
+    const section = (sectionsRef.current || []).find((s) => s.id === id);
+    const resized = !!section && (
+      section.x !== drag.start.x || section.y !== drag.start.y ||
+      section.width !== drag.start.width || section.height !== drag.start.height
+    );
+    if (resized) commitSections([...sectionsRef.current]);
+    sectionResizeRef.current = null;
+  }, [commitSections]);
 
   const { x: panX, y: panY } = panRef.current;
   const zoom = zoomRef.current;
@@ -1709,6 +2136,152 @@ export const Desk = ({
           willChange: 'transform',
         },
       },
+      // Sections — rendered first so they paint behind items/text/connections.
+      (sectionsRef.current || []).map((s) =>
+        React.createElement(
+          'div',
+          {
+            key: s.id,
+            style: {
+              position: 'absolute',
+              left: s.x,
+              top: s.y,
+              width: s.width,
+              height: s.height,
+              background: 'rgb(var(--theme-900) / 0.08)',
+              border: selectedSectionIds.includes(s.id) ? '2px solid rgb(var(--theme-500))' : '1px solid rgb(var(--theme-900) / 0.12)',
+              borderRadius: 14,
+              pointerEvents: 'none',
+            },
+          },
+          // Header strip: label + group-drag handle
+          React.createElement(
+            'div',
+            {
+              style: {
+                position: 'absolute', top: 0, left: 0, right: 0, height: Math.max(SECTION_HEADER_H, (s.fontSize || 12) + 10),
+                display: 'flex', alignItems: 'center', padding: '0 8px',
+                cursor: readOnly ? 'default' : 'grab', pointerEvents: 'auto', touchAction: 'none',
+              },
+              onClick: (e) => {
+                e.stopPropagation();
+                setSelectedSectionIds([s.id]);
+                setSelectedItemKeys([]);
+                setSelectedTextIds([]);
+                setSelectedConnectionIds([]);
+                setSelectedNodeIds([]);
+              },
+              onPointerDown: readOnly ? undefined : (e) => onSectionHandlePointerDown(e, s.id),
+              onPointerMove: readOnly ? undefined : (e) => onSectionHandlePointerMove(e, s.id),
+              onPointerUp: readOnly ? undefined : (e) => onSectionHandlePointerUp(e, s.id),
+              // Picked up by the canvas-level native wheel listener (see onWheel
+              // above) — a React onWheel prop here would fire too late, after
+              // that ancestor listener has already handled the event as a zoom.
+              'data-section-font-id': readOnly ? undefined : s.id,
+              title: readOnly ? undefined : 'Scroll to resize title',
+              onMouseEnter: readOnly ? undefined : () => setHoveredFontTarget(s.id),
+              onMouseLeave: readOnly ? undefined : () => setHoveredFontTarget((cur) => (cur === s.id ? null : cur)),
+            },
+            editingSectionId === s.id
+              ? React.createElement('input', {
+                  autoFocus: true,
+                  value: s.label || '',
+                  onClick: (e) => e.stopPropagation(),
+                  onPointerDown: (e) => e.stopPropagation(),
+                  onChange: (e) => {
+                    sectionsRef.current = (sectionsRef.current || []).map((x) => x.id === s.id ? { ...x, label: e.target.value } : x);
+                    rerender();
+                  },
+                  onBlur: () => {
+                    renameSection(s.id, (sectionsRef.current || []).find((x) => x.id === s.id)?.label || '');
+                    setEditingSectionId(null);
+                  },
+                  onKeyDown: (e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur();
+                    if (e.key === 'Escape') setEditingSectionId(null);
+                  },
+                  style: {
+                    fontSize: s.fontSize || 12, fontWeight: 600, background: 'transparent', border: 'none', outline: 'none',
+                    color: 'rgb(var(--theme-900))', width: '100%',
+                  },
+                })
+              : React.createElement(
+                  'span',
+                  {
+                    onClick: (e) => { e.stopPropagation(); if (!readOnly) setEditingSectionId(s.id); },
+                    onPointerDown: (e) => e.stopPropagation(),
+                    style: { fontSize: s.fontSize || 12, fontWeight: 600, color: 'rgb(var(--theme-900))', cursor: readOnly ? 'default' : 'text', userSelect: 'none' },
+                    title: readOnly ? undefined : 'Click to rename (scroll to resize)',
+                  },
+                  s.label || 'Section'
+                ),
+            !readOnly && hoveredFontTarget === s.id && React.createElement(
+              'span',
+              {
+                style: {
+                  fontSize: 10, color: '#6b7280', padding: '0 3px', marginLeft: 6,
+                  flexShrink: 0, userSelect: 'none', pointerEvents: 'none',
+                },
+              },
+              `${s.fontSize || 12}px`
+            ),
+            !readOnly && React.createElement(
+              'button',
+              {
+                onClick: (e) => { e.stopPropagation(); deleteSection(s.id); },
+                onPointerDown: (e) => e.stopPropagation(),
+                style: { color: '#6b7280', cursor: 'pointer', fontSize: 14, lineHeight: 1, background: 'none', border: 'none', padding: '0 2px', marginLeft: 4 },
+                title: 'Remove section',
+              },
+              '×'
+            )
+          ),
+          // Resize handles: corners are small squares; edges are full-length
+          // strips along that side (not just a point at the midpoint) so the
+          // whole border is grabbable, not only the four corners.
+          !readOnly && SECTION_RESIZE_HANDLES.map((h) => {
+            const isEdge = h.hx === 0.5 || h.hy === 0.5;
+            const CORNER = 14;
+            const THICKNESS = 10;
+            const MARGIN = CORNER / 2;
+            let style;
+            if (h.hx === 0.5) {
+              // 'n' / 's' — horizontal strip spanning the width between the corners.
+              style = {
+                left: MARGIN, width: Math.max(0, s.width - MARGIN * 2), height: THICKNESS,
+                top: h.hy === 0 ? -THICKNESS / 2 : s.height - THICKNESS / 2,
+              };
+            } else if (h.hy === 0.5) {
+              // 'e' / 'w' — vertical strip spanning the height between the corners.
+              style = {
+                top: MARGIN, height: Math.max(0, s.height - MARGIN * 2), width: THICKNESS,
+                left: h.hx === 0 ? -THICKNESS / 2 : s.width - THICKNESS / 2,
+              };
+            } else {
+              // corner
+              style = {
+                width: CORNER, height: CORNER,
+                left: h.hx * s.width - CORNER / 2,
+                top: h.hy * s.height - CORNER / 2,
+              };
+            }
+            return React.createElement('div', {
+              key: h.id,
+              style: {
+                position: 'absolute',
+                ...style,
+                cursor: h.cursor,
+                pointerEvents: 'auto',
+                touchAction: 'none',
+                zIndex: isEdge ? 1 : 2,
+              },
+              onPointerDown: (e) => onSectionResizePointerDown(e, s.id, h.id),
+              onPointerMove: (e) => onSectionResizePointerMove(e, s.id),
+              onPointerUp: (e) => onSectionResizePointerUp(e, s.id),
+            });
+          })
+        )
+      ),
       layoutEntries
         .filter(({ entry }) => !(entry._entryType === 'pending' && entry._pendingKind === 'upload'))
         .map(({ key, pos, entry }) =>
@@ -1731,6 +2304,7 @@ export const Desk = ({
               setSelectedConnectionIds([]);
               setSelectedNodeIds([]);
               setSelectedTextIds([]);
+              setSelectedSectionIds([]);
               setSlashMenu((prev) => prev.open ? { ...prev, open: false } : prev);
               if (!connectMode) return;
               e.preventDefault();
@@ -1882,7 +2456,10 @@ export const Desk = ({
               setSelectedItemKeys([]);
               setSelectedConnectionIds([]);
               setSelectedNodeIds([]);
+              setSelectedSectionIds([]);
             },
+            onMouseEnter: readOnly ? undefined : () => setHoveredFontTarget(ti.id),
+            onMouseLeave: readOnly ? undefined : () => setHoveredFontTarget((cur) => (cur === ti.id ? null : cur)),
           },
           // Drag handle
           !readOnly && React.createElement(
@@ -1904,8 +2481,9 @@ export const Desk = ({
             React.createElement(
               'div',
               { style: { display: 'flex', gap: 4, alignItems: 'center' } },
-              // Font size button
-              React.createElement(
+              // Font size button — only shown while hovering the item (or while
+              // its own preset menu is open, so the toggle stays reachable).
+              (hoveredFontTarget === ti.id || textFontSizeMenu === ti.id) && React.createElement(
                 'button',
                 {
                   onClick: (e) => { e.stopPropagation(); setTextFontSizeMenu(textFontSizeMenu === ti.id ? null : ti.id); },
@@ -2035,6 +2613,10 @@ export const Desk = ({
                   textItemsRef.current = next;
                   rerender();
                 },
+                // Picked up by the canvas-level native wheel listener (see
+                // onWheel above) rather than handled here directly.
+                'data-text-font-id': readOnly ? undefined : ti.id,
+                title: readOnly ? undefined : 'Scroll to resize text',
                 style: {
                   background: 'rgb(var(--theme-100))',
                   border: selectedTextIds.includes(ti.id) ? '2px solid #7c3aed' : '1px solid rgb(var(--theme-600))',
@@ -2052,6 +2634,10 @@ export const Desk = ({
                 'div',
                 {
                   onDoubleClick: () => { if (!readOnly) setEditingTextId(ti.id); },
+                  // Picked up by the canvas-level native wheel listener (see
+                  // onWheel above) rather than handled here directly.
+                  'data-text-font-id': readOnly ? undefined : ti.id,
+                  title: readOnly ? undefined : 'Double-click to edit (scroll to resize)',
                   style: {
                     fontSize: ti.fontSize || 16, color: 'rgb(var(--theme-900))', whiteSpace: 'pre-wrap',
                     cursor: readOnly ? 'default' : 'text', padding: '4px 8px',
@@ -2289,6 +2875,26 @@ export const Desk = ({
           React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', d: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-7-10h6m-3 0v12' })
         ),
         'Text'
+      ),
+      // New section option
+      React.createElement(
+        'button',
+        {
+          onClick: addSectionAtCenter,
+          style: {
+            width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+            border: '1px solid #e5e7eb', borderRadius: 8, background: 'rgb(var(--theme-100))',
+            color: 'rgb(var(--theme-900))', padding: '8px 10px', fontSize: 13, cursor: 'pointer',
+            marginBottom: 8, textAlign: 'left',
+          },
+          onMouseEnter: (e) => { e.currentTarget.style.background = 'rgb(var(--theme-200))'; },
+          onMouseLeave: (e) => { e.currentTarget.style.background = 'rgb(var(--theme-100))'; },
+        },
+        React.createElement(
+          'svg', { xmlns: 'http://www.w3.org/2000/svg', width: 14, height: 14, fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', strokeWidth: 2 },
+          React.createElement('rect', { x: 3, y: 5, width: 18, height: 14, rx: 3 })
+        ),
+        'Section'
       ),
       // Connections section
       React.createElement('p', { style: { color: '#6b7280', fontSize: 11, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' } }, 'Connections'),

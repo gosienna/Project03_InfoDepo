@@ -1655,6 +1655,30 @@ export const useIndexedDB = () => {
     });
   }, [db, loadDesks]);
 
+  const setDeskSections = useCallback((driveId, sections) => {
+    if (!db) return Promise.reject(new Error('Database not initialized'));
+    return new Promise((resolve, reject) => {
+      let tx;
+      try { tx = db.transaction(DESKS_STORE, 'readwrite'); } catch (err) { reject(err); return; }
+      const os = tx.objectStore(DESKS_STORE);
+      const req = os.get(driveId);
+      req.onsuccess = () => {
+        const existing = req.result;
+        if (!existing) { reject(new Error('Desk not found')); return; }
+        const putReq = os.put({
+          ...existing,
+          sections: Array.isArray(sections) ? sections : [],
+          localModifiedAt: new Date(),
+          dirty: true,
+          rev: (existing.rev || 0) + 1,
+        });
+        putReq.onsuccess = () => { loadDesks('setDeskSections'); resolve(); };
+        putReq.onerror = () => reject(putReq.error);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }, [db, loadDesks]);
+
   const getDeskByDriveId = useCallback((driveId) => {
     if (!db || !driveId) return Promise.resolve(undefined);
     return new Promise((resolve, reject) => {
@@ -2313,7 +2337,7 @@ export const useIndexedDB = () => {
     getChannelByDriveFileId, getDeskByDriveFileId,
     deleteItemByDriveId, deleteChannelByDriveId,
     getLocalRecordsByOwnerEmail,
-    addDesk, deleteDesk, setDeskLayout, setDeskConnections, setDeskTextItems, migrateDeskLayout,
+    addDesk, deleteDesk, setDeskLayout, setDeskConnections, setDeskTextItems, setDeskSections, migrateDeskLayout,
     getDeskByDriveId, upsertDriveDesk, clearDeskDirty,
     setRecordTags,
     setItemSharedWith,

@@ -91,6 +91,8 @@ Users create named desks that hold a `layout` map of item positions (`{ [key]: {
 
 **Cover image picker**: Desk receives `libraryImages` (standalone image items from `App.js`). Hovering any item tile reveals a "From Library" button that opens `CoverImagePickerModal` via local `coverPickerTarget` state.
 
+**Sections**: rounded-rectangle, theme-tinted background containers for visually grouping desk items, created via the `/` slash menu. A section can be resized with on-canvas drag handles and renamed by clicking its label. Section-to-item membership is never persisted — it's computed live from bounding-box containment, once at the start of a section drag, so dragging a section's header moves every item currently inside it by the same delta. Dragging (or placing) an item that overlaps or crosses a section's edge grows that section just enough to fully contain it (grow-only — auto-expand never shrinks a section; only the manual resize handles can). Deleting a section removes only the rectangle; contained items are unaffected. Stored as `desk.sections[]`.
+
 ### Viewer sync
 
 `syncSharedFromPeers`:
@@ -126,7 +128,8 @@ The limit is persisted in `localStorage` (`infodepo_sync_settings`) and is adjus
 | `utils/peerSync.js` | peer discovery + viewer download/prune; downloads cover sidecars |
 | `utils/driveSharePermissions.js` | apply/revoke Drive reader permissions; grants access to `coverImageDriveId` files |
 | `utils/userConfig.js` | parse config users map and role/folder helpers |
-| `components/Desk.js` | infinite-canvas component (pan/zoom, drag, add/remove items, auto-share on add) |
+| `components/Desk.js` | infinite-canvas component (pan/zoom, drag, add/remove items, sections, auto-share on add) |
+| `utils/deskMerge.js` | 3-way merge for desk records (`layout`, `connections`, `textItems`, `sections`) |
 | `components/DataTile.js` | unified tile for items, channels, and desks (`tileType` prop); standalone image thumbnails; "From Library" cover picker button |
 | `components/CoverImagePickerModal.js` | portal modal for selecting a cover from the image library |
 
