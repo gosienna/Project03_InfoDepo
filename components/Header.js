@@ -116,16 +116,22 @@ export const Header = ({ onBack, userEmail, mode, onModeChange, showModeToggle, 
               onClick: onSync,
               disabled: isSyncing,
               className: "flex items-center gap-1.5 bg-theme-500 hover:bg-theme-600 disabled:opacity-50 text-buttontext text-sm font-bold py-2 px-4 rounded-xl transition-all active:scale-95",
-              title: "Back up local items to Drive, then sync Drive → local",
+              title: isSyncing && syncProgress
+                ? syncProgress
+                : "Back up local items to Drive, then sync Drive → local",
             },
-            isSyncing
-              ? React.createElement("div", { className: "h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin" })
-              : React.createElement(
-                  "svg",
-                  { xmlns: "http://www.w3.org/2000/svg", className: "h-4 w-4", fill: "none", viewBox: "0 0 24 24", stroke: "currentColor" },
-                  React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: 2, d: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" })
-                ),
-            isSyncing ? (syncProgress || "Syncing...") : "Sync"
+            React.createElement(
+              "svg",
+              {
+                xmlns: "http://www.w3.org/2000/svg",
+                className: `h-4 w-4${isSyncing ? ' animate-spin' : ''}`,
+                fill: "none",
+                viewBox: "0 0 24 24",
+                stroke: "currentColor",
+              },
+              React.createElement("path", { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: 2, d: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" })
+            ),
+            isSyncing ? "Syncing..." : "Sync"
           ),
         onSystemSettings &&
           React.createElement(

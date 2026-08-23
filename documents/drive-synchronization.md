@@ -231,7 +231,7 @@ No folder listing (`syncFolderAssetsAndSidecars`) is performed for the viewer fo
 
 ## Sync progress display
 
-Both owner and viewer syncs show a unified `X / N` counter in the Library's in-body banner and Header Sync button text while `isSyncing` is true.
+Both owner and viewer syncs show a unified `X / N` counter in the Library's in-body banner while `isSyncing` is true. The Header Sync button keeps a fixed "Syncing..." label with a spinning sync icon; the current progress string appears only on hover via the button's `title` tooltip.
 
 `pullChangedItems` counts total entries (`toPull.length`) before any downloads start and emits `idx / total` per item. `syncFolderAssetsAndSidecars` emits progress per image. Cover sidecars are excluded from counting.
 
