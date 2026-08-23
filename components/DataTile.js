@@ -962,9 +962,14 @@ export const DataTile = ({
   }
 
   if (isStandaloneImage && displayMode === 'image') {
+    // Deliberately not DATA_TILE_SHELL: its hover-lift `transform` + `transition-all`,
+    // combined with `overflow-hidden` + `rounded-lg` clipping, makes Chromium/WebKit
+    // rasterize the image into a GPU layer at a blurry backing scale at rest — it only
+    // re-rasterizes at the correct scale transiently while the hover transform is
+    // actually animating, then reverts to blurry once the transition settles.
     return React.createElement(
       'div',
-      { className: `${DATA_TILE_SHELL} relative`, onClick: () => onSelect(video) },
+      { className: 'rounded-lg overflow-hidden cursor-pointer w-full group relative', onClick: () => onSelect(video) },
       imageThumbUrl && React.createElement('img', {
         src: imageThumbUrl,
         alt: video?.name || 'Image',
