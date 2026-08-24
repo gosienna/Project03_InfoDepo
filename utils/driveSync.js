@@ -1086,7 +1086,6 @@ export function classifyChanges(driveIndex, items, channels, desks) {
   };
 
   for (const item of items || []) {
-    if (item.idbStore === 'images') continue;
     checkRecord(item, item.idbStore || 'books');
   }
   for (const ch of channels || []) checkRecord(ch, 'channels');

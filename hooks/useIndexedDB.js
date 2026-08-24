@@ -53,7 +53,6 @@ const isNoteType = (type) =>
 const storeForType = (type) => {
   if (isYoutubeType(type)) return VIDEOS_STORE;
   if (isNoteType(type)) return NOTES_STORE;
-  if (String(type || '').trim().toLowerCase().startsWith('image/')) return IMAGES_STORE;
   return BOOKS_STORE;
 };
 
@@ -70,7 +69,6 @@ const storeForNewItem = (name, type) => {
   if (MARKDOWN_FILE_RE.test(n)) return NOTES_STORE;
   if (isNoteType(type)) return NOTES_STORE;
   if (mime === 'text/x-markdown' || mime === 'text/md') return NOTES_STORE;
-  if (mime.startsWith('image/')) return IMAGES_STORE;
   return BOOKS_STORE;
 };
 
@@ -1286,7 +1284,7 @@ export const useIndexedDB = () => {
   // assets (optional): array of { name, data, type, driveId } to embed in the note record.
   // driveFile may carry driveFolderId for note bundles synced from Drive subfolders.
   const getBookByDriveFileId = useCallback(async (driveFileId) => {
-    const found = await getRecordByDriveFileId(db, driveFileId, [BOOKS_STORE, NOTES_STORE, VIDEOS_STORE]);
+    const found = await getRecordByDriveFileId(db, driveFileId, [BOOKS_STORE, NOTES_STORE, VIDEOS_STORE, IMAGES_STORE]);
     return found?.record;
   }, [db]);
 

@@ -32,7 +32,7 @@ Fetches `_infodepo_index.json` from Drive (one API call). For each entry, compar
 | `toBackup` | No `driveFileId` locally, OR `driveFileId` not in index, OR `localModifiedAt > indexEntry.modifiedTime` |
 | `toPull` | `indexEntry.modifiedTime > local.modifiedTime`, OR index Google id absent from local `driveFileId` set |
 
-Items with `idbStore === 'images'` are excluded from `toBackup` (standalone image files are handled by Step 6). Duplicates in `toPull` are deduplicated by index `driveId` (Google file id).
+Duplicates in `toPull` are deduplicated by index `driveId` (Google file id).
 
 Local records keep a permanent local `driveId`; the owner index still uses Google file ids as `driveId` in JSON entries. Local matching is via `driveFileId`.
 
